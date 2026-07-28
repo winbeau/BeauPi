@@ -91,6 +91,16 @@ test/assistant-message.test.ts
 - `outputPad=0/1` 均不超宽。
 - Theme 切换后 Thinking 和 User 前缀颜色更新。
 
+## Batch 2 实施结果
+
+- `UserMessageComponent` 已移除 `userMessageBg` 整块背景，改为 accent `> ` gutter；续行使用同宽空白 gutter，与 Markdown 正文列对齐。
+- User 仍保留 ordered list marker、backslash escape、`outputPad` 和原有上/内容/下高度；OSC 133 start/end/final 顺序保持不变。
+- `AssistantMessageComponent` 已把可见 block 的间距集中处理：消息前一个空行，Text 与 Thinking 切换时一个空行，正文或 Thinking 后不额外增加 Tool 前尾随空行。
+- 相邻 Thinking block 继续合并；隐藏状态保留可配置 label，展开状态继续使用 `thinkingText` 与 italic，不增加背景。
+- `length`、无 Tool 所属的 `aborted`/`error` 使用统一 `✗` 错误前缀；Tool Call 已负责错误时 Assistant 不重复显示。
+- User 和 Assistant 均按 ANSI/cell width 渲染，`outputPad` 在极窄宽度自动降级；测试覆盖 0/1/2/8/40/60/80/120/160 列、CJK、emoji、combining mark 和 Theme invalidate。
+- `SkillInvocationMessageComponent` 与 `CustomMessageComponent` 的现有渲染和 Extension renderer `outputPad` 契约保持不变。
+
 ## 验收
 
 消息层级清晰但克制；User 不再是大背景卡片；Assistant 和 Thinking 保持现有功能；所有消息行严格不超过宽度。

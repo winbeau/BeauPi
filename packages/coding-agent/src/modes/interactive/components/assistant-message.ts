@@ -1,10 +1,48 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { BEAUPI_STATUS_SYMBOLS } from "./beaupi-style.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+class AssistantBlockComponent implements Component {
+	private component: Component;
+	private outputPad: number;
+
+	constructor(component: Component, outputPad: number) {
+		this.component = component;
+		this.outputPad = outputPad;
+	}
+
+	invalidate(): void {
+		this.component.invalidate();
+	}
+
+	render(width: number): string[] {
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (availableWidth === 0) return [""];
+		const requestedPadding = Number.isFinite(this.outputPad) ? Math.max(0, Math.floor(this.outputPad)) : 0;
+		const horizontalPadding = Math.min(requestedPadding, Math.max(0, Math.floor((availableWidth - 1) / 2)));
+		const contentWidth = Math.max(0, availableWidth - horizontalPadding * 2);
+		const padding = " ".repeat(horizontalPadding);
+		return this.component.render(Math.max(1, contentWidth)).map((line) => {
+			const fittedLine = visibleWidth(line) <= contentWidth ? line : truncateToWidth(line, contentWidth, "");
+			const rendered = `${padding}${fittedLine}${padding}`;
+			return rendered + " ".repeat(Math.max(0, availableWidth - visibleWidth(rendered)));
+		});
+	}
+}
 
 /**
  * Component that renders a complete assistant message
@@ -70,7 +108,10 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		const lines = super
+			.render(availableWidth)
+			.map((line) => (visibleWidth(line) <= availableWidth ? line : truncateToWidth(line, availableWidth, "")));
 		if (this.hasToolCalls || lines.length === 0) {
 			return lines;
 		}
@@ -82,99 +123,73 @@ export class AssistantMessageComponent extends Container {
 
 	updateContent(message: AssistantMessage): void {
 		this.lastMessage = message;
-
-		// Clear content container
 		this.contentContainer.clear();
 
-		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
-		);
-
-		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
-		}
-
-		// Render content in order
+		const blocks: Array<{ component: Component; gapBefore: boolean }> = [];
+		let previousVisibleKind: "text" | "thinking" | undefined;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
-			if (content.type === "text" && content.text.trim()) {
-				// Assistant text messages with no background - trim the text
-				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme));
-			} else if (content.type === "thinking") {
-				const thinkingBlocks: string[] = [];
-				for (; i < message.content.length; i++) {
-					const thinkingContent = message.content[i];
-					if (thinkingContent.type !== "thinking") {
-						break;
-					}
-					const thinking = thinkingContent.thinking.trim();
-					if (thinking) {
-						thinkingBlocks.push(thinking);
-					}
-				}
-				i--;
-
-				if (thinkingBlocks.length === 0) {
-					continue;
-				}
-
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
-
-				if (this.hideThinkingBlock) {
-					// Show one static label for each run of thinking blocks when hidden.
-					this.contentContainer.addChild(
-						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
-					);
-				} else {
-					// Render each run of thinking blocks as one Markdown section.
-					this.contentContainer.addChild(
-						new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
-				}
-				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
-				}
+			if (content.type === "text") {
+				const text = content.text.trim();
+				if (!text) continue;
+				blocks.push({
+					component: new Markdown(text, 0, 0, this.markdownTheme),
+					gapBefore: previousVisibleKind === "thinking",
+				});
+				previousVisibleKind = "text";
+				continue;
 			}
+			if (content.type !== "thinking") continue;
+
+			const thinkingBlocks: string[] = [];
+			for (; i < message.content.length; i++) {
+				const thinkingContent = message.content[i];
+				if (thinkingContent.type !== "thinking") break;
+				const thinking = thinkingContent.thinking.trim();
+				if (thinking) thinkingBlocks.push(thinking);
+			}
+			i--;
+			if (thinkingBlocks.length === 0) continue;
+
+			const component = this.hideThinkingBlock
+				? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 0, 0)
+				: new Markdown(thinkingBlocks.join("\n\n"), 0, 0, this.markdownTheme, {
+						color: (text: string) => theme.fg("thinkingText", text),
+						italic: true,
+					});
+			blocks.push({ component, gapBefore: previousVisibleKind !== undefined });
+			previousVisibleKind = "thinking";
 		}
 
-		// Check if incomplete/failed - show after partial content.
 		// For aborted/error tool calls, tool execution components show the error.
 		// Length stops can happen before a tool call is complete, so surface them here too.
-		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
+		const hasToolCalls = message.content.some((content) => content.type === "toolCall");
 		this.hasToolCalls = hasToolCalls;
+		let statusMessage: string | undefined;
 		if (message.stopReason === "length") {
-			this.contentContainer.addChild(new Spacer(1));
-			this.contentContainer.addChild(
-				new Text(
-					theme.fg(
-						"error",
-						"Error: Model stopped because it reached the maximum output token limit. The response may be incomplete.",
-					),
-					this.outputPad,
-					0,
-				),
-			);
-		} else if (!hasToolCalls) {
-			if (message.stopReason === "aborted") {
-				const abortMessage =
-					message.errorMessage && message.errorMessage !== "Request was aborted"
-						? message.errorMessage
-						: "Operation aborted";
-				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
-			} else if (message.stopReason === "error") {
-				const errorMsg = message.errorMessage || "Unknown error";
-				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
-			}
+			statusMessage =
+				"Error: Model stopped because it reached the maximum output token limit. The response may be incomplete.";
+		} else if (!hasToolCalls && message.stopReason === "aborted") {
+			statusMessage =
+				message.errorMessage && message.errorMessage !== "Request was aborted"
+					? message.errorMessage
+					: "Operation aborted";
+		} else if (!hasToolCalls && message.stopReason === "error") {
+			statusMessage = `Error: ${message.errorMessage || "Unknown error"}`;
+		}
+		if (statusMessage) {
+			blocks.push({
+				component: new Text(theme.fg("error", `${BEAUPI_STATUS_SYMBOLS.error} ${statusMessage}`), 0, 0),
+				gapBefore: previousVisibleKind !== undefined,
+			});
+		}
+
+		if (blocks.length === 0) return;
+		this.contentContainer.addChild(new Spacer(1));
+		for (let i = 0; i < blocks.length; i++) {
+			const block = blocks[i]!;
+			if (i > 0 && block.gapBefore) this.contentContainer.addChild(new Spacer(1));
+			this.contentContainer.addChild(new AssistantBlockComponent(block.component, this.outputPad));
 		}
 	}
 }
