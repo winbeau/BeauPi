@@ -162,6 +162,15 @@ npm run check
 - `npm run check`：通过，无错误、警告或 info。
 - 已知阻塞差异：无。
 
+## M2 后续视觉验收记录（2026-07-29）
+
+- 使用固定 faux provider 会话执行 Read、Write、`git diff --check` 和两次等价 `git status`。
+- 暗色与亮色分别检查 40×45、80×45、120×45、160×45。
+- Todo 展示 phase、修改文件、验证完成和重复命令 blocked 状态；Tool Timeline 复用 M1 的 success/running/error/cancelled 语言。
+- 40 列隐藏 owner、blocked 详情和低优先 Footer 字段；80/120/160 列逐步恢复完整摘要。
+- `/debug` 的 8 个场景最大可见宽度分别等于终端宽度，overflow 数均为 0。
+- 捕获文件：`/tmp/beaupi-m2-visual-{dark,light}-{40,80,120,160}.{txt,ansi.txt}`。
+
 ## 完成标准
 
 自动化测试覆盖状态、宽度和行为；tmux 检查覆盖主要视觉；无依赖人工记忆的“看起来差不多”验收。

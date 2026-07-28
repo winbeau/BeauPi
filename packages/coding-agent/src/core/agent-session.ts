@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type {
@@ -102,6 +103,7 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { attachTaskLedgerToolDetails, TaskLedger } from "./state/task-ledger.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
@@ -305,6 +307,7 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
+	readonly taskLedger: TaskLedger;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -377,6 +380,11 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this.taskLedger = new TaskLedger({
+			taskId: config.sessionManager.getSessionId(),
+			cwd: config.sessionManager.getCwd(),
+			entries: config.sessionManager.getBranch(),
+		});
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -469,17 +477,20 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
+			this.taskLedger.updateToolArgs(toolCall.id, args);
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
 			}
 
 			try {
-				return await runner.emitToolCall({
+				const result = await runner.emitToolCall({
 					type: "tool_call",
 					toolName: toolCall.name,
 					toolCallId: toolCall.id,
 					input: args as Record<string, unknown>,
 				});
+				this.taskLedger.updateToolArgs(toolCall.id, args);
+				return result;
 			} catch (err) {
 				if (err instanceof Error) {
 					throw err;
@@ -594,6 +605,14 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		const taskLedgerDetails = this.taskLedger.handleAgentEvent(event, {
+			cancelled: event.type === "tool_execution_end" && event.isError && this.agent.signal?.aborted === true,
+		});
+		if (event.type === "tool_execution_end" && taskLedgerDetails) {
+			const result = event.result as { details?: unknown };
+			result.details = attachTaskLedgerToolDetails(result.details, taskLedgerDetails);
+		}
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -618,6 +637,15 @@ export class AgentSession {
 
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
+		if (event.type === "tool_execution_end" && taskLedgerDetails) {
+			const result = event.result as { details?: unknown };
+			result.details = attachTaskLedgerToolDetails(result.details, taskLedgerDetails);
+		} else if (event.type === "message_end" && event.message.role === "toolResult") {
+			const details = this.taskLedger.getToolDetails(event.message.toolCallId);
+			if (details) {
+				event.message.details = attachTaskLedgerToolDetails(event.message.details, details);
+			}
+		}
 
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -2771,7 +2799,9 @@ export class AgentSession {
 		options?: { excludeFromContext?: boolean; id?: string; operations?: BashOperations },
 	): Promise<BashResult> {
 		const abortController = new AbortController();
+		const executionId = options?.id ?? randomUUID();
 		this._bashAbortControllers.add(abortController);
+		this.taskLedger.startShell(executionId, command);
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
@@ -2792,8 +2822,19 @@ export class AgentSession {
 				},
 			);
 
-			this.recordBashResult(command, result, options);
+			this.recordBashResult(command, result, { ...options, executionId });
 			return result;
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			const failure: BashResult = {
+				output: errorMessage,
+				exitCode: abortController.signal.aborted ? undefined : 1,
+				cancelled: abortController.signal.aborted,
+				truncated: false,
+				error: errorMessage,
+			};
+			this.recordBashResult(command, failure, { ...options, executionId });
+			throw error;
 		} finally {
 			this._bashAbortControllers.delete(abortController);
 		}
@@ -2803,7 +2844,13 @@ export class AgentSession {
 	 * Record a bash execution result in session history.
 	 * Used by executeBash and by extensions that handle bash execution themselves.
 	 */
-	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
+	recordBashResult(
+		command: string,
+		result: BashResult,
+		options?: { excludeFromContext?: boolean; executionId?: string },
+	): void {
+		const executionId = options?.executionId ?? randomUUID();
+		this.taskLedger.finishShell(executionId, command, result);
 		const bashMessage: BashExecutionMessage = {
 			role: "bashExecution",
 			command,
@@ -3069,6 +3116,7 @@ export class AgentSession {
 			// Update agent state
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
+			this.taskLedger.rebuild(this.sessionManager.getBranch());
 
 			// Emit session_tree event
 			await this._extensionRunner.emit({

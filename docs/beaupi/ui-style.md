@@ -435,7 +435,16 @@ TPS 状态直接整合到现有交互模式和 Footer 数据流，不再通过 `
 
 ### Todo
 
-基于 Task Ledger 使用 `ctx.ui.setWidget()`，放在 editor 上方。Todo 只展示执行状态，不重新引入 Plan Mode。
+基于 Task Ledger 使用内建 `TaskLedgerWidget`，与 `ctx.ui.setWidget()` 共享 editor 上方的 Widget 容器。Todo 只展示当前 Session 的确定性执行状态，不重新引入 Plan Mode。
+
+M2 已接入：
+
+- phase：discover、execute、verify、commit
+- Todo：pending、active、completed、failed、blocked
+- 最近完成保留、owner 窄屏隐藏、blocked 摘要和 3–10 项动态截断
+- 使用 M1 状态符号的 Tool Timeline
+- Footer 当前 phase、修改文件数和验证状态
+- 40/80/120/160 列及暗色/亮色主题下无横向溢出
 
 ## 验收标准
 

@@ -190,6 +190,13 @@ export class FooterComponent implements Component {
 		const cwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
 		const branch = this.footerData.getGitBranch();
 		const sessionName = this.session.sessionManager.getSessionName();
+		const taskLedger = this.session.taskLedger.getSnapshot();
+		const hasTaskActivity = taskLedger.startedAt !== undefined || taskLedger.commands.length > 0;
+		const modifiedFiles =
+			taskLedger.filesModified.length > 0
+				? `${taskLedger.filesModified.length} file${taskLedger.filesModified.length === 1 ? "" : "s"}`
+				: "";
+		const verification = taskLedger.verification.status === "none" ? "" : `verify ${taskLedger.verification.status}`;
 		const extensionStatuses = Array.from(this.footerData.getExtensionStatuses().entries())
 			.sort(([left], [right]) => left.localeCompare(right))
 			.map(([, text]) => sanitizeStatusText(text));
@@ -197,7 +204,14 @@ export class FooterComponent implements Component {
 			[
 				{ text: theme.fg("dim", cwd), required: true, truncate: true },
 				{ text: branch ? theme.fg("dim", `(${branch})`) : "", separator: " ", priority: 5 },
+				{
+					text: hasTaskActivity ? theme.fg("accent", taskLedger.phase) : "",
+					separator: " · ",
+					priority: 4,
+				},
+				{ text: modifiedFiles ? theme.fg("dim", modifiedFiles) : "", separator: " · ", priority: 3 },
 				{ text: sessionName ? theme.fg("dim", sessionName) : "", separator: " · ", priority: 2 },
+				{ text: verification ? theme.fg("dim", verification) : "", separator: " · ", priority: 0 },
 				...extensionStatuses.map((text, index) => ({
 					text,
 					separator: " · ",

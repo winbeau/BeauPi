@@ -63,6 +63,8 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 验收：普通编辑任务能够展示当前阶段、已修改文件、待验证事项和 Tool 状态；工作区未变化时能够识别短时间内重复的 `git status`。
 
+状态：已完成（2026-07-29）。Task Ledger 由当前 Session branch 的稳定 Tool call id、Tool Result `details` 和 Bash Session entry 重建；Todo、Tool Timeline 与 Footer 已接入 M1 视觉基础，重复 `git status` 按 30 秒窗口和账本观察到的工作区 revision 识别。
+
 ## 阶段 4：文档驱动执行
 
 - 实现文档发现

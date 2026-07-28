@@ -8,6 +8,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
+import { getTaskLedgerToolDetails } from "../../../core/state/task-ledger.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
@@ -95,12 +96,7 @@ function summarizeArgs(args: unknown): string {
 }
 
 function isCancellationResult(result: ToolExecutionComponent["result"]): boolean {
-	if (!result?.isError) return false;
-	const text = result.content
-		.filter((item) => item.type === "text")
-		.map((item) => item.text ?? "")
-		.join("\n");
-	return /\b(abort(?:ed)?|cancel(?:led|ed)?)\b/i.test(text);
+	return getTaskLedgerToolDetails(result?.details)?.status === "cancelled";
 }
 
 class MinimalToolShellComponent implements Component {
@@ -182,6 +178,7 @@ export class ToolExecutionComponent extends Container {
 	};
 	private readonly convertedImages = new Map<number, { data: string; mimeType: string }>();
 	private hideComponent = false;
+	private forcedState: BeauPiToolState | undefined;
 
 	constructor(
 		toolName: string,
@@ -216,6 +213,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	getDisplayState(): BeauPiToolState {
+		if (this.forcedState) return this.forcedState;
 		if (this.result && !this.isPartial) {
 			if (isCancellationResult(this.result)) return "cancelled";
 			return this.result.isError ? "error" : "success";
@@ -330,10 +328,18 @@ export class ToolExecutionComponent extends Container {
 		},
 		isPartial = false,
 	): void {
+		this.forcedState = undefined;
 		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
+	}
+
+	markCancelled(message: string): void {
+		this.forcedState = "cancelled";
+		this.result = { content: [{ type: "text", text: message }], isError: true };
+		this.isPartial = false;
+		this.updateDisplay();
 	}
 
 	private maybeConvertImagesForKitty(): void {

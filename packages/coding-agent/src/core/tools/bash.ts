@@ -45,6 +45,10 @@ const bashSchema = Type.Object({
 export type BashToolInput = Static<typeof bashSchema>;
 
 export interface BashToolDetails {
+	/** Command executed by the tool. */
+	command: string;
+	/** Process exit code for a successful execution. */
+	exitCode: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
@@ -353,6 +357,8 @@ export function createBashToolDefinition(
 				onUpdate({
 					content: [{ type: "text", text: snapshot.content || "" }],
 					details: {
+						command,
+						exitCode: null,
 						truncation: snapshot.truncation.truncated ? snapshot.truncation : undefined,
 						fullOutputPath: snapshot.fullOutputPath,
 					},
@@ -404,7 +410,7 @@ export function createBashToolDefinition(
 			const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
 				const truncation = snapshot.truncation;
 				let text = snapshot.content || emptyText;
-				let details: BashToolDetails | undefined;
+				let details: Pick<BashToolDetails, "truncation" | "fullOutputPath"> | undefined;
 				if (truncation.truncated) {
 					details = { truncation, fullOutputPath: snapshot.fullOutputPath };
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
@@ -451,7 +457,10 @@ export function createBashToolDefinition(
 				if (exitCode !== 0 && exitCode !== null) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
 				}
-				return { content: [{ type: "text", text: outputText }], details };
+				return {
+					content: [{ type: "text", text: outputText }],
+					details: { command, exitCode, ...details },
+				};
 			} finally {
 				clearUpdateTimer();
 			}

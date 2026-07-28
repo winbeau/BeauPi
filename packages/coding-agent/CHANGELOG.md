@@ -6,6 +6,7 @@
 
 - Added current context token usage to the footer and streamed progress for context compaction.
 - Added built-in `beaupi-dark` and `beaupi-light` themes plus shared ANSI-aware BeauPi visual helpers.
+- Added a Session-restorable Task Ledger with phase, Tool/Shell/file/verification facts, repeated `git status` detection, a responsive Todo and Tool Timeline widget, and Footer task status.
 
 ### Changed
 

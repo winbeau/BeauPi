@@ -145,6 +145,38 @@ describe("InteractiveMode.setToolsExpanded", () => {
 	});
 });
 
+describe("InteractiveMode built-in TaskLedger widget", () => {
+	test("renders the built-in ledger before extension widgets above the editor", () => {
+		const above = new Container();
+		const below = new Container();
+		const taskLedgerWidget: Component = { render: () => ["TASKS"], invalidate: () => {} };
+		const extensionWidget: Component = { render: () => ["EXTENSION"], invalidate: () => {} };
+		const fakeThis = {
+			widgetContainerAbove: above,
+			widgetContainerBelow: below,
+			taskLedgerWidget,
+		};
+
+		(
+			InteractiveMode as unknown as {
+				prototype: {
+					renderWidgetContainer: (
+						this: typeof fakeThis,
+						container: Container,
+						widgets: Map<string, Component>,
+						spacerWhenEmpty: boolean,
+						leadingSpacer: boolean,
+					) => void;
+				};
+			}
+		).prototype.renderWidgetContainer.call(fakeThis, above, new Map([["extension", extensionWidget]]), true, true);
+
+		expect(above.children[1]).toBe(taskLedgerWidget);
+		expect(above.children[2]).toBe(extensionWidget);
+		expect(renderAll(above)).toContain("TASKS\nEXTENSION");
+	});
+});
+
 describe("InteractiveMode tool grouping", () => {
 	test("builds the same adjacent read group for live and replay insertion", () => {
 		initTheme("beaupi-dark", false);

@@ -37,6 +37,8 @@ export interface BashResult {
 	truncated: boolean;
 	/** Path to temp file containing full output (if output exceeded truncation threshold) */
 	fullOutputPath?: string;
+	/** Error recorded by higher-level session execution when the backend throws. */
+	error?: string;
 }
 
 // ============================================================================

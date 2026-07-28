@@ -175,6 +175,14 @@ interface TaskLedger {
 
 分支敏感状态存入 Tool Result `details`，在 `session_start` 时从当前 Branch 重建。
 
+M2 已实现该最小状态层：
+
+- `AgentSession.taskLedger` 是唯一任务状态源。
+- Tool 以稳定 `toolCallId` 去重，用户 Bash 以 Session entry id 重建。
+- 只记录当前 Session 可确定的 Tool、Shell、文件和验证事实。
+- workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
+- Todo、Tool Timeline 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
+
 ## 后台任务与唤醒
 
 Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列。进程完成或满足触发条件后，通过现有 Session 消息机制重新触发 Agent turn。

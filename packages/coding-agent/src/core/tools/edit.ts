@@ -60,6 +60,8 @@ type LegacyEditToolInput = EditToolInput & {
 };
 
 export interface EditToolDetails {
+	/** Resolved file path modified by the tool. */
+	path: string;
 	/** Display-oriented diff of the changes made */
 	diff: string;
 	/** Standard unified patch of the changes made */
@@ -350,7 +352,12 @@ export function createEditToolDefinition(
 							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
 						},
 					],
-					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+					details: {
+						path: absolutePath,
+						diff: diffResult.diff,
+						patch,
+						firstChangedLine: diffResult.firstChangedLine,
+					},
 				};
 			});
 		},

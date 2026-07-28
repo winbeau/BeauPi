@@ -97,10 +97,9 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi 开发基线和 Claude Code 风格 TUI 已完成。后续按顺序推进：
+BeauPi 开发基线、Claude Code 风格 TUI、Task Ledger 和任务可视化已完成。后续按顺序推进：
 
-1. 实现 Task Ledger 和 Todo 状态闭环。
-2. 整合默认 System Prompt、文档发现与 Execution Contract。
-3. 实现 Skill Registry。
-4. 实现进程内子 Agent 和多 Agent Workflow。
-5. 功能稳定后再决定独立 npm 发行物和二进制方案。
+1. 整合默认 System Prompt、文档发现与 Execution Contract。
+2. 实现 Skill Registry。
+3. 实现进程内子 Agent 和多 Agent Workflow。
+4. 功能稳定后再决定独立 npm 发行物和二进制方案。

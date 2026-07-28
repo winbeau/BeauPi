@@ -39,6 +39,12 @@ export interface WriteToolOptions {
 	operations?: WriteOperations;
 }
 
+export interface WriteToolDetails {
+	/** Resolved file path written by the tool. */
+	path: string;
+	bytesWritten: number;
+}
+
 type WriteHighlightCache = {
 	rawPath: string | null;
 	lang: string;
@@ -186,7 +192,7 @@ function formatWriteResult(
 export function createWriteToolDefinition(
 	cwd: string,
 	options?: WriteToolOptions,
-): ToolDefinition<typeof writeSchema, undefined> {
+): ToolDefinition<typeof writeSchema, WriteToolDetails> {
 	const ops = options?.operations ?? defaultWriteOperations;
 	return {
 		name: "write",
@@ -225,7 +231,7 @@ export function createWriteToolDefinition(
 
 				return {
 					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
-					details: undefined,
+					details: { path: absolutePath, bytesWritten: Buffer.byteLength(content, "utf-8") },
 				};
 			});
 		},

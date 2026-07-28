@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0 开发基线和 M1 Claude Code 风格 TUI 已完成；下一阶段为 M2 Task Ledger。
+当前进度：M0 开发基线、M1 Claude Code 风格 TUI 和 M2 Task Ledger 已完成；下一阶段为 M3 Document Runtime。
 
 ## 文档
 

@@ -106,6 +106,8 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain(theme.getBgAnsi("toolErrorBg"));
 
 		component.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true }, false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("✗ Custom Tool(example)");
+		component.markCancelled("Operation aborted");
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("⊘ Custom Tool(example)");
 	});
 

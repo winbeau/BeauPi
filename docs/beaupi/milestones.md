@@ -134,6 +134,8 @@
 
 ## M2：Task Ledger 与任务可视化
 
+状态：已完成（2026-07-29）。
+
 ### 目标
 
 建立后续文档、策略、子 Agent 和 Workflow 共用的任务状态来源，避免各组件维护独立状态，并把状态接入 M1 已建立的 Footer、状态符号、gutter 和列表视觉基础。
@@ -178,6 +180,18 @@ interface TaskLedger {
 ### 验收标准
 
 执行一个普通编辑任务时，用户能够看到当前阶段、已修改文件、待验证事项和上下文状态；系统能够识别短时间内重复的 `git status`。
+
+### 验收记录（2026-07-29）
+
+- `TaskLedger` 直接挂载在现有 `AgentSession`，按当前 Session branch 重建，不创建第二套 Runtime、Session 或 Tool 执行链。
+- Tool 使用稳定 `toolCallId` 去重，用户 Bash 使用 Session entry id 重建；恢复、Compact 和分支切换不会重复计数，废弃分支事实不进入当前账本。
+- Read、Write、Edit 和 Bash 返回结构化路径、字节数、命令及退出状态 details；取消状态由 Agent AbortSignal 和持久化 Task Ledger details 确定，renderer 不从日志文本反推。
+- phase、文件读取/修改、Tool/Shell 成功/失败/取消、验证和 commit 事实均有单元或 faux provider harness 测试。
+- 等价 `git status` 使用规范化签名、30 秒窗口和账本观察到的 workspace revision 检测；文件修改后不判为重复。
+- Todo 支持 pending、active、completed、failed、blocked，按最近完成、失败、进行中、pending、blocked 和较早完成动态选择 3–10 项，并提供 owner 窄屏隐藏和 blocked/隐藏项摘要。
+- Tool Timeline 复用 M1 状态符号；Footer 保持最多三行并接入 phase、修改文件数和验证状态。
+- tmux 固定 faux provider 场景覆盖暗色/亮色的 40、80、120、160 列；8 个 `/debug` 记录均为 `visibleWidth <= width`，无横向溢出。
+- 定向测试、`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
 ---
 

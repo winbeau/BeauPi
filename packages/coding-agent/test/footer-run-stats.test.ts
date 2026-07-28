@@ -34,6 +34,23 @@ function createSession(): AgentSession {
 		},
 		getContextUsage: () => ({ tokens: 112_000, contextWindow: 272_000, percent: 41.2 }),
 		modelRuntime: { isUsingOAuth: () => false },
+		taskLedger: {
+			getSnapshot: () => ({
+				taskId: "task",
+				phase: "discover",
+				startedAt: undefined,
+				updatedAt: undefined,
+				revision: 0,
+				workspaceRevision: 0,
+				commands: [],
+				filesRead: [],
+				fileModifications: [],
+				filesModified: [],
+				failures: [],
+				verification: { status: "none" },
+				todos: [],
+			}),
+		},
 	} as unknown as AgentSession;
 }
 

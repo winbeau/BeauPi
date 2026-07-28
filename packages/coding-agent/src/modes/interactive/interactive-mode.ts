@@ -137,6 +137,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { TaskLedgerWidget } from "./components/task-ledger-widget.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { appendToolComponent, ToolGroupComponent } from "./components/tool-group.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
@@ -337,6 +338,7 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private footer: FooterComponent;
 	private footerDataProvider: FooterDataProvider;
+	private taskLedgerWidget: TaskLedgerWidget;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
 	private version: string;
@@ -482,6 +484,7 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.taskLedgerWidget = new TaskLedgerWidget(this.session, this.ui);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -1713,6 +1716,7 @@ export class InteractiveMode {
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.taskLedgerWidget.setSession(this.session);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
@@ -2031,7 +2035,8 @@ export class InteractiveMode {
 	): void {
 		container.clear();
 
-		if (widgets.size === 0) {
+		const isAboveEditor = container === this.widgetContainerAbove;
+		if (widgets.size === 0 && !isAboveEditor) {
 			if (spacerWhenEmpty) {
 				container.addChild(new Spacer(1));
 			}
@@ -2040,6 +2045,9 @@ export class InteractiveMode {
 
 		if (leadingSpacer) {
 			container.addChild(new Spacer(1));
+		}
+		if (isAboveEditor) {
+			container.addChild(this.taskLedgerWidget);
 		}
 		for (const component of widgets.values()) {
 			container.addChild(component);
@@ -3002,10 +3010,14 @@ export class InteractiveMode {
 							errorMessage = this.streamingMessage.errorMessage || "Error";
 						}
 						for (const [, component] of this.pendingTools.entries()) {
-							component.updateResult({
-								content: [{ type: "text", text: errorMessage }],
-								isError: true,
-							});
+							if (this.streamingMessage.stopReason === "aborted") {
+								component.markCancelled(errorMessage);
+							} else {
+								component.updateResult({
+									content: [{ type: "text", text: errorMessage }],
+									isError: true,
+								});
+							}
 						}
 						this.pendingTools.clear();
 					} else {
@@ -3428,7 +3440,11 @@ export class InteractiveMode {
 							} else {
 								errorMessage = message.errorMessage || "Error";
 							}
-							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
+							if (message.stopReason === "aborted") {
+								component.markCancelled(errorMessage);
+							} else {
+								component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
+							}
 						} else {
 							renderedPendingTools.set(content.id, component);
 						}

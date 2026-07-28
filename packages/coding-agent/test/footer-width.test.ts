@@ -2,6 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
+import type { TaskPhase, TaskVerificationStatus } from "../src/core/state/task-ledger.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -24,6 +25,9 @@ function createSession(options: {
 	branchUsage?: AssistantUsage;
 	compactionUsage?: AssistantUsage;
 	toolUsage?: AssistantUsage;
+	taskPhase?: TaskPhase;
+	filesModified?: string[];
+	verificationStatus?: TaskVerificationStatus;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -80,6 +84,23 @@ function createSession(options: {
 		getContextUsage: () => ({ tokens: 24_600, contextWindow: 200_000, percent: 12.3 }),
 		modelRuntime: {
 			isUsingOAuth: () => false,
+		},
+		taskLedger: {
+			getSnapshot: () => ({
+				taskId: "task",
+				phase: options.taskPhase ?? "discover",
+				startedAt: options.taskPhase ? 1 : undefined,
+				updatedAt: options.taskPhase ? 1 : undefined,
+				revision: 0,
+				workspaceRevision: options.filesModified?.length ?? 0,
+				commands: [],
+				filesRead: [],
+				fileModifications: [],
+				filesModified: options.filesModified ?? [],
+				failures: [],
+				verification: { status: options.verificationStatus ?? "none" },
+				todos: [],
+			}),
 		},
 	};
 
@@ -211,6 +232,22 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("CH25.0%");
+	});
+
+	it("shows TaskLedger phase, modified files, and verification status without adding a line", () => {
+		const footer = new FooterComponent(
+			createSession({
+				sessionName: "",
+				taskPhase: "verify",
+				filesModified: ["src/a.ts", "src/b.ts"],
+				verificationStatus: "passed",
+			}),
+			createFooterData(1),
+		);
+
+		const lines = footer.render(120).map(stripAnsi);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("/tmp/project (main) · verify · 2 files · verify passed");
 	});
 
 	it("marks Kimi Coding costs as subscription estimates", () => {
