@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import * as path from "node:path";
+import { type AssistantMessage, fauxAssistantMessage, fauxThinking } from "@earendil-works/pi-ai";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, TUI } from "../../tui/src/tui.ts";
@@ -117,6 +118,50 @@ describe("InteractiveMode.showStatus", () => {
 		// adds spacer + text
 		expect(fakeThis.chatContainer.children).toHaveLength(5);
 		expect(renderLastLine(fakeThis.chatContainer)).toContain("STATUS_TWO");
+	});
+});
+
+describe("InteractiveMode dynamic working status", () => {
+	test("updates the working row from thinking while preserving an extension override", () => {
+		const setMessage = vi.fn();
+		type Fixture = {
+			defaultWorkingMessage: string;
+			workingMessage?: string;
+			dynamicWorkingMessage?: string;
+			activeStatusIndicator: { kind: "working"; setMessage: (message: string) => void };
+			currentWorkingStatusMessage: () => string;
+		};
+		const fakeThis: Fixture = {
+			defaultWorkingMessage: "Thinking…",
+			workingMessage: undefined,
+			dynamicWorkingMessage: undefined,
+			activeStatusIndicator: { kind: "working", setMessage },
+			currentWorkingStatusMessage() {
+				return this.workingMessage ?? this.dynamicWorkingMessage ?? this.defaultWorkingMessage;
+			},
+		};
+		const updateDynamicWorkingStatus = (
+			InteractiveMode as unknown as {
+				prototype: {
+					updateDynamicWorkingStatus(this: Fixture, message?: AssistantMessage): void;
+				};
+			}
+		).prototype.updateDynamicWorkingStatus;
+
+		updateDynamicWorkingStatus.call(
+			fakeThis,
+			fauxAssistantMessage([fauxThinking("**Planning reusable component architecture**")]),
+		);
+		expect(fakeThis.dynamicWorkingMessage).toBe("Planning reusable component architecture…");
+		expect(setMessage).toHaveBeenLastCalledWith("Planning reusable component architecture…");
+
+		fakeThis.workingMessage = "Extension status";
+		updateDynamicWorkingStatus.call(
+			fakeThis,
+			fauxAssistantMessage([fauxThinking("**Designing dynamic tool grouping logic**")]),
+		);
+		expect(fakeThis.dynamicWorkingMessage).toBe("Designing dynamic tool grouping logic…");
+		expect(setMessage).toHaveBeenCalledTimes(1);
 	});
 });
 

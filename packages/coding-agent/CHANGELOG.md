@@ -13,6 +13,7 @@
 - Branded the existing coding agent distribution as BeauPi with the `beaupi` CLI, `.beaupi` configuration directory, and `BEAUPI_CODING_AGENT_*` environment variables.
 - Changed User, Assistant, and Thinking messages to use compact BeauPi gutters, spacing, and width-safe error states while preserving OSC 133 regions.
 - Reworked the interactive TUI with a minimal Tool shell, grouped read operations, streaming Write previews, structured Diff rendering, recent-run Footer statistics, responsive three-line status, and unified Compact/Retry states.
+- Changed the streaming working row to show the latest model Thinking summary while preserving explicit extension messages and Tool-associated summaries/results.
 
 ### Fixed
 

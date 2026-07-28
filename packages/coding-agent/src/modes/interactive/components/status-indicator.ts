@@ -1,10 +1,52 @@
-import { type Component, Loader, type TUI } from "@earendil-works/pi-tui";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { type Component, Loader, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
+
+const MAX_THINKING_STATUS_WIDTH = 120;
+
+function normalizeThinkingStatusLine(line: string): string | undefined {
+	let normalized = line
+		.trim()
+		.replace(/^#{1,6}\s+/, "")
+		.replace(/^>\s*/, "")
+		.replace(/^(?:[-+*]|\d+[.)])\s+/, "")
+		.replace(/\*\*([^*]+)\*\*/g, "$1")
+		.replace(/__([^_]+)__/g, "$1")
+		.replace(/`([^`]+)`/g, "$1")
+		.replace(/\s+/g, " ")
+		.replace(/(?:\.{3}|…)+$/u, "")
+		.replace(/[.!?;:,]+$/u, "")
+		.trim();
+	if (!normalized || /^```/.test(normalized)) return undefined;
+	normalized = truncateToWidth(normalized, MAX_THINKING_STATUS_WIDTH - 1, "");
+	return normalized ? `${normalized}…` : undefined;
+}
+
+export function getThinkingStatusMessage(message: AssistantMessage): string | undefined {
+	for (let contentIndex = message.content.length - 1; contentIndex >= 0; contentIndex--) {
+		const content = message.content[contentIndex];
+		if (content?.type !== "thinking") continue;
+		const lines = content.thinking.split(/\r\n|\r|\n/);
+		for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+			const status = normalizeThinkingStatusLine(lines[lineIndex] ?? "");
+			if (status) return status;
+		}
+	}
+	return undefined;
+}
+
+export function resolveWorkingStatusMessage(
+	defaultMessage: string,
+	customMessage?: string,
+	thinkingMessage?: string,
+): string {
+	return customMessage ?? thinkingMessage ?? defaultMessage;
+}
 
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;

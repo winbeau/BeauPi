@@ -132,8 +132,10 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
+	getThinkingStatusMessage,
 	IdleStatus,
 	RetryStatusIndicator,
+	resolveWorkingStatusMessage,
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
@@ -349,6 +351,7 @@ export class InteractiveMode {
 	private compactionProgressCharacters = 0;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
+	private dynamicWorkingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Thinking…";
@@ -1778,6 +1781,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
+		this.dynamicWorkingMessage = undefined;
 		this.pendingTools.clear();
 		this.renderInitialMessages();
 	}
@@ -1884,6 +1888,19 @@ export class InteractiveMode {
 		}
 	}
 
+	private currentWorkingStatusMessage(): string {
+		return resolveWorkingStatusMessage(this.defaultWorkingMessage, this.workingMessage, this.dynamicWorkingMessage);
+	}
+
+	private updateDynamicWorkingStatus(message?: AssistantMessage): void {
+		const nextMessage = message ? getThinkingStatusMessage(message) : undefined;
+		if (nextMessage === this.dynamicWorkingMessage) return;
+		this.dynamicWorkingMessage = nextMessage;
+		if (this.workingMessage === undefined && this.activeStatusIndicator?.kind === "working") {
+			this.activeStatusIndicator.setMessage(this.currentWorkingStatusMessage());
+		}
+	}
+
 	private setWorkingVisible(visible: boolean): void {
 		this.workingVisible = visible;
 		if (!visible) {
@@ -1893,11 +1910,7 @@ export class InteractiveMode {
 		}
 		if (this.session.isStreaming && this.activeStatusIndicator?.kind !== "working") {
 			this.showStatusIndicator(
-				new WorkingStatusIndicator(
-					this.ui,
-					this.workingMessage ?? this.defaultWorkingMessage,
-					this.workingIndicatorOptions,
-				),
+				new WorkingStatusIndicator(this.ui, this.currentWorkingStatusMessage(), this.workingIndicatorOptions),
 			);
 		}
 		this.ui.requestRender();
@@ -2004,6 +2017,7 @@ export class InteractiveMode {
 		this.defaultEditor.onExtensionShortcut = undefined;
 		this.updateTerminalTitle();
 		this.workingMessage = undefined;
+		this.dynamicWorkingMessage = undefined;
 		this.workingVisible = true;
 		this.setWorkingIndicator();
 		if (this.activeStatusIndicator?.kind === "working") {
@@ -2178,7 +2192,7 @@ export class InteractiveMode {
 			setWorkingMessage: (message) => {
 				this.workingMessage = message;
 				if (this.activeStatusIndicator?.kind === "working") {
-					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
+					this.activeStatusIndicator.setMessage(this.currentWorkingStatusMessage());
 				}
 			},
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
@@ -2876,6 +2890,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.dynamicWorkingMessage = undefined;
 				this.recentRunStatus = "completed";
 				this.footer.startRecentRun();
 				if (this.settingsManager.getShowTerminalProgress()) {
@@ -2889,11 +2904,7 @@ export class InteractiveMode {
 				}
 				if (this.workingVisible) {
 					this.showStatusIndicator(
-						new WorkingStatusIndicator(
-							this.ui,
-							this.workingMessage ?? this.defaultWorkingMessage,
-							this.workingIndicatorOptions,
-						),
+						new WorkingStatusIndicator(this.ui, this.currentWorkingStatusMessage(), this.workingIndicatorOptions),
 					);
 				} else {
 					this.clearStatusIndicator();
@@ -2933,6 +2944,7 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.updateDynamicWorkingStatus(event.message);
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
 						this.hideThinkingBlock,
@@ -2954,6 +2966,13 @@ export class InteractiveMode {
 					}
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
+					if (
+						event.assistantMessageEvent.type === "thinking_start" ||
+						event.assistantMessageEvent.type === "thinking_delta" ||
+						event.assistantMessageEvent.type === "thinking_end"
+					) {
+						this.updateDynamicWorkingStatus(this.streamingMessage);
+					}
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -2989,6 +3008,7 @@ export class InteractiveMode {
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
+					this.updateDynamicWorkingStatus(this.streamingMessage);
 					this.footer.addRecentRunUsage(event.message.usage);
 					if (event.message.stopReason === "aborted") this.recentRunStatus = "aborted";
 					else if (event.message.stopReason === "error" || event.message.stopReason === "length") {
@@ -3087,6 +3107,7 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(false);
 				}
 				this.clearStatusIndicator("working");
+				this.dynamicWorkingMessage = undefined;
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;

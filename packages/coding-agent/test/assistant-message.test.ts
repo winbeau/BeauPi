@@ -90,6 +90,21 @@ describe("AssistantMessageComponent", () => {
 		expect(plainLines(component)).toEqual(["", "Thinking...", "", "answer"]);
 	});
 
+	test("keeps a thinking summary that labels a following tool call", () => {
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Defining optional renderer exports**" },
+				{ type: "toolCall", id: "tool-1", name: "edit", arguments: { path: "src/tools/index.ts" } },
+			]),
+			false,
+			undefined,
+			"Thinking...",
+			0,
+		);
+
+		expect(plainLines(component)).toEqual(["", "Defining optional renderer exports"]);
+	});
+
 	test("does not add a trailing blank line before the first tool title", () => {
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([

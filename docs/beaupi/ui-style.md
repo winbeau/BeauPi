@@ -379,15 +379,21 @@ Compact 保留 Pi 当前跳动小图标，并在下一行显示 Claude Code 风�
 
 ## 加载动画
 
-保留 Pi 当前跳动小图标。只调整旁边文字：
+保留 Pi 当前跳动小图标。旁边文字优先使用模型最新的 Thinking summary：
 
 ```text
 ● Thinking…
-● Running npm run check…
-● Waiting for background task…
+● Planning reusable component architecture…
+● Designing dynamic tool grouping logic…
 ```
 
-不替换图标帧，不复制 Claude Code spinner。
+规则：
+
+- 去除 summary 外层 Markdown 标记，只显示最新非空单行并追加 `…`。
+- 新一轮 Assistant 流开始时回退为 `Thinking…`，收到新 summary 后原位更新。
+- Extension 通过 `ctx.ui.setWorkingMessage()` 设置的文字优先级更高。
+- Thinking summary 与 Tool call 同属一个 Assistant message 时，原 summary 仍保留在消息历史中；`Update`、Diff 和其他 Tool Result 不受影响。
+- 不替换图标帧，不复制 Claude Code spinner。
 
 ## Pi 实现路径
 
