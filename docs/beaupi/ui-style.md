@@ -34,7 +34,7 @@ src/components/StatusLine.tsx
 ## 核心原则
 
 1. 保留 Pi 当前跳动加载图标，不模仿 Claude Code spinner。
-2. 普通 Tool 默认无卡片和粗边框；Diff 按参考实现保留整行增删背景及上下虚线边界。
+2. 普通 Tool 默认无卡片和粗边框；Diff 按参考实现保留整行增删背景及上下实线边界。
 3. 一行表达一个动作，详细结果缩进显示。
 4. 状态主要依赖符号、文字层级和少量颜色。
 5. 成功状态保持安静，错误和用户待处理状态才提高对比度。
@@ -81,19 +81,19 @@ src/components/StatusLine.tsx
 状态变化：
 
 ```text
-● Bash(npm run check)          运行中
-✓ Bash(npm run check)          成功
-✗ Bash(npm run check)          失败
+● Bash(npm run check)          运行中（accent）
+● Bash(npm run check)          成功（绿色）
+● Bash(npm run check)          失败（红色）
 ! Bash(sudo apt install curl)  等待用户确认
 ```
 
-如果希望更接近 Claude Code，可让完成后的普通工具继续使用 `●`，只通过结果文字表达完成状态；但错误必须使用明显的 `✗`。
+运行、成功和失败统一使用小圆点，通过 accent、绿色和红色区分；错误原因仍必须在结果文字中明确显示。
 
 ### 输出规则
 
 - Tool 标题使用运行图标、粗体名称和括号参数：`● Read(path)`
 - 结果使用 `  ⎿  ` 五列 gutter，后续换行与结果正文对齐
-- queued 状态显示灰色圆点，运行状态使用 Pi 跳动图标，失败显示错误状态
+- queued 状态显示灰色空心圆点；运行、成功和失败使用 accent、绿色和红色实心小圆点
 - 等待权限或 classifier 时在标题下显示 dim 状态
 - 单行成功结果直接显示
 - 多行输出默认显示最后 3–10 行
@@ -146,7 +146,7 @@ src/components/StatusLine.tsx
 
 规则：
 
-- Diff 外层只有上下 dashed 边界，不显示左右边框
+- Diff 外层只有上下 solid 边界，不显示左右边框
 - 左侧 gutter 显示行号和 `+`/`-` 标记
 - gutter 在支持的终端模式下不参与文本复制
 - 删除行使用整行红色背景，增加行使用整行绿色背景
@@ -161,7 +161,7 @@ src/components/StatusLine.tsx
 ### 多文件摘要
 
 ```text
-✓ Updated 3 files
+● Updated 3 files
   src/auth/session.ts     +12 -4
   src/auth/token.ts        +8 -2
   test/auth.test.ts       +24 -0
@@ -173,9 +173,9 @@ BeauPi 不提供独立 Plan 模式，但保留基于文档和任务账本的 Tod
 
 ```text
 Tasks
-  ✓ Read authentication documentation
-  ✓ Inspect refresh implementation
-  ● Update token rotation
+  ● Read authentication documentation    completed（绿色）
+  ● Inspect refresh implementation       completed（绿色）
+  ● Update token rotation                active（accent）
   ○ Run documented checks
   ○ Review diff
 ```
@@ -184,8 +184,8 @@ Tasks
 
 - `□` pending（实际字符使用终端 figures 的 small square）
 - `■` active（使用 accent/claude 色）
-- `✓` completed
-- `✗` failed（BeauPi 新增状态）
+- 绿色 `●` completed
+- 红色 `●` failed（BeauPi 新增状态）
 - `!` blocked / waiting for user
 
 规则：
@@ -215,7 +215,7 @@ Tasks
 完成：
 
 ```text
-✓ Agent(reviewer) Found 1 blocking issue
+● Agent(reviewer) Found 1 blocking issue
    └─ reviewer · 3 tool uses · 17.2k tokens
       ⎿  Done
 ```
@@ -246,8 +246,8 @@ Tasks
 
 ```text
 Workflow: implement-review
-  ✓ inspect       8.2s
-  ✓ research     12.6s
+  ● inspect       8.2s
+  ● research     12.6s
   ● implement    21.4s
   ○ review
   ○ verify
@@ -365,7 +365,7 @@ Compact 保留 Pi 当前跳动小图标，并在下一行显示 Claude Code 风�
 
 ```text
 ⠹ Compacting context... (esc to cancel)
-━━━━━━━━━━━━──────────── 63%
+  ━━━━━━━━━━━━──────────── 63%
 ```
 
 规则：
@@ -375,6 +375,7 @@ Compact 保留 Pi 当前跳动小图标，并在下一行显示 Claude Code 风�
 - 运行期间最高显示 99%，成功结束后直接移除进度条，避免伪造精确完成时间。
 - 手动 Compact、阈值自动 Compact 和上下文溢出恢复使用相同组件。
 - Provider 重试时保留已有进度，后续流式输出继续推进。
+- 进度条行固定缩进两列，与 Tool Result 的内容层级对齐。
 - 终端过窄时缩短进度条，不允许换行或横向溢出。
 
 ## 加载动画

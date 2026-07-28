@@ -96,17 +96,19 @@ describe("ToolExecutionComponent parity", () => {
 
 		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false }, false);
 		rendered = component.render(80).join("\n");
-		expect(stripAnsi(rendered)).toContain("✓ Custom Tool(example)");
+		expect(stripAnsi(rendered)).toContain("● Custom Tool(example)");
+		expect(rendered).toContain(theme.getFgAnsi("success"));
 		expect(stripAnsi(rendered)).toContain("⎿  done");
 		expect(rendered).not.toContain(theme.getBgAnsi("toolSuccessBg"));
 
 		component.updateResult({ content: [{ type: "text", text: "failed" }], isError: true }, false);
 		rendered = component.render(80).join("\n");
-		expect(stripAnsi(rendered)).toContain("✗ Custom Tool(example)");
+		expect(stripAnsi(rendered)).toContain("● Custom Tool(example)");
+		expect(rendered).toContain(theme.getFgAnsi("error"));
 		expect(rendered).not.toContain(theme.getBgAnsi("toolErrorBg"));
 
 		component.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true }, false);
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("✗ Custom Tool(example)");
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("● Custom Tool(example)");
 		component.markCancelled("Operation aborted");
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("⊘ Custom Tool(example)");
 	});

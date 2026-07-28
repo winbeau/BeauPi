@@ -202,7 +202,7 @@ export class StructuredDiffComponent implements Component {
 		const cached = this.cache.get(availableWidth);
 		if (cached) return cached;
 
-		const border = theme.fg("borderMuted", "┄".repeat(availableWidth));
+		const border = theme.fg("borderMuted", "─".repeat(availableWidth));
 		const digits = maxLineDigits(this.lines);
 		const rendered = [border, ...this.lines.flatMap((line) => renderLine(line, availableWidth, digits)), border];
 		this.cache.set(availableWidth, rendered);

@@ -20,9 +20,9 @@ export type BeauPiActivityState = "pending" | "active" | "completed" | "failed" 
 export const BEAUPI_STATUS_SYMBOLS = Object.freeze({
 	queued: "○",
 	running: "●",
-	success: "✓",
+	success: "●",
 	warning: "▲",
-	error: "✗",
+	error: "●",
 	cancelled: "⊘",
 	permission: "!",
 } as const satisfies Record<BeauPiSemanticStatus, string>);
@@ -30,14 +30,12 @@ export const BEAUPI_STATUS_SYMBOLS = Object.freeze({
 export type BeauPiStatusSymbol = (typeof BEAUPI_STATUS_SYMBOLS)[BeauPiSemanticStatus];
 
 export const BEAUPI_STATUS_BY_SYMBOL = Object.freeze({
-	[BEAUPI_STATUS_SYMBOLS.queued]: "queued",
-	[BEAUPI_STATUS_SYMBOLS.running]: "running",
-	[BEAUPI_STATUS_SYMBOLS.success]: "success",
-	[BEAUPI_STATUS_SYMBOLS.warning]: "warning",
-	[BEAUPI_STATUS_SYMBOLS.error]: "error",
-	[BEAUPI_STATUS_SYMBOLS.cancelled]: "cancelled",
-	[BEAUPI_STATUS_SYMBOLS.permission]: "permission",
-} as const satisfies Record<BeauPiStatusSymbol, BeauPiSemanticStatus>);
+	[BEAUPI_STATUS_SYMBOLS.queued]: Object.freeze(["queued"]),
+	[BEAUPI_STATUS_SYMBOLS.running]: Object.freeze(["running", "success", "error"]),
+	[BEAUPI_STATUS_SYMBOLS.warning]: Object.freeze(["warning"]),
+	[BEAUPI_STATUS_SYMBOLS.cancelled]: Object.freeze(["cancelled"]),
+	[BEAUPI_STATUS_SYMBOLS.permission]: Object.freeze(["permission"]),
+} as const satisfies Record<BeauPiStatusSymbol, readonly BeauPiSemanticStatus[]>);
 
 export const BEAUPI_GUTTERS = Object.freeze({
 	message: "> ",

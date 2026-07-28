@@ -17,9 +17,11 @@ describe("CompactionStatusIndicator", () => {
 		try {
 			indicator.addProgress(4_800);
 			const lines = indicator.render(80).map(stripAnsi);
+			const progressLine = lines.at(-1);
 
-			expect(lines.at(-1)).toContain("63%");
-			expect(lines.at(-1)).toContain("━");
+			expect(progressLine).toContain("63%");
+			expect(progressLine).toContain("━");
+			expect(progressLine?.startsWith("  ")).toBe(true);
 			expect(requestRender).toHaveBeenCalled();
 		} finally {
 			indicator.dispose();

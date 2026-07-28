@@ -9,7 +9,7 @@ describe("StructuredDiffComponent", () => {
 		initTheme("beaupi-dark", false);
 	});
 
-	it("renders dashed boundaries, full-line backgrounds, line numbers, and word emphasis", () => {
+	it("renders solid boundaries, full-line backgrounds, line numbers, and word emphasis", () => {
 		const component = new StructuredDiffComponent(
 			[
 				" 1 const token = await loadToken();",
@@ -21,8 +21,8 @@ describe("StructuredDiffComponent", () => {
 		const rendered = component.render(80).join("\n");
 		const plain = stripAnsi(rendered);
 
-		expect(plain.split("\n")[0]).toBe("┄".repeat(80));
-		expect(plain.split("\n").at(-1)).toBe("┄".repeat(80));
+		expect(plain.split("\n")[0]).toBe("─".repeat(80));
+		expect(plain.split("\n").at(-1)).toBe("─".repeat(80));
 		expect(plain).toContain("-2 return refresh(token, currentSession, retryBudget);");
 		expect(plain).toContain("+2 return refreshWithRotation(token, currentSession, retryBudget);");
 		expect(rendered).toContain(theme.getBgAnsi("toolDiffRemovedBg"));

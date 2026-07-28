@@ -126,9 +126,10 @@ describe("BeauPi built-in themes", () => {
 					loaded.getBgAnsi("toolDiffRemovedEmphasisBg"),
 				]).size,
 			).toBe(4);
-			expect(new Set(CRITICAL_STATES.map((state) => stripAnsi(toolStateSymbol(state, loaded)))).size).toBe(
-				CRITICAL_STATES.length,
-			);
+			const styledStates = CRITICAL_STATES.map((state) => toolStateSymbol(state, loaded));
+			expect(new Set(styledStates).size).toBe(CRITICAL_STATES.length);
+			expect(stripAnsi(toolStateSymbol("success", loaded))).toBe("●");
+			expect(stripAnsi(toolStateSymbol("error", loaded))).toBe("●");
 		}
 	});
 

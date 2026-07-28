@@ -1,7 +1,8 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { type Component, Loader, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Loader, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
 import { theme } from "../theme/theme.ts";
+import { indent } from "./beaupi-style.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
@@ -148,10 +149,13 @@ export class CompactionStatusIndicator extends StatusIndicator {
 		const ratio = 1 - Math.exp(-estimatedTokens / 1200);
 		const percent = Math.min(99, Math.round(ratio * 100));
 		const percentText = `${percent}%`;
-		const barWidth = Math.max(0, Math.min(30, availableWidth - percentText.length - 1));
+		const progressIndent = indent("message", availableWidth);
+		const progressWidth = Math.max(0, availableWidth - visibleWidth(progressIndent));
+		const barWidth = Math.max(0, Math.min(30, progressWidth - percentText.length - 1));
 		const filledWidth = Math.min(barWidth, Math.round(ratio * barWidth));
 		const bar = theme.fg("accent", "━".repeat(filledWidth)) + theme.fg("dim", "─".repeat(barWidth - filledWidth));
-		lines.push(`${bar}${bar ? " " : ""}${theme.fg("dim", percentText)}`);
+		const progress = `${bar}${bar ? " " : ""}${theme.fg("dim", percentText)}`;
+		lines.push(`${progressIndent}${truncateToWidth(progress, progressWidth, "")}`);
 		return lines;
 	}
 }

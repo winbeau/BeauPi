@@ -7,7 +7,7 @@ import {
 	TaskLedgerWidget,
 	taskTodoLimit,
 } from "../src/modes/interactive/components/task-ledger-widget.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createSnapshot(overrides: Partial<TaskLedgerSnapshot> = {}): TaskLedgerSnapshot {
@@ -71,12 +71,15 @@ describe("TaskLedgerWidget", () => {
 			},
 		];
 		const widget = createWidget(createSnapshot({ todos }), 80);
-		const wide = renderPlain(widget, 120);
+		const styledWide = widget.render(120).join("\n");
+		const wide = stripAnsi(styledWide);
 		expect(wide).toContain("Tasks · execute · 2 files · verify pending");
 		expect(wide).toContain("○ Pending item (@main)");
 		expect(wide).toContain("● Active item (@main)");
-		expect(wide).toContain("✓ Completed item (@main)");
-		expect(wide).toContain("✗ Failed item (@main)");
+		expect(wide).toContain("● Completed item (@main)");
+		expect(wide).toContain("● Failed item (@main)");
+		expect(styledWide).toContain(theme.getFgAnsi("success"));
+		expect(styledWide).toContain(theme.getFgAnsi("error"));
 		expect(wide).toContain("! Blocked item (@main) ▸ blocked by #1, #2");
 
 		const narrow = renderPlain(widget, 40);
@@ -95,7 +98,7 @@ describe("TaskLedgerWidget", () => {
 		const widget = createWidget(createSnapshot({ todos }), 24);
 		const lines = widget.render(80).map(stripAnsi);
 		expect(taskTodoLimit(24)).toBe(3);
-		expect(lines.filter((line) => /^[ ]{2}[○●✓✗!]/.test(line))).toHaveLength(3);
+		expect(lines.filter((line) => /^[ ]{2}[○●!]/.test(line))).toHaveLength(3);
 		expect(lines.some((line) => line.includes("pending") && line.includes("completed"))).toBe(true);
 		expect(taskTodoLimit(120)).toBe(10);
 	});
@@ -148,9 +151,9 @@ describe("TaskLedgerWidget", () => {
 		const widget = createWidget(createSnapshot({ commands, todos: [] }));
 		const rendered = renderPlain(widget, 100);
 		expect(rendered).toContain("Tools");
-		expect(rendered).toContain("✓ Read(src/a.ts)");
+		expect(rendered).toContain("● Read(src/a.ts)");
 		expect(rendered).toContain("● Bash(npm run check)");
-		expect(rendered).toContain("✗ Bash(git status --short · repeated)");
+		expect(rendered).toContain("● Bash(git status --short · repeated)");
 		expect(selectTimelineCommands(commands, 2).map((command) => command.id)).toEqual(["two", "three"]);
 	});
 

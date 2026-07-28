@@ -59,32 +59,37 @@ describe("BeauPi visual helpers", () => {
 		expect(semanticStatus("failed")).toBe("error");
 		expect(semanticStatus("permission-waiting")).toBe("permission");
 		expect(statusSymbol("running")).toBe("●");
-		expect(statusSymbol("success")).toBe("✓");
-		expect(statusSymbol("completed")).toBe("✓");
+		expect(statusSymbol("success")).toBe("●");
+		expect(statusSymbol("completed")).toBe("●");
 		expect(statusSymbol("warning")).toBe("▲");
-		expect(statusSymbol("error")).toBe("✗");
-		expect(statusSymbol("failed")).toBe("✗");
+		expect(statusSymbol("error")).toBe("●");
+		expect(statusSymbol("failed")).toBe("●");
 		expect(statusSymbol("cancelled")).toBe("⊘");
 		expect(statusSymbol("permission-waiting")).toBe("!");
-		expect(BEAUPI_STATUS_BY_SYMBOL[BEAUPI_STATUS_SYMBOLS.permission]).toBe("permission");
+		expect(BEAUPI_STATUS_BY_SYMBOL[BEAUPI_STATUS_SYMBOLS.running]).toEqual(["running", "success", "error"]);
+		expect(BEAUPI_STATUS_BY_SYMBOL[BEAUPI_STATUS_SYMBOLS.permission]).toEqual(["permission"]);
 	});
 
 	it("maps future Todo, Agent, Workflow, and Background activity states to the same language", () => {
 		expect(activityStateSymbol("pending")).toBe("○");
 		expect(activityStateSymbol("active")).toBe("●");
-		expect(activityStateSymbol("completed")).toBe("✓");
-		expect(activityStateSymbol("failed")).toBe("✗");
+		expect(activityStateSymbol("completed")).toBe("●");
+		expect(activityStateSymbol("failed")).toBe("●");
 		expect(activityStateSymbol("blocked")).toBe("!");
 		expect(activityStateSymbol("cancelled")).toBe("⊘");
 		expect(activityStateToolState("blocked")).toBe("permission");
 	});
 
-	it("styles every lifecycle state without relying on color alone", () => {
+	it("styles lifecycle dots with their semantic colors", () => {
 		for (const state of STATES) {
 			const styled = toolStateSymbol(state, theme);
 			expect(stripAnsi(styled)).toBe(statusSymbol(state));
 			expect(visibleWidth(styled)).toBe(1);
 		}
+		expect(toolStateSymbol("running", theme)).not.toBe(toolStateSymbol("success", theme));
+		expect(toolStateSymbol("success", theme)).not.toBe(toolStateSymbol("error", theme));
+		expect(toolStateSymbol("success", theme)).toContain(theme.getFgAnsi("success"));
+		expect(toolStateSymbol("error", theme)).toContain(theme.getFgAnsi("error"));
 	});
 
 	it("defines stable message, tool, continuation, tree, and indent rules", () => {

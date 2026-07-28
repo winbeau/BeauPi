@@ -14,6 +14,7 @@
 - Changed User, Assistant, and Thinking messages to use compact BeauPi gutters, spacing, and width-safe error states while preserving OSC 133 regions.
 - Reworked the interactive TUI with a minimal Tool shell, grouped read operations, streaming Write previews, structured Diff rendering, recent-run Footer statistics, responsive three-line status, and unified Compact/Retry states.
 - Changed the streaming working row to show the latest model Thinking summary while preserving explicit extension messages and Tool-associated summaries/results.
+- Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
 
 ### Fixed
 

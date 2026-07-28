@@ -151,7 +151,7 @@ describe("AssistantMessageComponent", () => {
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
 		expect(rendered).toContain("Thinking...");
-		expect(rendered).toContain("✗ Error: Model stopped");
+		expect(rendered).toContain("● Error: Model stopped");
 		expect(rendered).toContain("maximum output token limit");
 		expect(rendered.match(/maximum output token limit/g)).toHaveLength(1);
 	});
@@ -160,7 +160,7 @@ describe("AssistantMessageComponent", () => {
 		const aborted = new AssistantMessageComponent(
 			createAssistantMessage([], { stopReason: "aborted", errorMessage: "Request was aborted" }),
 		);
-		expect(stripAnsi(aborted.render(80).join("\n"))).toContain("✗ Operation aborted");
+		expect(stripAnsi(aborted.render(80).join("\n"))).toContain("● Operation aborted");
 
 		const failed = new AssistantMessageComponent(
 			createAssistantMessage([{ type: "text", text: "partial" }], {
@@ -169,7 +169,7 @@ describe("AssistantMessageComponent", () => {
 			}),
 		);
 		const rendered = stripAnsi(failed.render(80).join("\n"));
-		expect(rendered).toContain("✗ Error: provider failed");
+		expect(rendered).toContain("● Error: provider failed");
 		expect(rendered.match(/provider failed/g)).toHaveLength(1);
 	});
 
@@ -225,7 +225,7 @@ describe("AssistantMessageComponent", () => {
 			for (const width of WIDTHS) {
 				for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
-			expect(stripAnsi(component.render(1).join("\n"))).toContain("✗");
+			expect(stripAnsi(component.render(1).join("\n"))).toContain("●");
 		}
 	});
 
