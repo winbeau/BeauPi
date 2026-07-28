@@ -343,6 +343,7 @@ export class InteractiveMode {
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
+	private compactionProgressCharacters = 0;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
@@ -730,7 +731,7 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const logo = theme.bold(theme.fg("accent", APP_TITLE)) + theme.fg("dim", ` v${this.version}`);
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -769,7 +770,7 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
+				`${APP_TITLE} can explain its own features and look up its docs. Ask it how to use or extend ${APP_TITLE}.`,
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
@@ -978,7 +979,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${APP_TITLE} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -3068,6 +3069,7 @@ export class InteractiveMode {
 				break;
 
 			case "compaction_start": {
+				this.compactionProgressCharacters = 0;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3081,6 +3083,14 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "compaction_progress": {
+				this.compactionProgressCharacters += event.deltaCharacters;
+				if (this.activeStatusIndicator instanceof CompactionStatusIndicator) {
+					this.activeStatusIndicator.addProgress(event.deltaCharacters);
+				}
+				break;
+			}
+
 			case "compaction_end": {
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
@@ -3090,6 +3100,7 @@ export class InteractiveMode {
 					this.autoCompactionEscapeHandler = undefined;
 				}
 				this.clearStatusIndicator("compaction");
+				this.compactionProgressCharacters = 0;
 				if (event.aborted) {
 					if (event.reason === "manual") {
 						this.showError("Compaction cancelled");
@@ -3162,7 +3173,9 @@ export class InteractiveMode {
 				if (event.source === "branchSummary") {
 					this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));
 				} else {
-					this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason));
+					const indicator = new CompactionStatusIndicator(this.ui, event.reason);
+					indicator.addProgress(this.compactionProgressCharacters);
+					this.showStatusIndicator(indicator);
 				}
 				this.ui.requestRender();
 				break;
@@ -3500,7 +3513,7 @@ export class InteractiveMode {
 			new Text(
 				theme.fg(
 					"warning",
-					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
+					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart ${APP_NAME}.`,
 				),
 				1,
 				0,
@@ -5155,7 +5168,11 @@ export class InteractiveMode {
 			providerOption.name,
 			`${providerOption.name} setup`,
 		);
-		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
+		dialog.showInfo(
+			`${providerOption.method?.name ?? "Authentication"} is configured outside ${APP_NAME}.`,
+			[],
+			true,
+		);
 
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);

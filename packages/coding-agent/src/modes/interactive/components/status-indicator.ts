@@ -74,6 +74,9 @@ export class RetryStatusIndicator extends StatusIndicator {
 export type CompactionStatusReason = "manual" | "threshold" | "overflow";
 
 export class CompactionStatusIndicator extends StatusIndicator {
+	private generatedCharacters = 0;
+	private readonly tui: TUI;
+
 	constructor(ui: TUI, reason: CompactionStatusReason) {
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label =
@@ -87,6 +90,24 @@ export class CompactionStatusIndicator extends StatusIndicator {
 			(text) => theme.fg("muted", text),
 			label,
 		);
+		this.tui = ui;
+	}
+
+	addProgress(deltaCharacters: number): void {
+		this.generatedCharacters += Math.max(0, deltaCharacters);
+		this.tui.requestRender();
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		const estimatedTokens = Math.ceil(this.generatedCharacters / 4);
+		const ratio = 1 - Math.exp(-estimatedTokens / 1200);
+		const percent = Math.min(99, Math.round(ratio * 100));
+		const barWidth = Math.max(1, Math.min(30, width - 6));
+		const filledWidth = Math.min(barWidth, Math.round(ratio * barWidth));
+		const bar = theme.fg("accent", "━".repeat(filledWidth)) + theme.fg("dim", "─".repeat(barWidth - filledWidth));
+		lines.push(`${bar} ${theme.fg("dim", `${percent}%`)}`);
+		return lines;
 	}
 }
 

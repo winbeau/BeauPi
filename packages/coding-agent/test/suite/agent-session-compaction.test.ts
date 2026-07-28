@@ -60,6 +60,7 @@ function useSummaryStreamFn(harness: Harness, summary: string): () => number {
 				model: model.id,
 				usage: createUsage(10),
 			};
+			stream.push({ type: "text_delta", contentIndex: 0, delta: summary, partial: message });
 			stream.push({ type: "done", reason: "stop", message });
 		});
 		return stream;
@@ -173,6 +174,20 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(result.summary).toContain("summary from custom stream");
 		expect(getStreamCallCount()).toBe(1);
+	});
+
+	it("emits streamed compaction progress", async () => {
+		const harness = await createHarness({ withConfiguredAuth: false });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const summary = "streamed summary progress";
+		useSummaryStreamFn(harness, summary);
+
+		await harness.session.compact();
+
+		const progress = harness.eventsOfType("compaction_progress");
+		expect(progress).toHaveLength(1);
+		expect(progress[0]?.deltaCharacters).toBe(summary.length);
 	});
 
 	it("manually compacts with provider-resolved bearer auth", async () => {

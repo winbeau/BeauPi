@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added current context token usage to the footer and streamed progress for context compaction.
+
+### Changed
+
+- Branded the existing coding agent distribution as BeauPi with the `beaupi` CLI, `.beaupi` configuration directory, and `BEAUPI_CODING_AGENT_*` environment variables.
+
 ### Fixed
 
 - Added a status line when the tool output expansion is toggled ([#7180](https://github.com/earendil-works/pi/issues/7180)).

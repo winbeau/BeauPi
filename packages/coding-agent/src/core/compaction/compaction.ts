@@ -566,6 +566,7 @@ export async function completeSummarization(
 	streamFn?: StreamFn,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
+	onProgress?: (deltaCharacters: number) => void,
 ): Promise<AssistantMessage> {
 	// Summaries are standalone requests, so isolate routing and avoid cache writes that cannot be reused.
 	const requestOptions: SimpleStreamOptions = {
@@ -573,10 +574,17 @@ export async function completeSummarization(
 		cacheRetention: "none",
 		sessionId: uuidv7(),
 	};
-	const produce = async (): Promise<AssistantMessage> =>
-		streamFn
-			? (await streamFn(model, context, requestOptions)).result()
-			: completeSimple(model, context, requestOptions);
+	const produce = async (): Promise<AssistantMessage> => {
+		if (!streamFn) return completeSimple(model, context, requestOptions);
+
+		const response = await streamFn(model, context, requestOptions);
+		if (onProgress) {
+			for await (const event of response) {
+				if (event.type === "text_delta") onProgress(event.delta.length);
+			}
+		}
+		return response.result();
+	};
 	return retryAssistantCall(produce, retry, requestOptions.signal, callbacks);
 }
 
@@ -598,6 +606,7 @@ export async function generateSummary(
 	env?: Record<string, string>,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
+	onProgress?: (deltaCharacters: number) => void,
 ): Promise<string> {
 	return (
 		await generateSummaryWithUsage(
@@ -614,6 +623,7 @@ export async function generateSummary(
 			env,
 			retry,
 			callbacks,
+			onProgress,
 		)
 	).text;
 }
@@ -633,6 +643,7 @@ export async function generateSummaryWithUsage(
 	env?: Record<string, string>,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
+	onProgress?: (deltaCharacters: number) => void,
 ): Promise<{ text: string; usage: Usage }> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -674,6 +685,7 @@ export async function generateSummaryWithUsage(
 		streamFn,
 		retry,
 		callbacks,
+		onProgress,
 	);
 
 	if (response.stopReason === "error") {
@@ -826,6 +838,7 @@ export async function compact(
 	env?: Record<string, string>,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
+	onProgress?: (deltaCharacters: number) => void,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -860,6 +873,7 @@ export async function compact(
 				env,
 				retry,
 				callbacks,
+				onProgress,
 			);
 			historyText = historyResult.text;
 			historyUsage = historyResult.usage;
@@ -876,6 +890,7 @@ export async function compact(
 			streamFn,
 			retry,
 			callbacks,
+			onProgress,
 		);
 		// Merge into single summary
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`;
@@ -896,6 +911,7 @@ export async function compact(
 			env,
 			retry,
 			callbacks,
+			onProgress,
 		);
 		summary = result.text;
 		summaryUsage = result.usage;
@@ -933,6 +949,7 @@ async function generateTurnPrefixSummary(
 	streamFn?: StreamFn,
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
+	onProgress?: (deltaCharacters: number) => void,
 ): Promise<{ text: string; usage: Usage }> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -956,6 +973,7 @@ async function generateTurnPrefixSummary(
 		streamFn,
 		retry,
 		callbacks,
+		onProgress,
 	);
 
 	if (response.stopReason === "error") {

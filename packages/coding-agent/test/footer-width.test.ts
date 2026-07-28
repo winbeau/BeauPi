@@ -77,7 +77,7 @@ function createSession(options: {
 			getSessionName: () => options.sessionName,
 			getCwd: () => "/tmp/project",
 		},
-		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
+		getContextUsage: () => ({ tokens: 24_600, contextWindow: 200_000, percent: 12.3 }),
 		modelRuntime: {
 			isUsingOAuth: () => false,
 		},
@@ -187,6 +187,13 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("$1.250");
+	});
+
+	it("shows current context tokens, context window, and percentage", () => {
+		const footer = new FooterComponent(createSession({ sessionName: "" }), createFooterData(1));
+
+		const statsLine = stripAnsi(footer.render(120)[1]);
+		expect(statsLine).toContain("25k/200k 12.3% (auto)");
 	});
 
 	it("shows the latest cache hit rate when cache usage is present", () => {
