@@ -6,6 +6,10 @@
 
 - Added Claude Opus 5 support for the GitHub Copilot provider, routing through the Anthropic Messages API with adaptive thinking, 1M context, and the Copilot `minimal` thinking-level override.
 
+### Fixed
+
+- Fixed OpenAI Responses compaction and other one-shot requests to retry once without `prompt_cache_options` when an endpoint explicitly rejects that optional parameter.
+
 ## [0.82.1] - 2026-07-25
 
 ### Added

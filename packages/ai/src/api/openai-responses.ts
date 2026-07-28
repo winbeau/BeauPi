@@ -83,6 +83,13 @@ function getPromptCacheRetention(
 	return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
+function isUnsupportedPromptCacheOptionsError(error: unknown): boolean {
+	const normalized = normalizeProviderError(error);
+	if (normalized.status !== 400) return false;
+	const details = `${normalized.message}\n${normalized.body ?? ""}`.toLowerCase();
+	return details.includes("prompt_cache_options") && /unsupported|unknown|unrecognized/.test(details);
+}
+
 function formatOpenAIResponsesError(error: unknown): string {
 	return formatProviderError(normalizeProviderError(error), "OpenAI API error");
 }
@@ -146,14 +153,21 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
-			const { data: openaiStream, response } = await retryProviderRequest(
-				() => client.responses.create(params, requestOptions).withResponse(),
-				{
+			const createResponse = () =>
+				retryProviderRequest(() => client.responses.create(params, requestOptions).withResponse(), {
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
-				},
-			);
+				});
+			let responseResult: Awaited<ReturnType<typeof createResponse>>;
+			try {
+				responseResult = await createResponse();
+			} catch (error) {
+				if (params.prompt_cache_options === undefined || !isUnsupportedPromptCacheOptionsError(error)) throw error;
+				delete params.prompt_cache_options;
+				responseResult = await createResponse();
+			}
+			const { data: openaiStream, response } = responseResult;
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
