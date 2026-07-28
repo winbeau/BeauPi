@@ -152,6 +152,16 @@ npm run check
 - 已知差异
 - 是否阻塞下一批次
 
+## 验收记录（2026-07-28）
+
+- 固定 TUI fixture 覆盖 User、Assistant、Read、Write、Structured Diff、Compact、Footer 和 Ctrl+O。
+- tmux 暗色检查：80×45、120×45、160×45；亮色检查：80×45。
+- 捕获文件最大可见宽度分别为 80、120、160，没有横向溢出。
+- Ctrl+O 展开后确认完整 Write 尾部可见；暗色和亮色均确认增删行背景与 256 色降级。
+- `./test.sh`：通过。
+- `npm run check`：通过，无错误、警告或 info。
+- 已知阻塞差异：无。
+
 ## 完成标准
 
 自动化测试覆盖状态、宽度和行为；tmux 检查覆盖主要视觉；无依赖人工记忆的“看起来差不多”验收。

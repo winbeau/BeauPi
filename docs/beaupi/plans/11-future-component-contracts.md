@@ -1,5 +1,9 @@
 # 未来组件视觉契约
 
+## 实施状态
+
+M1 接入点已完成。`BeauPiActivityState`、状态符号和 Tool 状态映射已加入共享视觉 helper；Todo、Agent、Workflow 和 Background Runtime 仍按计划留给后续里程碑。
+
 ## 目的
 
 M1 不实现 Task Ledger、子 Agent、Workflow 或后台任务 Runtime，但应定义这些功能未来接入时复用的视觉语言，避免重新设计 TUI。

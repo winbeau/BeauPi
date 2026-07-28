@@ -1,5 +1,9 @@
 # Compact、加载与重试计划
 
+## 实施状态
+
+已完成（Batch 8）。保留 Pi Loader 与自定义 Working indicator；Compact 使用真实流式字符和渐近进度，Retry/Branch Summary 使用统一状态层级且不重复刷屏。
+
 ## 目标
 
 统一 Working、Compact、Retry 和 Branch Summary 的状态文字与层级，同时保留 Pi 当前加载动画和 Compact 实际流式进度。

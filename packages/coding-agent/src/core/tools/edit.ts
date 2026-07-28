@@ -1,10 +1,11 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { type Component, Container, Text } from "@earendil-works/pi-tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { renderDiff } from "../../modes/interactive/components/diff.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { type BeauPiToolState, resultGutter, toolTitle } from "../../modes/interactive/components/beaupi-style.ts";
+import { StructuredDiffComponent } from "../../modes/interactive/components/diff.ts";
+import { theme as activeTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import {
 	applyEditsToNormalizedContent,
@@ -137,32 +138,36 @@ type EditToolResultLike = {
 	details?: EditToolDetails;
 };
 
-type EditCallRenderComponent = Box & {
+class EditCallRenderComponent extends Container {
 	preview?: EditPreview;
 	previewArgsKey?: string;
-	previewPending?: boolean;
-	settledError?: boolean;
-};
+	previewPending = false;
+	settledError = false;
+}
 
-function createEditCallRenderComponent(): EditCallRenderComponent {
-	return Object.assign(new Box(1, 1, (text: string) => text), {
-		preview: undefined as EditPreview | undefined,
-		previewArgsKey: undefined as string | undefined,
-		previewPending: false,
-		settledError: false,
-	});
+class GutteredTextComponent implements Component {
+	private readonly text: string;
+	private readonly color: "error" | "warning" | "muted";
+
+	constructor(text: string, color: "error" | "warning" | "muted" = "error") {
+		this.text = text;
+		this.color = color;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return this.text.split("\n").map((line) => resultGutter(activeTheme.fg(this.color, line), activeTheme, width));
+	}
 }
 
 function getEditCallRenderComponent(state: EditRenderState, lastComponent: unknown): EditCallRenderComponent {
-	if (lastComponent instanceof Box) {
-		const component = lastComponent as EditCallRenderComponent;
-		state.callComponent = component;
-		return component;
+	if (lastComponent instanceof EditCallRenderComponent) {
+		state.callComponent = lastComponent;
+		return lastComponent;
 	}
-	if (state.callComponent) {
-		return state.callComponent;
-	}
-	const component = createEditCallRenderComponent();
+	if (state.callComponent) return state.callComponent;
+	const component = new EditCallRenderComponent();
 	state.callComponent = component;
 	return component;
 }
@@ -192,19 +197,23 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	return null;
 }
 
-function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string): string {
+function formatEditCall(
+	args: RenderableEditArgs | undefined,
+	theme: Theme,
+	cwd: string,
+	state: BeauPiToolState,
+): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
+	return toolTitle("Update", pathDisplay, state, theme, Number.MAX_SAFE_INTEGER);
 }
 
+type EditRenderedResult = { type: "error"; text: string } | { type: "diff"; diff: string };
+
 function formatEditResult(
-	args: RenderableEditArgs | undefined,
 	preview: EditPreview | undefined,
 	result: EditToolResultLike,
-	theme: Theme,
 	isError: boolean,
-): string | undefined {
-	const rawPath = str(args?.file_path ?? args?.path);
+): EditRenderedResult | undefined {
 	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
 	const previewError = preview && "error" in preview ? preview.error : undefined;
 	if (isError) {
@@ -212,35 +221,12 @@ function formatEditResult(
 			.filter((c) => c.type === "text")
 			.map((c) => c.text || "")
 			.join("\n");
-		if (!errorText || errorText === previewError) {
-			return undefined;
-		}
-		return theme.fg("error", errorText);
+		if (!errorText || errorText === previewError) return undefined;
+		return { type: "error", text: errorText };
 	}
 
 	const resultDiff = result.details?.diff;
-	if (resultDiff && resultDiff !== previewDiff) {
-		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
-	}
-
-	return undefined;
-}
-
-function getEditHeaderBg(
-	preview: EditPreview | undefined,
-	settledError: boolean | undefined,
-	theme: Theme,
-): (text: string) => string {
-	if (preview) {
-		if ("error" in preview) {
-			return (text: string) => theme.bg("toolErrorBg", text);
-		}
-		return (text: string) => theme.bg("toolSuccessBg", text);
-	}
-	if (settledError) {
-		return (text: string) => theme.bg("toolErrorBg", text);
-	}
-	return (text: string) => theme.bg("toolPendingBg", text);
+	return resultDiff && resultDiff !== previewDiff ? { type: "diff", diff: resultDiff } : undefined;
 }
 
 function buildEditCallComponent(
@@ -248,20 +234,28 @@ function buildEditCallComponent(
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
+	state: BeauPiToolState,
 ): EditCallRenderComponent {
-	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
-
-	if (!component.preview) {
-		return component;
-	}
-
-	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
-	component.addChild(new Spacer(1));
-	component.addChild(new Text(body, 0, 0));
+	component.addChild(new Text(formatEditCall(args, theme, cwd, state), 0, 0));
+	if (!component.preview) return component;
+	component.addChild(
+		"error" in component.preview
+			? new GutteredTextComponent(component.preview.error)
+			: new StructuredDiffComponent(component.preview.diff),
+	);
 	return component;
+}
+
+function getEditToolState(
+	component: EditCallRenderComponent,
+	context: { executionStarted: boolean; isPartial: boolean; isError: boolean },
+): BeauPiToolState {
+	if (!context.isPartial) {
+		if (context.isError || component.settledError) return "error";
+		return "success";
+	}
+	return context.executionStarted ? "running" : "queued";
 }
 
 function setEditPreview(
@@ -385,7 +379,7 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd);
+			return buildEditCallComponent(component, args, theme, context.cwd, getEditToolState(component, context));
 		},
 		renderResult(result, _options, theme, context) {
 			const callComponent = context.state.callComponent;
@@ -395,38 +389,31 @@ export function createEditToolDefinition(
 				: undefined;
 			const typedResult = result as EditToolResultLike;
 			const resultDiff = !context.isError ? typedResult.details?.diff : undefined;
-			let changed = false;
 			if (callComponent) {
 				if (typeof resultDiff === "string") {
-					changed =
-						setEditPreview(
-							callComponent,
-							{ diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
-							argsKey,
-						) || changed;
-				}
-				if (callComponent.settledError !== context.isError) {
-					callComponent.settledError = context.isError;
-					changed = true;
-				}
-				if (changed) {
-					buildEditCallComponent(
+					setEditPreview(
 						callComponent,
-						context.args as RenderableEditArgs | undefined,
-						theme,
-						context.cwd,
+						{ diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+						argsKey,
 					);
 				}
+				callComponent.settledError = context.isError;
+				buildEditCallComponent(
+					callComponent,
+					context.args as RenderableEditArgs | undefined,
+					theme,
+					context.cwd,
+					getEditToolState(callComponent, context),
+				);
 			}
 
-			const output = formatEditResult(context.args, callComponent?.preview, typedResult, theme, context.isError);
+			const output = formatEditResult(callComponent?.preview, typedResult, context.isError);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();
-			if (!output) {
-				return component;
-			}
-			component.addChild(new Spacer(1));
-			component.addChild(new Text(output, 1, 0));
+			if (!output) return component;
+			component.addChild(
+				output.type === "error" ? new GutteredTextComponent(output.text) : new StructuredDiffComponent(output.diff),
+			);
 			return component;
 		},
 	};

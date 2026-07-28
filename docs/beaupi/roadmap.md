@@ -49,7 +49,7 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 验收：普通会话中的消息、Read、Write、Edit、Bash、Search、Diff、Footer 和 Compact 使用统一视觉语言；普通 Tool 不再使用大面积背景卡片；Write 行数在写入过程中持续动态更新；所有组件在暗色、亮色和 80/120/160 列终端下可读且不横向溢出。
 
-详细规范见 [Claude Code 风格 TUI](./ui-style.md)，完整实施拆分见 [Claude Code 风格 TUI 调整计划](./plans/README.md)。
+状态：已完成（2026-07-28）。详细规范见 [Claude Code 风格 TUI](./ui-style.md)，完整实施拆分和验收记录见 [Claude Code 风格 TUI 调整计划](./plans/README.md)。
 
 ## 阶段 3：Task Ledger 与任务可视化
 

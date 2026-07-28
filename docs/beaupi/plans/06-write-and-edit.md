@@ -1,5 +1,9 @@
 # Write 与 Edit 计划
 
+## 实施状态
+
+已完成（Batch 5、6）。Write 保留流式参数预览、动态 `more lines`/`total`、Highlight Cache 和 Ctrl+O；Edit 保留异步 Preview、参数版本保护与执行后去重。
+
 ## 目标
 
 让文件写入和精确编辑使用统一标题、流式预览和 Structured Diff，同时保留 Write 动态行数与 Edit 异步预览。

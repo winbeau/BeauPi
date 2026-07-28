@@ -1,5 +1,9 @@
 # Structured Diff 计划
 
+## 实施状态
+
+已完成（Batch 6）。Diff 已实现行号、上下虚线边界、整行增删背景、低变化词级强调、ANSI/CJK/emoji 安全换行，以及按宽度、主题和内容键控的有界缓存。
+
 ## 目标
 
 在不改动 edit 算法和 `details.patch` 的前提下，重写 Diff 展示层：整行增删背景、词级强调、行号 gutter、上下 dashed 边界、宽度适配和缓存。

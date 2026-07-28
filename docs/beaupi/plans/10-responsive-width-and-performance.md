@@ -1,5 +1,9 @@
 # 宽度、缓存与性能计划
 
+## 实施状态
+
+已完成（Batch 10）。相关组件覆盖 40/60/80/120/160 列，所有渲染行遵守 `visibleWidth <= width`；Diff、Write 与 Footer 缓存均有明确失效或有界策略。
+
 ## 核心规则
 
 Pi TUI 要求每个 `render(width)` 返回的每一行可见宽度不超过 `width`。这是所有 TUI 组件的硬约束。

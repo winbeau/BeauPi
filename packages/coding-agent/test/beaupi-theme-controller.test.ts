@@ -88,6 +88,18 @@ describe("InteractiveThemeController with BeauPi themes", () => {
 		expect(changed).toHaveBeenCalledTimes(2);
 	});
 
+	it("uses automatic BeauPi themes when no theme has been configured", async () => {
+		const fakeUi = createThemeUi("dark");
+		const settingsManager = SettingsManager.inMemory({});
+		const controller = new InteractiveThemeController(fakeUi.ui, settingsManager, vi.fn(), vi.fn());
+
+		await controller.applyFromSettings();
+
+		expect(theme.name).toBe("beaupi-dark");
+		expect(settingsManager.getThemeSetting()).toBe("beaupi-light/beaupi-dark");
+		expect(fakeUi.setNotifications).toHaveBeenCalledWith(true);
+	});
+
 	it("previews BeauPi themes through the existing hot invalidation path", () => {
 		const fakeUi = createThemeUi("dark");
 		const controller = new InteractiveThemeController(

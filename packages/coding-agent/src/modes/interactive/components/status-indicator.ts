@@ -44,7 +44,7 @@ export class RetryStatusIndicator extends StatusIndicator {
 
 	constructor(ui: TUI, attempt: number, maxAttempts: number, delayMs: number) {
 		const retryMessage = (seconds: number) =>
-			`Retrying (${attempt}/${maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
+			`Retrying ${attempt}/${maxAttempts} in ${seconds}s… (${keyText("app.interrupt")} to cancel)`;
 		super(
 			"retry",
 			ui,
@@ -81,8 +81,8 @@ export class CompactionStatusIndicator extends StatusIndicator {
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label =
 			reason === "manual"
-				? `Compacting context... ${cancelHint}`
-				: `${reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... ${cancelHint}`;
+				? `Compacting context… ${cancelHint}`
+				: `${reason === "overflow" ? "Context overflow detected · " : ""}Auto-compacting… ${cancelHint}`;
 		super(
 			"compaction",
 			ui,
@@ -99,14 +99,17 @@ export class CompactionStatusIndicator extends StatusIndicator {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (availableWidth === 0) return [];
+		const lines = super.render(availableWidth);
 		const estimatedTokens = Math.ceil(this.generatedCharacters / 4);
 		const ratio = 1 - Math.exp(-estimatedTokens / 1200);
 		const percent = Math.min(99, Math.round(ratio * 100));
-		const barWidth = Math.max(1, Math.min(30, width - 6));
+		const percentText = `${percent}%`;
+		const barWidth = Math.max(0, Math.min(30, availableWidth - percentText.length - 1));
 		const filledWidth = Math.min(barWidth, Math.round(ratio * barWidth));
 		const bar = theme.fg("accent", "━".repeat(filledWidth)) + theme.fg("dim", "─".repeat(barWidth - filledWidth));
-		lines.push(`${bar} ${theme.fg("dim", `${percent}%`)}`);
+		lines.push(`${bar}${bar ? " " : ""}${theme.fg("dim", percentText)}`);
 		return lines;
 	}
 }
@@ -118,7 +121,7 @@ export class BranchSummaryStatusIndicator extends StatusIndicator {
 			ui,
 			(spinner) => theme.fg("accent", spinner),
 			(text) => theme.fg("muted", text),
-			`Summarizing branch... (${keyText("app.interrupt")} to cancel)`,
+			`Summarizing branch… (${keyText("app.interrupt")} to cancel)`,
 		);
 	}
 }
@@ -129,7 +132,8 @@ export class IdleStatus implements Component {
 	}
 
 	render(width: number): string[] {
-		const emptyLine = " ".repeat(width);
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		const emptyLine = " ".repeat(availableWidth);
 		return [emptyLine, emptyLine];
 	}
 }

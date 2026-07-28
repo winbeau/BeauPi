@@ -138,6 +138,7 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { appendToolComponent, ToolGroupComponent } from "./components/tool-group.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -348,7 +349,7 @@ export class InteractiveMode {
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
-	private readonly defaultWorkingMessage = "Working...";
+	private readonly defaultWorkingMessage = "Thinking…";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
@@ -368,6 +369,7 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private recentRunStatus: "completed" | "failed" | "aborted" = "completed";
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -1783,6 +1785,14 @@ export class InteractiveMode {
 		return this.session.getToolDefinition(toolName);
 	}
 
+	private getRenderedToolComponents(): ToolExecutionComponent[] {
+		return this.chatContainer.children.flatMap((child) => {
+			if (child instanceof ToolExecutionComponent) return [child];
+			if (child instanceof ToolGroupComponent) return [...child.getToolComponents()];
+			return [];
+		});
+	}
+
 	/**
 	 * Set up keyboard shortcuts registered by extensions.
 	 */
@@ -2858,6 +2868,8 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.recentRunStatus = "completed";
+				this.footer.startRecentRun();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -2929,6 +2941,9 @@ export class InteractiveMode {
 
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
+					if ("delta" in event.assistantMessageEvent && event.assistantMessageEvent.delta) {
+						this.footer.noteRecentRunOutput();
+					}
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
 
@@ -2948,7 +2963,7 @@ export class InteractiveMode {
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
+								appendToolComponent(this.chatContainer, this.ui, this.toolOutputExpanded, component);
 								this.pendingTools.set(content.id, component);
 							} else {
 								const component = this.pendingTools.get(content.id);
@@ -2966,6 +2981,11 @@ export class InteractiveMode {
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
+					this.footer.addRecentRunUsage(event.message.usage);
+					if (event.message.stopReason === "aborted") this.recentRunStatus = "aborted";
+					else if (event.message.stopReason === "error" || event.message.stopReason === "length") {
+						this.recentRunStatus = "failed";
+					}
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
 						const retryAttempt = this.session.retryAttempt;
@@ -3022,7 +3042,7 @@ export class InteractiveMode {
 						this.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
+					appendToolComponent(this.chatContainer, this.ui, this.toolOutputExpanded, component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
 				component.markExecutionStarted();
@@ -3050,6 +3070,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				this.footer.finishRecentRun(this.recentRunStatus);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -3394,7 +3415,7 @@ export class InteractiveMode {
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
+						appendToolComponent(this.chatContainer, this.ui, this.toolOutputExpanded, component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -4188,19 +4209,11 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
+						for (const component of this.getRenderedToolComponents()) component.setShowImages(enabled);
 					},
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
+						for (const component of this.getRenderedToolComponents()) component.setImageWidthCells(width);
 					},
 					onAutoResizeImagesChange: (enabled) => {
 						this.settingsManager.setImageAutoResize(enabled);

@@ -1,10 +1,13 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { setCapabilities, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
+import { createFindToolDefinition } from "../src/core/tools/find.ts";
+import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
+import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -67,6 +70,45 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("custom result");
 	});
 
+	test("uses a minimal shell with lifecycle symbols and no status background", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("Custom Tool(example)", 0, 0),
+			renderResult: (result) => new Text(result.content[0]?.type === "text" ? result.content[0].text : "", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-minimal-shell",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		let rendered = component.render(80).join("\n");
+		expect(stripAnsi(rendered)).toContain("○ Custom Tool(example)");
+		expect(rendered).not.toContain(theme.getBgAnsi("toolPendingBg"));
+
+		component.markExecutionStarted();
+		rendered = component.render(80).join("\n");
+		expect(stripAnsi(rendered)).toContain("● Custom Tool(example)");
+
+		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false }, false);
+		rendered = component.render(80).join("\n");
+		expect(stripAnsi(rendered)).toContain("✓ Custom Tool(example)");
+		expect(stripAnsi(rendered)).toContain("⎿  done");
+		expect(rendered).not.toContain(theme.getBgAnsi("toolSuccessBg"));
+
+		component.updateResult({ content: [{ type: "text", text: "failed" }], isError: true }, false);
+		rendered = component.render(80).join("\n");
+		expect(stripAnsi(rendered)).toContain("✗ Custom Tool(example)");
+		expect(rendered).not.toContain(theme.getBgAnsi("toolErrorBg"));
+
+		component.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true }, false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("⊘ Custom Tool(example)");
+	});
+
 	test("self-rendered empty tool rows take no layout space", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
@@ -114,7 +156,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [], details: { diff: "+1 after", firstChangedLine: 1 }, isError: false });
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("edit");
+		expect(rendered).toContain("Update");
 		expect(rendered).toContain("README.md");
 		expect(rendered).not.toContain(":1");
 	});
@@ -130,7 +172,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("read");
+		expect(rendered).toContain("Read");
 		expect(rendered).toContain("README.md");
 	});
 
@@ -185,8 +227,8 @@ describe("ToolExecutionComponent parity", () => {
 
 		const rendered = stripAnsi(component.render(200).join("\n"));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		expect(rendered).toMatch(/line-4000[^\n]*\n\s*\[Full output:/);
+		expect(rendered).not.toMatch(/line-4000[^\n]*\n\s*\n\s*\[Full output:/);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -203,7 +245,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered.match(/\bread\b/g)?.length ?? 0).toBe(1);
+		expect(rendered.match(/\bRead\b/g)?.length ?? 0).toBe(1);
 	});
 
 	test("inherits missing built-in result renderer slot from the built-in tool", () => {
@@ -245,7 +287,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("read");
+		expect(rendered).toContain("Read");
 		expect(rendered).toContain("README.md");
 		expect(rendered).toContain("override result");
 	});
@@ -364,6 +406,92 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("done");
 	});
 
+	test("preserves image result fallbacks in the minimal shell", () => {
+		setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-image",
+			{},
+			{},
+			createBaseToolDefinition(),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+				isError: false,
+			},
+			false,
+		);
+
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("image/png");
+	});
+
+	test("uses structured result counts for collapsed search and list summaries", () => {
+		const search = new ToolExecutionComponent(
+			"grep",
+			"tool-search-count",
+			{ pattern: "token", path: "src", context: 1 },
+			{},
+			createGrepToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		search.updateResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "src/a.ts-1- before\nsrc/a.ts:2: token\nsrc/a.ts-3- after\nsrc/b.ts:7: token\n\n[notice]",
+					},
+				],
+				details: { matchCount: 2 },
+				isError: false,
+			},
+			false,
+		);
+		expect(stripAnsi(search.render(80).join("\n"))).toContain("2 matches");
+
+		const find = new ToolExecutionComponent(
+			"find",
+			"tool-find-count",
+			{ pattern: "*.ts" },
+			{},
+			createFindToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		find.updateResult(
+			{
+				content: [{ type: "text", text: "a.ts\nb.ts\nc.ts\n\n[notice]" }],
+				details: { resultCount: 3 },
+				isError: false,
+			},
+			false,
+		);
+		expect(stripAnsi(find.render(80).join("\n"))).toContain("3 results");
+
+		const list = new ToolExecutionComponent(
+			"ls",
+			"tool-list-count",
+			{},
+			{},
+			createLsToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		list.updateResult(
+			{
+				content: [{ type: "text", text: "a.ts\nb.ts\n\n[notice]" }],
+				details: { entryCount: 2 },
+				isError: false,
+			},
+			false,
+		);
+		expect(stripAnsi(list.render(80).join("\n"))).toContain("2 entries");
+	});
+
 	test("trims trailing blank display lines from write previews", () => {
 		const component = new ToolExecutionComponent(
 			"write",
@@ -435,7 +563,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
-		expect(collapsed).toContain("read");
+		expect(collapsed).toContain("Read");
 		expect(collapsed).toContain("notes.txt");
 		expect(collapsed).not.toContain("hidden content");
 
@@ -449,15 +577,15 @@ describe("ToolExecutionComponent parity", () => {
 			title: "SKILL.md",
 			path: join(process.cwd(), "attio", "SKILL.md"),
 			content: "---\nname: attio\ndescription: CRM helper\n---\n\n# Hidden skill instructions",
-			compact: "[skill] attio",
+			compact: "Read Skill(attio)",
 			hidden: "Hidden skill instructions",
-			absent: "read skill attio",
+			absent: "Read Skill attio",
 		},
 		{
 			title: "AGENTS.md",
 			path: join(process.cwd(), ".beaupi", "AGENTS.md"),
 			content: "Hidden resource instructions",
-			compact: "read resource .beaupi/AGENTS.md",
+			compact: "Read Resource(.beaupi/AGENTS.md)",
 			hidden: "Hidden resource instructions",
 			absent: undefined,
 		},
@@ -465,7 +593,7 @@ describe("ToolExecutionComponent parity", () => {
 			title: "outside AGENTS.md",
 			path: resolve(process.cwd(), "..", "AGENTS.md"),
 			content: "Hidden outside resource instructions",
-			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			compact: `Read Resource(${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")})`,
 			hidden: "Hidden outside resource instructions",
 			absent: undefined,
 		},
@@ -473,7 +601,7 @@ describe("ToolExecutionComponent parity", () => {
 			title: "Pi documentation",
 			path: getReadmePath(),
 			content: "Hidden docs content",
-			compact: "read docs README.md",
+			compact: "Read Docs(README.md)",
 			hidden: "Hidden docs content",
 			absent: undefined,
 		},
@@ -507,8 +635,8 @@ describe("ToolExecutionComponent parity", () => {
 	}
 
 	for (const scenario of [
-		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },
-		{ title: "Pi documentation", path: getReadmePath(), compact: "read docs README.md:120-329" },
+		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "Read Skill(attio:120-329)" },
+		{ title: "Pi documentation", path: getReadmePath(), compact: "Read Docs(README.md:120-329)" },
 	] as const) {
 		test(`shows the read line range in compact ${scenario.title} reads before the expand hint`, () => {
 			const component = new ToolExecutionComponent(

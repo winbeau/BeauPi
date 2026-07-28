@@ -5,20 +5,20 @@ import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 
 export interface FirstTimeSetupResult {
-	theme: TerminalTheme;
+	theme: string;
 	shareAnalytics: boolean;
 }
 
 export interface FirstTimeSetupOptions {
 	detectedTheme: TerminalTheme;
-	onThemePreview: (themeName: TerminalTheme) => void;
+	onThemePreview: (themeName: string) => void;
 	onSubmit: (result: FirstTimeSetupResult) => void;
 	onCancel: () => void;
 }
 
-const THEME_OPTIONS: Array<{ value: TerminalTheme; label: string }> = [
-	{ value: "dark", label: "Dark" },
-	{ value: "light", label: "Light" },
+const THEME_OPTIONS: Array<{ value: string; appearance: TerminalTheme; label: string }> = [
+	{ value: "beaupi-dark", appearance: "dark", label: "BeauPi Dark" },
+	{ value: "beaupi-light", appearance: "light", label: "BeauPi Light" },
 ];
 
 const ANALYTICS_OPTIONS: Array<{ value: boolean; label: string }> = [
@@ -40,7 +40,7 @@ export class FirstTimeSetupComponent extends Container {
 		this.options = options;
 		this.themeIndex = Math.max(
 			0,
-			THEME_OPTIONS.findIndex((option) => option.value === options.detectedTheme),
+			THEME_OPTIONS.findIndex((option) => option.appearance === options.detectedTheme),
 		);
 		this.update();
 	}

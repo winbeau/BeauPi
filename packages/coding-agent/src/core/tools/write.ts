@@ -53,6 +53,11 @@ class WriteCallRenderComponent extends Text {
 	constructor() {
 		super("", 0, 0);
 	}
+
+	override invalidate(): void {
+		this.cache = undefined;
+		super.invalidate();
+	}
 }
 
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
@@ -138,10 +143,10 @@ function formatWriteCall(
 	const rawPath = str(args?.file_path ?? args?.path);
 	const fileContent = str(args?.content);
 	const pathDisplay = renderToolPath(rawPath, theme, cwd);
-	let text = `${theme.fg("toolTitle", theme.bold("write"))} ${pathDisplay}`;
+	let text = `${theme.fg("toolTitle", theme.bold("Write"))}(${pathDisplay})`;
 
 	if (fileContent === null) {
-		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
+		text += `\n${theme.fg("error", "[invalid content arg - expected string]")}`;
 	} else if (fileContent) {
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
@@ -152,9 +157,9 @@ function formatWriteCall(
 		const maxLines = options.expanded ? lines.length : 10;
 		const displayLines = lines.slice(0, maxLines);
 		const remaining = lines.length - maxLines;
-		text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
+		text += `\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `${theme.fg("muted", `\n… (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 
@@ -175,7 +180,7 @@ function formatWriteResult(
 	if (!output) {
 		return undefined;
 	}
-	return `\n${theme.fg("error", output)}`;
+	return theme.fg("error", output);
 }
 
 export function createWriteToolDefinition(

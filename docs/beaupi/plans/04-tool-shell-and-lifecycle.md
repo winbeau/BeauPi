@@ -1,5 +1,9 @@
 # Tool Shell 与生命周期计划
 
+## 实施状态
+
+已完成（Batch 3）。普通 Tool 使用 minimal shell 和统一生命周期符号；Extension override、`renderShell: "self"`、Generic fallback、图片 Result、partial 更新和 Ctrl+O 行为保持兼容。
+
 ## 目标
 
 统一所有 Tool 的标题、状态和结果 gutter，移除普通 Tool 的大面积 pending/success/error 背景，同时保持 Extension renderer 兼容。

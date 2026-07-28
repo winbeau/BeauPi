@@ -3,7 +3,6 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Text } from "@earendil-works/pi-tui";
 import nodePath from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
@@ -21,6 +20,7 @@ export type LsToolInput = Static<typeof lsSchema>;
 const DEFAULT_LIMIT = 500;
 
 export interface LsToolDetails {
+	entryCount?: number;
 	truncation?: TruncationResult;
 	entryLimitReached?: number;
 }
@@ -52,9 +52,9 @@ export interface LsToolOptions {
 function formatLsCall(args: { path?: string; limit?: number } | undefined, theme: Theme, cwd: string): string {
 	const limit = args?.limit;
 	const pathDisplay = renderToolPath(str(args?.path), theme, cwd, { emptyFallback: "." });
-	let text = `${theme.fg("toolTitle", theme.bold("ls"))} ${pathDisplay}`;
+	let text = `${theme.fg("toolTitle", theme.bold("List"))}(${pathDisplay})`;
 	if (limit !== undefined) {
-		text += theme.fg("toolOutput", ` (limit ${limit})`);
+		text += theme.fg("toolOutput", ` · limit ${limit}`);
 	}
 	return text;
 }
@@ -72,12 +72,14 @@ function formatLsResult(
 	let text = "";
 	if (output) {
 		const lines = output.split("\n");
-		const maxLines = options.expanded ? lines.length : 20;
-		const displayLines = lines.slice(0, maxLines);
-		const remaining = lines.length - maxLines;
-		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
-		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+		if (!options.expanded) {
+			const entryCount = result.details?.entryCount ?? lines.length;
+			text = theme.fg(
+				"muted",
+				output === "(empty directory)" ? "Empty directory" : `${entryCount} entr${entryCount === 1 ? "y" : "ies"}`,
+			);
+		} else {
+			text = lines.map((line) => theme.fg("toolOutput", line)).join("\n");
 		}
 	}
 
@@ -87,7 +89,7 @@ function formatLsResult(
 		const warnings: string[] = [];
 		if (entryLimit) warnings.push(`${entryLimit} entries limit`);
 		if (truncation?.truncated) warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-		text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
+		text += `${text ? "\n" : ""}${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
 	}
 	return text;
 }
@@ -181,7 +183,7 @@ export function createLsToolDefinition(
 						// Apply byte truncation. There is no separate line limit because entry count is already capped.
 						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 						let output = truncation.content;
-						const details: LsToolDetails = {};
+						const details: LsToolDetails = { entryCount: results.length };
 						// Build actionable notices for truncation and entry limits.
 						const notices: string[] = [];
 						if (entryLimitReached) {
@@ -198,7 +200,7 @@ export function createLsToolDefinition(
 
 						resolve({
 							content: [{ type: "text", text: output }],
-							details: Object.keys(details).length > 0 ? details : undefined,
+							details,
 						});
 					} catch (e: any) {
 						signal?.removeEventListener("abort", onAbort);

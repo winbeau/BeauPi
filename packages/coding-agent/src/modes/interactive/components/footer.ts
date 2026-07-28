@@ -1,26 +1,25 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import { RecentRunStatsTracker, type RecentRunStatus } from "../../../core/recent-run-stats.ts";
+import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
+import { fitSingleLine, type ResponsivePart } from "./beaupi-style.ts";
 
-/**
- * Sanitize text for display in a single-line status.
- * Removes newlines, tabs, carriage returns, and other control characters.
- */
+function safeWidth(width: number): number {
+	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+}
+
 function sanitizeStatusText(text: string): string {
-	// Replace newlines, tabs, carriage returns with space, then collapse multiple spaces
 	return text
 		.replace(/[\r\n\t]/g, " ")
 		.replace(/ +/g, " ")
 		.trim();
 }
 
-/**
- * Format token counts for compact footer display.
- */
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -29,28 +28,55 @@ export function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
+function formatDuration(milliseconds: number): string {
+	const seconds = Math.max(0, milliseconds) / 1000;
+	return seconds >= 100 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
 	if (!home) return cwd;
-
 	const resolvedCwd = resolve(cwd);
 	const resolvedHome = resolve(home);
 	const relativeToHome = relative(resolvedHome, resolvedCwd);
 	const isInsideHome =
 		relativeToHome === "" ||
 		(relativeToHome !== ".." && !relativeToHome.startsWith(`..${sep}`) && !isAbsolute(relativeToHome));
-
 	if (!isInsideHome) return cwd;
 	return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
-/**
- * Footer component that shows pwd, token stats, and context usage.
- * Computes token/context stats from session, gets git branch and extension statuses from provider.
- */
+type UsageSnapshot = {
+	totals: UsageTotals;
+	latestCacheHitRate: number | undefined;
+};
+
+function fitLeftRight(leftParts: readonly ResponsivePart[], right: string, width: number): string {
+	const availableWidth = safeWidth(width);
+	if (availableWidth === 0) return "";
+	const rightTargetWidth = Math.min(visibleWidth(right), Math.max(10, Math.floor(availableWidth * 0.4)));
+	const leftBudget = Math.max(0, availableWidth - rightTargetWidth - 1);
+	const left = fitSingleLine(leftParts, leftBudget);
+	const remaining = Math.max(0, availableWidth - visibleWidth(left) - (left ? 1 : 0));
+	const fittedRight = truncateToWidth(right, remaining, "…");
+	if (!left) return fittedRight;
+	if (!fittedRight) return truncateToWidth(left, availableWidth, "…");
+	const padding = " ".repeat(Math.max(1, availableWidth - visibleWidth(left) - visibleWidth(fittedRight)));
+	return truncateToWidth(`${left}${padding}${fittedRight}`, availableWidth, "…");
+}
+
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
-	private footerData: ReadonlyFooterDataProvider;
+	private readonly footerData: ReadonlyFooterDataProvider;
+	private readonly recentRun = new RecentRunStatsTracker();
+	private usageCache:
+		| {
+				session: AgentSession;
+				entryCount: number;
+				lastEntryId: string | undefined;
+				snapshot: UsageSnapshot;
+		  }
+		| undefined;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -58,6 +84,10 @@ export class FooterComponent implements Component {
 	}
 
 	setSession(session: AgentSession): void {
+		if (this.session !== session) {
+			this.recentRun.reset();
+			this.usageCache = undefined;
+		}
 		this.session = session;
 	}
 
@@ -65,183 +95,173 @@ export class FooterComponent implements Component {
 		this.autoCompactEnabled = enabled;
 	}
 
-	/**
-	 * No-op: git branch caching now handled by provider.
-	 * Kept for compatibility with existing call sites in interactive-mode.
-	 */
-	invalidate(): void {
-		// No-op: git branch is cached/invalidated by provider
+	startRecentRun(now = Date.now()): void {
+		this.recentRun.start(now);
 	}
 
-	/**
-	 * Clean up resources.
-	 * Git watcher cleanup now handled by provider.
-	 */
-	dispose(): void {
-		// Git watcher cleanup handled by provider
+	noteRecentRunOutput(now = Date.now()): void {
+		this.recentRun.noteFirstOutput(now);
+	}
+
+	addRecentRunUsage(usage: Usage): void {
+		this.recentRun.addUsage(usage);
+	}
+
+	finishRecentRun(status: Exclude<RecentRunStatus, "running">, now = Date.now()): void {
+		this.recentRun.finish(status, now);
+	}
+
+	invalidate(): void {}
+
+	dispose(): void {}
+
+	private getUsageSnapshot(): UsageSnapshot {
+		const entries = this.session.sessionManager.getEntries();
+		const lastEntry = entries[entries.length - 1];
+		if (
+			this.usageCache?.session === this.session &&
+			this.usageCache.entryCount === entries.length &&
+			this.usageCache.lastEntryId === lastEntry?.id
+		) {
+			return this.usageCache.snapshot;
+		}
+
+		const totals = createUsageTotals();
+		let latestCacheHitRate: number | undefined;
+		for (const entry of entries) {
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				addUsageToTotals(totals, entry.message.usage);
+				const promptTokens =
+					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
+				latestCacheHitRate = promptTokens > 0 ? (entry.message.usage.cacheRead / promptTokens) * 100 : undefined;
+			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
+				addUsageToTotals(totals, entry.message.usage);
+			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+				addUsageToTotals(totals, entry.usage);
+			}
+		}
+		const snapshot = { totals, latestCacheHitRate };
+		this.usageCache = {
+			session: this.session,
+			entryCount: entries.length,
+			lastEntryId: lastEntry?.id,
+			snapshot,
+		};
+		return snapshot;
+	}
+
+	private renderRecentRunLine(width: number): string | undefined {
+		const run = this.recentRun.getLastFinished();
+		if (!run || run.outputTokens <= 0 || run.endedAt === undefined) return undefined;
+		const outputStart = run.firstOutputAt ?? run.startedAt;
+		const outputSeconds = Math.max(0.001, (run.endedAt - outputStart) / 1000);
+		const tps = run.outputTokens / outputSeconds;
+		const cache =
+			run.cacheRead || run.cacheWrite
+				? `cache ${run.cacheRead.toLocaleString()}${run.cacheWrite ? `/${run.cacheWrite.toLocaleString()}` : ""}`
+				: "";
+		const status = run.status === "completed" ? "" : run.status;
+		const parts: ResponsivePart[] = [
+			{ text: theme.fg("text", `${tps.toFixed(1)} tok/s`), required: true },
+			{ text: theme.fg("dim", `${run.outputTokens.toLocaleString()} out`), separator: " · ", required: true },
+			{ text: theme.fg("dim", `${run.totalTokens.toLocaleString()} total`), separator: " · ", priority: 0 },
+			{ text: theme.fg("dim", `${run.inputTokens.toLocaleString()} in`), separator: " · ", priority: 1 },
+			{ text: cache ? theme.fg("dim", cache) : "", separator: " · ", priority: 2 },
+			{
+				text: status ? theme.fg(run.status === "failed" ? "error" : "warning", status) : "",
+				separator: " · ",
+				priority: 3,
+			},
+			{ text: theme.fg("dim", formatDuration(run.endedAt - run.startedAt)), separator: " · ", required: true },
+		];
+		return fitSingleLine(parts, width);
 	}
 
 	render(width: number): string[] {
+		const availableWidth = safeWidth(width);
+		if (availableWidth === 0) return [];
 		const state = this.session.state;
+		const { totals, latestCacheHitRate } = this.getUsageSnapshot();
+		const lines: string[] = [];
 
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		const usageTotals = createUsageTotals();
-		let latestCacheHitRate: number | undefined;
+		const recentRunLine = this.renderRecentRunLine(availableWidth);
+		if (recentRunLine) lines.push(recentRunLine);
 
-		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				addUsageToTotals(usageTotals, entry.message.usage);
+		const cwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
+		const branch = this.footerData.getGitBranch();
+		const sessionName = this.session.sessionManager.getSessionName();
+		const extensionStatuses = Array.from(this.footerData.getExtensionStatuses().entries())
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, text]) => sanitizeStatusText(text));
+		const workspaceLine = fitSingleLine(
+			[
+				{ text: theme.fg("dim", cwd), required: true, truncate: true },
+				{ text: branch ? theme.fg("dim", `(${branch})`) : "", separator: " ", priority: 5 },
+				{ text: sessionName ? theme.fg("dim", sessionName) : "", separator: " · ", priority: 2 },
+				...extensionStatuses.map((text, index) => ({
+					text,
+					separator: " · ",
+					priority: 1 - index,
+				})),
+			],
+			availableWidth,
+		);
+		lines.push(workspaceLine);
 
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
-			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-				addUsageToTotals(usageTotals, entry.message.usage);
-			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-				addUsageToTotals(usageTotals, entry.usage);
-			}
-		}
-
-		// Calculate context usage from session (handles compaction correctly).
-		// After compaction, tokens are unknown until the next LLM response.
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextTokens = contextUsage?.tokens ?? null;
 		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+		const contextTokenDisplay = `${contextTokens === null ? "?" : formatTokens(contextTokens)}/${formatTokens(contextWindow)}`;
+		const contextPercent = contextUsage?.percent === null ? "" : ` ${contextPercentValue.toFixed(1)}%`;
+		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
+		const contextDisplay = `${contextTokenDisplay}${contextPercent}${autoIndicator}`;
+		const contextColor = contextPercentValue > 90 ? "error" : contextPercentValue > 70 ? "warning" : "dim";
 
-		// Replace home directory with ~
-		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
-
-		// Add git branch if available
-		const branch = this.footerData.getGitBranch();
-		if (branch) {
-			pwd = `${pwd} (${branch})`;
-		}
-
-		// Add session name if set
-		const sessionName = this.session.sessionManager.getSessionName();
-		if (sessionName) {
-			pwd = `${pwd} • ${sessionName}`;
-		}
-
-		// Build stats line
-		const statsParts = [];
-		if (usageTotals.input) statsParts.push(`↑${formatTokens(usageTotals.input)}`);
-		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
-		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
-		if (usageTotals.cacheWrite) statsParts.push(`W${formatTokens(usageTotals.cacheWrite)}`);
-		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
-			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-		}
-
-		// Kimi Coding is subscription-backed despite using API-key authentication.
 		const usingSubscription = state.model
 			? state.model.provider === "kimi-coding" || this.session.modelRuntime.isUsingOAuth(state.model.provider)
 			: false;
-		if (usageTotals.cost || usingSubscription) {
-			const costStr = `$${usageTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-			statsParts.push(costStr);
-		}
-
-		// Colorize context percentage based on usage
-		let contextPercentStr: string;
-		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
-		const contextTokenDisplay = `${contextTokens === null ? "?" : formatTokens(contextTokens)}/${formatTokens(contextWindow)}`;
-		const contextPercentDisplay =
-			contextPercent === "?"
-				? `${contextTokenDisplay}${autoIndicator}`
-				: `${contextTokenDisplay} ${contextPercent}%${autoIndicator}`;
-		if (contextPercentValue > 90) {
-			contextPercentStr = theme.fg("error", contextPercentDisplay);
-		} else if (contextPercentValue > 70) {
-			contextPercentStr = theme.fg("warning", contextPercentDisplay);
-		} else {
-			contextPercentStr = contextPercentDisplay;
-		}
-		statsParts.push(contextPercentStr);
-		if (areExperimentalFeaturesEnabled()) {
-			statsParts.push(`${theme.fg("dim", "•")} ${theme.bold(theme.fg("warning", "xp"))}`);
-		}
-
-		let statsLeft = statsParts.join(" ");
-
-		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
-
-		let statsLeftWidth = visibleWidth(statsLeft);
-
-		// If statsLeft is too wide, truncate it
-		if (statsLeftWidth > width) {
-			statsLeft = truncateToWidth(statsLeft, width, "...");
-			statsLeftWidth = visibleWidth(statsLeft);
-		}
-
-		// Calculate available space for padding (minimum 2 spaces between stats and model)
-		const minPadding = 2;
-
-		// Add thinking level indicator if model supports reasoning
-		let rightSideWithoutProvider = modelName;
-		if (state.model?.reasoning) {
-			const thinkingLevel = state.thinkingLevel || "off";
-			rightSideWithoutProvider =
-				thinkingLevel === "off" ? `${modelName} • thinking off` : `${modelName} • ${thinkingLevel}`;
-		}
-
-		// Prepend the provider in parentheses if there are multiple providers and there's enough room
-		let rightSide = rightSideWithoutProvider;
-		if (this.footerData.getAvailableProviderCount() > 1 && state.model) {
-			rightSide = `(${state.model!.provider}) ${rightSideWithoutProvider}`;
-			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
-				// Too wide, fall back
-				rightSide = rightSideWithoutProvider;
-			}
-		}
-
-		const rightSideWidth = visibleWidth(rightSide);
-		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
-
-		let statsLine: string;
-		if (totalNeeded <= width) {
-			// Both fit - add padding to right-align model
-			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
-			statsLine = statsLeft + padding + rightSide;
-		} else {
-			// Need to truncate right side
-			const availableForRight = width - statsLeftWidth - minPadding;
-			if (availableForRight > 0) {
-				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
-				const truncatedRightWidth = visibleWidth(truncatedRight);
-				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
-				statsLine = statsLeft + padding + truncatedRight;
-			} else {
-				// Not enough space for right side at all
-				statsLine = statsLeft;
-			}
-		}
-
-		// Apply dim to each part separately. statsLeft may contain color codes (for context %)
-		// that end with a reset, which would clear an outer dim wrapper. So we dim the parts
-		// before and after the colored section independently.
-		const dimStatsLeft = theme.fg("dim", statsLeft);
-		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
-		const dimRemainder = theme.fg("dim", remainder);
-
-		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
-
-		// Add extension statuses on a single line, sorted by key alphabetically
-		const extensionStatuses = this.footerData.getExtensionStatuses();
-		if (extensionStatuses.size > 0) {
-			const sortedStatuses = Array.from(extensionStatuses.entries())
-				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([, text]) => sanitizeStatusText(text));
-			const statusLine = sortedStatuses.join(" ");
-			// Truncate to terminal width with dim ellipsis for consistency with footer style
-			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
-		}
-
-		return lines;
+		const thinkingLevel = state.model?.reasoning ? state.thinkingLevel || "off" : undefined;
+		const provider =
+			this.footerData.getAvailableProviderCount() > 1 && state.model ? `(${state.model.provider}) ` : "";
+		const rightSide = theme.fg(
+			"dim",
+			`${provider}${modelName}${thinkingLevel ? ` · ${thinkingLevel === "off" ? "thinking off" : thinkingLevel}` : ""}`,
+		);
+		const cacheHit =
+			(totals.cacheRead > 0 || totals.cacheWrite > 0) && latestCacheHitRate !== undefined
+				? `CH${latestCacheHitRate.toFixed(1)}%`
+				: "";
+		const cost =
+			totals.cost || usingSubscription ? `$${totals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}` : "";
+		const leftParts: ResponsivePart[] = [
+			{ text: totals.input ? theme.fg("dim", `↑${formatTokens(totals.input)}`) : "", required: true },
+			{
+				text: totals.output ? theme.fg("dim", `↓${formatTokens(totals.output)}`) : "",
+				separator: " ",
+				required: true,
+			},
+			{
+				text: totals.cacheRead ? theme.fg("dim", `R${formatTokens(totals.cacheRead)}`) : "",
+				separator: " ",
+				priority: 3,
+			},
+			{
+				text: totals.cacheWrite ? theme.fg("dim", `W${formatTokens(totals.cacheWrite)}`) : "",
+				separator: " ",
+				priority: 2,
+			},
+			{ text: cacheHit ? theme.fg("dim", cacheHit) : "", separator: " ", priority: 0 },
+			{ text: cost ? theme.fg("dim", cost) : "", separator: " ", priority: 1 },
+			{ text: theme.fg(contextColor, contextDisplay), separator: " · ", required: true, truncate: true },
+			{
+				text: areExperimentalFeaturesEnabled() ? theme.bold(theme.fg("warning", "xp")) : "",
+				separator: " · ",
+				priority: -1,
+			},
+		];
+		lines.push(fitLeftRight(leftParts, rightSide, availableWidth));
+		return lines.slice(0, 3);
 	}
 }

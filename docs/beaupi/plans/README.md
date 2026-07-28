@@ -32,15 +32,17 @@
 | 现状盘点 | 已定义 | 无 |
 | 主题与视觉基础 | 已完成（Batch 1） | 设计约束 |
 | 消息布局 | 已完成（Batch 2） | 主题基础 |
-| Tool Shell | 待实施 | 主题基础 |
-| Read/Search/List/Bash | 待实施 | Tool Shell |
-| Write/Edit | 待实施 | Tool Shell |
-| Structured Diff | 待实施 | 主题基础、Write/Edit |
-| Footer | 待实施 | 主题基础 |
-| Compact/加载/重试 | 待实施 | 主题基础 |
-| 宽度与性能 | 贯穿实施 | 所有组件 |
-| 未来组件契约 | 只定义接口 | 主题基础 |
-| 测试与视觉回归 | 贯穿实施 | 所有批次 |
+| Tool Shell | 已完成（Batch 3） | 主题基础 |
+| Read/Search/List/Bash | 已完成（Batch 4、9） | Tool Shell |
+| Write/Edit | 已完成（Batch 5、6） | Tool Shell |
+| Structured Diff | 已完成（Batch 6） | 主题基础、Write/Edit |
+| Footer | 已完成（Batch 7） | 主题基础 |
+| Compact/加载/重试 | 已完成（Batch 8） | 主题基础 |
+| 宽度与性能 | 已完成（Batch 10） | 所有组件 |
+| 未来组件契约 | 已定义接口 | 主题基础 |
+| 测试与视觉回归 | 已完成（Batch 10） | 所有批次 |
+
+M1 于 2026-07-28 完成验收；下一里程碑为 M2 Task Ledger。
 
 ## 第一轮完成边界
 

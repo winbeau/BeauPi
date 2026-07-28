@@ -19,8 +19,8 @@ Themes are JSON files that define colors for the TUI.
 Pi loads themes from:
 
 - Built-in: `dark`, `light`, `beaupi-dark`, `beaupi-light`
-- Global: `~/.pi/agent/themes/*.json`
-- Project: `.pi/themes/*.json` (only after the project is trusted)
+- Global: `~/.beaupi/agent/themes/*.json`
+- Project: `.beaupi/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
@@ -37,15 +37,15 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, pi detects your terminal background and defaults to `dark` or `light`. To follow terminal appearance with the BeauPi themes, use `"theme": "beaupi-light/beaupi-dark"`.
+On first run, BeauPi detects your terminal background and defaults to `beaupi-dark` or `beaupi-light`, persisting `"theme": "beaupi-light/beaupi-dark"` so terminal appearance changes stay synchronized.
 
 ## Creating a Custom Theme
 
 1. Create a theme file:
 
 ```bash
-mkdir -p ~/.pi/agent/themes
-vim ~/.pi/agent/themes/my-theme.json
+mkdir -p ~/.beaupi/agent/themes
+vim ~/.beaupi/agent/themes/my-theme.json
 ```
 
 2. Define the theme with all required colors (see [Color Tokens](#color-tokens)):

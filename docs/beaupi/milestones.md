@@ -83,6 +83,8 @@
 
 ## M1：Claude Code 风格 TUI 基础
 
+状态：已完成（2026-07-28）。
+
 ### 目标
 
 第一步先把现有 BeauPi 交互界面调整为 Claude Code 风格，建立后续 Todo、子 Agent、Workflow 和后台任务共同复用的视觉组件、状态符号与布局规则。此阶段只渲染当前已有数据，不为展示效果提前实现 Task Ledger 或其他核心系统。

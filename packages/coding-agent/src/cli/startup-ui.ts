@@ -61,6 +61,12 @@ function loadThemes(resources: ResolvedResource[]): Theme[] {
 	return themes;
 }
 
+function resolveStartupTheme(themeSetting: string | undefined, terminalTheme: "light" | "dark"): string {
+	return (
+		resolveThemeSetting(themeSetting, terminalTheme) ?? (terminalTheme === "light" ? "beaupi-light" : "beaupi-dark")
+	);
+}
+
 async function loadStartupThemes(settingsManager: SettingsManager): Promise<Theme[]> {
 	const globalSettingsManager = SettingsManager.inMemory(settingsManager.getGlobalSettings(), {
 		projectTrusted: false,
@@ -77,7 +83,7 @@ async function loadStartupThemes(settingsManager: SettingsManager): Promise<Them
 export async function createStartupTui(settingsManager: SettingsManager): Promise<TUI> {
 	setRegisteredThemes(await loadStartupThemes(settingsManager));
 	const terminalTheme = detectTerminalBackgroundFromEnv().theme;
-	initTheme(resolveThemeSetting(settingsManager.getThemeSetting(), terminalTheme) ?? terminalTheme);
+	initTheme(resolveStartupTheme(settingsManager.getThemeSetting(), terminalTheme));
 	setKeybindings(KeybindingsManager.create());
 	const ui = new TUI(new ProcessTerminal(), settingsManager.getShowHardwareCursor(), getAgentDir());
 	ui.setClearOnShrink(settingsManager.getClearOnShrink());
@@ -94,7 +100,7 @@ async function applyDetectedStartupTheme(ui: TUI, settingsManager: SettingsManag
 	if (themeSetting && !parseAutoThemeSetting(themeSetting)) return;
 
 	const terminalTheme = await detectTerminalThemeForAuto({ ui, timeoutMs: 100 });
-	setTheme(resolveThemeSetting(themeSetting, terminalTheme) ?? terminalTheme);
+	setTheme(resolveStartupTheme(themeSetting, terminalTheme));
 	ui.invalidate();
 	ui.requestRender();
 }

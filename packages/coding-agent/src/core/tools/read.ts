@@ -73,7 +73,7 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 
 function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme, cwd: string): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
+	return `${theme.fg("toolTitle", theme.bold("Read"))}(${pathDisplay}${formatReadLineRange(args, theme)})`;
 }
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
@@ -142,22 +142,12 @@ function formatCompactReadCall(
 	args: ReadRenderArgs | undefined,
 	theme: Theme,
 ): string {
-	const expandHint = theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
-	if (classification.kind === "skill") {
-		return (
-			theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) +
-			theme.fg("customMessageText", classification.label) +
-			formatReadLineRange(args, theme) +
-			expandHint
-		);
-	}
-
+	const kind = classification.kind === "skill" ? "Skill" : classification.kind === "docs" ? "Docs" : "Resource";
+	const labelColor = classification.kind === "skill" ? "customMessageText" : "accent";
 	return (
-		theme.fg("toolTitle", theme.bold(`read ${classification.kind}`)) +
-		" " +
-		theme.fg("accent", classification.label) +
-		formatReadLineRange(args, theme) +
-		expandHint
+		theme.fg("toolTitle", theme.bold(`Read ${kind}`)) +
+		`(${theme.fg(labelColor, classification.label)}${formatReadLineRange(args, theme)})` +
+		theme.fg("dim", ` · ${keyText("app.tools.expand")} to expand`)
 	);
 }
 
@@ -170,21 +160,26 @@ function formatReadResult(
 	_cwd: string,
 	isError: boolean,
 ): string {
-	if (!options.expanded && !isError) {
-		return "";
-	}
-
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
 	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
-	const maxLines = options.expanded ? lines.length : 10;
-	const displayLines = lines.slice(0, maxLines);
-	const remaining = lines.length - maxLines;
-	let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-	if (remaining > 0) {
-		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+	const hasImage = result.content.some((item) => item.type === "image");
+	let text = "";
+
+	if (!options.expanded && !isError) {
+		text = theme.fg("muted", hasImage ? "Image loaded" : `${lines.length} line${lines.length === 1 ? "" : "s"}`);
+	} else {
+		const maxLines = options.expanded ? lines.length : 10;
+		const displayLines = lines.slice(0, maxLines);
+		const remaining = lines.length - maxLines;
+		text = displayLines
+			.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line))))
+			.join("\n");
+		if (remaining > 0) {
+			text += `${theme.fg("muted", `\n… (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+		}
 	}
 
 	const truncation = result.details?.truncation;

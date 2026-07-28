@@ -52,11 +52,12 @@ export class InteractiveThemeController {
 
 		const detection = await detectTerminalBackgroundTheme({ ui: this.ui, timeoutMs: 100 });
 		this.terminalTheme = detection.theme;
-		if (!this.applyThemeName(detection.theme).success) return;
-		if (detection.confidence === "high") {
-			this.settingsManager.setTheme(detection.theme);
-			await this.settingsManager.flush();
-		}
+		const beaupiAutoTheme = "beaupi-light/beaupi-dark";
+		const beaupiTheme = detection.theme === "light" ? "beaupi-light" : "beaupi-dark";
+		if (!this.applyThemeName(beaupiTheme).success) return;
+		this.settingsManager.setTheme(beaupiAutoTheme);
+		await this.settingsManager.flush();
+		this.setAutoSync(true);
 	}
 
 	setThemeName(themeName: string, showError = false): ThemeResult {

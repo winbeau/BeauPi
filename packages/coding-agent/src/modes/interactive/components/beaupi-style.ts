@@ -15,6 +15,8 @@ export type BeauPiToolState =
 
 export type BeauPiSemanticStatus = "queued" | "running" | "success" | "warning" | "error" | "cancelled" | "permission";
 
+export type BeauPiActivityState = "pending" | "active" | "completed" | "failed" | "blocked" | "cancelled";
+
 export const BEAUPI_STATUS_SYMBOLS = Object.freeze({
 	queued: "○",
 	running: "●",
@@ -148,6 +150,40 @@ export function semanticStatus(state: BeauPiToolState): BeauPiSemanticStatus {
 
 export function statusSymbol(state: BeauPiToolState): BeauPiStatusSymbol {
 	return BEAUPI_STATUS_SYMBOLS[semanticStatus(state)];
+}
+
+export function activityStateSymbol(state: BeauPiActivityState): BeauPiStatusSymbol {
+	switch (state) {
+		case "pending":
+			return BEAUPI_STATUS_SYMBOLS.queued;
+		case "active":
+			return BEAUPI_STATUS_SYMBOLS.running;
+		case "completed":
+			return BEAUPI_STATUS_SYMBOLS.success;
+		case "failed":
+			return BEAUPI_STATUS_SYMBOLS.error;
+		case "blocked":
+			return BEAUPI_STATUS_SYMBOLS.permission;
+		case "cancelled":
+			return BEAUPI_STATUS_SYMBOLS.cancelled;
+	}
+}
+
+export function activityStateToolState(state: BeauPiActivityState): BeauPiToolState {
+	switch (state) {
+		case "pending":
+			return "queued";
+		case "active":
+			return "running";
+		case "completed":
+			return "success";
+		case "failed":
+			return "error";
+		case "blocked":
+			return "permission";
+		case "cancelled":
+			return "cancelled";
+	}
 }
 
 function statusColor(status: BeauPiSemanticStatus): ThemeColor {

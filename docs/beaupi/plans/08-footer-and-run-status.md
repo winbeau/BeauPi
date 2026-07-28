@@ -1,5 +1,9 @@
 # Footer 与最近运行状态计划
 
+## 实施状态
+
+已完成（Batch 7）。Footer 最多三行，并接入最近 Run 的 TPS、token、cache、elapsed 与完成状态；Session usage 使用增量缓存，Extension status 保持在工作区行。
+
 ## 目标
 
 实现 BeauPi 三行 Footer，并以字段级降级替代整体粗暴截断。

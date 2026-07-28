@@ -1,6 +1,8 @@
 import { setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+	activityStateSymbol,
+	activityStateToolState,
 	BEAUPI_GUTTERS,
 	BEAUPI_INDENT_COLUMNS,
 	BEAUPI_STATUS_BY_SYMBOL,
@@ -65,6 +67,16 @@ describe("BeauPi visual helpers", () => {
 		expect(statusSymbol("cancelled")).toBe("⊘");
 		expect(statusSymbol("permission-waiting")).toBe("!");
 		expect(BEAUPI_STATUS_BY_SYMBOL[BEAUPI_STATUS_SYMBOLS.permission]).toBe("permission");
+	});
+
+	it("maps future Todo, Agent, Workflow, and Background activity states to the same language", () => {
+		expect(activityStateSymbol("pending")).toBe("○");
+		expect(activityStateSymbol("active")).toBe("●");
+		expect(activityStateSymbol("completed")).toBe("✓");
+		expect(activityStateSymbol("failed")).toBe("✗");
+		expect(activityStateSymbol("blocked")).toBe("!");
+		expect(activityStateSymbol("cancelled")).toBe("⊘");
+		expect(activityStateToolState("blocked")).toBe("permission");
 	});
 
 	it("styles every lifecycle state without relying on color alone", () => {

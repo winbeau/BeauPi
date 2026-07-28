@@ -6,7 +6,10 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
+import { appendToolComponent, ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -139,6 +142,47 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
+	});
+});
+
+describe("InteractiveMode tool grouping", () => {
+	test("builds the same adjacent read group for live and replay insertion", () => {
+		initTheme("beaupi-dark", false);
+		const createFixture = () => {
+			const terminal = new VirtualTerminal(100, 24);
+			const ui = new TUI(terminal);
+			return {
+				fakeThis: { chatContainer: new Container(), ui, toolOutputExpanded: false },
+				ui,
+			};
+		};
+		const addPair = (fakeThis: { chatContainer: Container; ui: TUI; toolOutputExpanded: boolean }) => {
+			for (const [id, filePath] of [
+				["one", "src/one.ts"],
+				["two", "src/two.ts"],
+			] as const) {
+				const component = new ToolExecutionComponent(
+					"read",
+					id,
+					{ path: filePath },
+					{},
+					createReadToolDefinition(process.cwd()),
+					fakeThis.ui,
+					process.cwd(),
+				);
+				appendToolComponent(fakeThis.chatContainer, fakeThis.ui, fakeThis.toolOutputExpanded, component);
+			}
+		};
+
+		const live = createFixture();
+		const replay = createFixture();
+		addPair(live.fakeThis);
+		addPair(replay.fakeThis);
+
+		expect(live.fakeThis.chatContainer.children[0]).toBeInstanceOf(ToolGroupComponent);
+		expect(normalizeRenderedOutput(live.fakeThis.chatContainer)).toBe(
+			normalizeRenderedOutput(replay.fakeThis.chatContainer),
+		);
 	});
 });
 
