@@ -34,7 +34,7 @@
 		},
 		"colors": {
 			"type": "object",
-			"description": "Theme color definitions (thinkingMax is optional and falls back to thinkingXhigh)",
+			"description": "Theme color definitions (thinkingMax and structured diff backgrounds are optional with compatibility fallbacks)",
 			"required": [
 				"accent",
 				"border",
@@ -228,6 +228,22 @@
 				"toolDiffContext": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Context lines in tool diffs"
+				},
+				"toolDiffAddedBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Added-line background in structured tool diffs (optional; falls back to toolSuccessBg)"
+				},
+				"toolDiffRemovedBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Removed-line background in structured tool diffs (optional; falls back to toolErrorBg)"
+				},
+				"toolDiffAddedEmphasisBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Word-level added emphasis background in structured tool diffs (optional; falls back to toolDiffAddedBg)"
+				},
+				"toolDiffRemovedEmphasisBg": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Word-level removed emphasis background in structured tool diffs (optional; falls back to toolDiffRemovedBg)"
 				},
 				"syntaxComment": {
 					"$ref": "#/$defs/colorValue",

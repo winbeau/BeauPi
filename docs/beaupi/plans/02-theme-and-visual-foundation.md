@@ -46,44 +46,58 @@ BeauPi 默认主题切换策略单独实现，不重命名现有 `dark`、`light
 
 ## Token 评估
 
-现有 Theme token 足以覆盖基础文本和旧式背景，但 Structured Diff 需要评估增加：
+Batch 1 评估结论：增加四个可选 Structured Diff 背景 token：
 
 ```text
 toolDiffAddedBg
 toolDiffRemovedBg
 toolDiffAddedEmphasisBg
 toolDiffRemovedEmphasisBg
-toolDiffGutter
-toolDiffBorder
 ```
 
-如果增加 token，必须同步：
+现有 `toolSuccessBg`/`toolErrorBg` 不能安全承担 Diff 行背景的长期语义，`selectedBg` 也不能表达词级增删强调，因此四个专用背景 token 是必要的。旧第三方主题缺少这些 token 时，行背景分别回退到 `toolSuccessBg`/`toolErrorBg`，词级强调回退到对应 Diff 行背景。
+
+不增加 `toolDiffGutter` 和 `toolDiffBorder`：gutter 使用现有 `toolDiffContext`，上下虚线边界使用现有 `borderMuted`，两者在 light、dark、truecolor 和 256 色下已有独立语义且不与增删状态混用。
+
+已同步：
 
 - TypeBox Theme schema
 - JSON schema
-- `ThemeColor`/`ThemeBg`
-- 内建 dark/light 兼容值
-- Theme 文档
-- Theme export 与测试 fixture
-
-若能通过现有 `getBgAnsi()` 和固定派生色安全实现，可减少 token；但不得在组件中散落硬编码 ANSI RGB。
+- `ThemeBg`
+- 全部内建主题
+- Theme 文档与公开类型导出
+- Theme export、controller、兼容和 256 色测试
 
 ## 共享 helper
 
-`beaupi-style.ts` 计划提供：
+`beaupi-style.ts` 提供纯视觉 API：
 
 ```typescript
-type BeauPiToolState = "queued" | "running" | "success" | "error" | "permission" | "cancelled";
+type BeauPiToolState =
+  | "queued"
+  | "running"
+  | "success"
+  | "completed"
+  | "warning"
+  | "error"
+  | "failed"
+  | "cancelled"
+  | "permission"
+  | "permission-waiting";
 
+function semanticStatus(state: BeauPiToolState): BeauPiSemanticStatus;
+function statusSymbol(state: BeauPiToolState): BeauPiStatusSymbol;
 function toolStateSymbol(state: BeauPiToolState, theme: Theme): string;
-function toolTitle(name: string, argument: string, state: BeauPiToolState, theme: Theme): string;
-function resultGutter(text: string, theme: Theme): string;
-function continuationGutter(text: string, theme: Theme): string;
-function treeGutter(kind: "branch" | "last" | "pipe", theme: Theme): string;
-function fitSingleLine(parts: ResponsivePart[], width: number): string;
+function toolTitle(name: string, argument: string, state: BeauPiToolState, theme: Theme, width: number): string;
+function messageGutter(text: string, theme: Theme, width: number): string;
+function resultGutter(text: string, theme: Theme, width: number): string;
+function continuationGutter(text: string, theme: Theme, width: number): string;
+function treeGutter(kind: "branch" | "last" | "pipe", theme: Theme, width: number): string;
+function fitSingleLine(parts: readonly ResponsivePart[], width: number): string;
+function fitLabelSuffixMetadata(parts: LabelSuffixMetadata, width: number): string;
 ```
 
-helper 只负责视觉，不读取 AgentSession 或 Tool Result。
+helper 只负责视觉，不读取 AgentSession 或 Tool Result；所有 fitting 使用 `@earendil-works/pi-tui` 的 cell width 与 ANSI-aware truncate 实现。
 
 ## 间距约定
 

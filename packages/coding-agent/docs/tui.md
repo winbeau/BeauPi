@@ -444,7 +444,9 @@ renderResult(result, options, theme, context) {
 
 **Background colors** (`theme.bg(color, text)`):
 
-`selectedBg`, `userMessageBg`, `customMessageBg`, `toolPendingBg`, `toolSuccessBg`, `toolErrorBg`
+`selectedBg`, `userMessageBg`, `customMessageBg`, `toolPendingBg`, `toolSuccessBg`, `toolErrorBg`, `toolDiffAddedBg`, `toolDiffRemovedBg`, `toolDiffAddedEmphasisBg`, `toolDiffRemovedEmphasisBg`
+
+The structured diff backgrounds are optional in theme JSON. Older third-party themes fall back to the existing tool success/error backgrounds, so extension theme APIs remain compatible.
 
 **For Markdown**, use `getMarkdownTheme()`:
 

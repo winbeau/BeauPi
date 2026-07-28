@@ -68,10 +68,14 @@ const ThemeJsonSchema = Type.Object({
 		mdQuoteBorder: ColorValueSchema,
 		mdHr: ColorValueSchema,
 		mdListBullet: ColorValueSchema,
-		// Tool Diffs (3 colors)
+		// Tool Diffs (3 required foregrounds, 4 optional backgrounds)
 		toolDiffAdded: ColorValueSchema,
 		toolDiffRemoved: ColorValueSchema,
 		toolDiffContext: ColorValueSchema,
+		toolDiffAddedBg: Type.Optional(ColorValueSchema),
+		toolDiffRemovedBg: Type.Optional(ColorValueSchema),
+		toolDiffAddedEmphasisBg: Type.Optional(ColorValueSchema),
+		toolDiffRemovedEmphasisBg: Type.Optional(ColorValueSchema),
 		// Syntax Highlighting (9 colors)
 		syntaxComment: ColorValueSchema,
 		syntaxKeyword: ColorValueSchema,
@@ -154,13 +158,23 @@ export type ThemeColor =
 	| "thinkingMax"
 	| "bashMode";
 
-export type ThemeBg =
+type StructuredDiffThemeBg =
+	| "toolDiffAddedBg"
+	| "toolDiffRemovedBg"
+	| "toolDiffAddedEmphasisBg"
+	| "toolDiffRemovedEmphasisBg";
+
+type LegacyThemeBg =
 	| "selectedBg"
 	| "userMessageBg"
 	| "customMessageBg"
 	| "toolPendingBg"
 	| "toolSuccessBg"
 	| "toolErrorBg";
+
+export type ThemeBg = LegacyThemeBg | StructuredDiffThemeBg;
+export type ThemeBgColors = Record<LegacyThemeBg, string | number> &
+	Partial<Record<StructuredDiffThemeBg, string | number>>;
 
 type ColorMode = "truecolor" | "256color";
 
@@ -319,8 +333,25 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 	return resolved as Record<keyof T, string | number>;
 }
 
-function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeJson["colors"] & { thinkingMax: ColorValue } {
-	return { ...colors, thinkingMax: colors.thinkingMax ?? colors.thinkingXhigh };
+type ThemeColorsWithFallbacks = ThemeJson["colors"] & {
+	thinkingMax: ColorValue;
+	toolDiffAddedBg: ColorValue;
+	toolDiffRemovedBg: ColorValue;
+	toolDiffAddedEmphasisBg: ColorValue;
+	toolDiffRemovedEmphasisBg: ColorValue;
+};
+
+function withThemeColorFallbacks(colors: ThemeJson["colors"]): ThemeColorsWithFallbacks {
+	const toolDiffAddedBg = colors.toolDiffAddedBg ?? colors.toolSuccessBg;
+	const toolDiffRemovedBg = colors.toolDiffRemovedBg ?? colors.toolErrorBg;
+	return {
+		...colors,
+		thinkingMax: colors.thinkingMax ?? colors.thinkingXhigh,
+		toolDiffAddedBg,
+		toolDiffRemovedBg,
+		toolDiffAddedEmphasisBg: colors.toolDiffAddedEmphasisBg ?? toolDiffAddedBg,
+		toolDiffRemovedEmphasisBg: colors.toolDiffRemovedEmphasisBg ?? toolDiffRemovedBg,
+	};
 }
 
 // ============================================================================
@@ -337,7 +368,7 @@ export class Theme {
 
 	constructor(
 		fgColors: Record<ThemeColor, string | number>,
-		bgColors: Record<ThemeBg, string | number>,
+		bgColors: ThemeBgColors,
 		mode: ColorMode,
 		options: { name?: string; sourcePath?: string; sourceInfo?: SourceInfo } = {},
 	) {
@@ -351,7 +382,16 @@ export class Theme {
 			this.fgColors.set(key, fgAnsi(value, mode));
 		}
 		this.bgColors = new Map();
-		for (const [key, value] of Object.entries(bgColors) as [ThemeBg, string | number][]) {
+		const diffAddedBg = bgColors.toolDiffAddedBg ?? bgColors.toolSuccessBg;
+		const diffRemovedBg = bgColors.toolDiffRemovedBg ?? bgColors.toolErrorBg;
+		const colorsWithFallbacks: Record<ThemeBg, string | number> = {
+			...bgColors,
+			toolDiffAddedBg: diffAddedBg,
+			toolDiffRemovedBg: diffRemovedBg,
+			toolDiffAddedEmphasisBg: bgColors.toolDiffAddedEmphasisBg ?? diffAddedBg,
+			toolDiffRemovedEmphasisBg: bgColors.toolDiffRemovedEmphasisBg ?? diffRemovedBg,
+		};
+		for (const [key, value] of Object.entries(colorsWithFallbacks) as [ThemeBg, string | number][]) {
 			this.bgColors.set(key, bgAnsi(value, mode));
 		}
 	}
@@ -435,17 +475,19 @@ export class Theme {
 // Theme Loading
 // ============================================================================
 
+const BUILTIN_THEME_NAMES = ["dark", "light", "beaupi-dark", "beaupi-light"] as const;
+const LIGHT_BUILTIN_THEME_NAMES = new Set<string>(["light", "beaupi-light"]);
 let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const darkPath = path.join(themesDir, "dark.json");
-		const lightPath = path.join(themesDir, "light.json");
-		BUILTIN_THEMES = {
-			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
-		};
+		BUILTIN_THEMES = Object.fromEntries(
+			BUILTIN_THEME_NAMES.map((name) => [
+				name,
+				JSON.parse(fs.readFileSync(path.join(themesDir, `${name}.json`), "utf-8")) as ThemeJson,
+			]),
+		);
 	}
 	return BUILTIN_THEMES;
 }
@@ -548,7 +590,8 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.map((color) => `  - ${color}`)
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
-			errorMessage += "\nSee the built-in themes (dark.json, light.json) for reference values.";
+			errorMessage +=
+				"\nSee the built-in themes (dark.json, light.json, beaupi-dark.json, beaupi-light.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -598,7 +641,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 	const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
 	const resolvedColors = resolveThemeColors(withThemeColorFallbacks(themeJson.colors), themeJson.vars);
 	const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
-	const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;
+	const bgColors: ThemeBgColors = {} as ThemeBgColors;
 	const bgColorKeys: Set<string> = new Set([
 		"selectedBg",
 		"userMessageBg",
@@ -606,6 +649,10 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 		"toolPendingBg",
 		"toolSuccessBg",
 		"toolErrorBg",
+		"toolDiffAddedBg",
+		"toolDiffRemovedBg",
+		"toolDiffAddedEmphasisBg",
+		"toolDiffRemovedEmphasisBg",
 	]);
 	for (const [key, value] of Object.entries(resolvedColors)) {
 		if (bgColorKeys.has(key)) {
@@ -886,8 +933,8 @@ export function onThemeChange(callback: () => void): void {
 function startThemeWatcher(): void {
 	stopThemeWatcher();
 
-	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
+	// Only watch custom themes. Built-in themes are immutable package assets.
+	if (!currentThemeName || currentThemeName in getBuiltinThemes()) {
 		return;
 	}
 
@@ -1021,12 +1068,12 @@ function ansi256ToHex(index: number): string {
  */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? currentThemeName ?? getDefaultTheme();
-	const isLight = name === "light";
+	const lightTheme = LIGHT_BUILTIN_THEME_NAMES.has(name);
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(withThemeColorFallbacks(themeJson.colors), themeJson.vars);
 
 	// Default text color for empty values (terminal uses default fg color)
-	const defaultText = isLight ? "#000000" : "#e5e5e7";
+	const defaultText = lightTheme ? "#000000" : "#e5e5e7";
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
@@ -1046,8 +1093,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
  * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
  */
 export function isLightTheme(themeName?: string): boolean {
-	// Currently just check the name - could be extended to analyze colors
-	return themeName === "light";
+	return themeName !== undefined && LIGHT_BUILTIN_THEME_NAMES.has(themeName);
 }
 
 /**

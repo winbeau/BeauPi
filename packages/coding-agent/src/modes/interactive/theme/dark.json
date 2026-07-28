@@ -17,7 +17,11 @@
 		"toolPendingBg": "#282832",
 		"toolSuccessBg": "#283228",
 		"toolErrorBg": "#3c2828",
-		"customMsgBg": "#2d2838"
+		"customMsgBg": "#2d2838",
+		"diffAddedBg": "#243228",
+		"diffRemovedBg": "#3c2828",
+		"diffAddedEmphasisBg": "#2f6b42",
+		"diffRemovedEmphasisBg": "#7a3940"
 	},
 	"colors": {
 		"accent": "accent",
@@ -58,6 +62,10 @@
 		"toolDiffAdded": "green",
 		"toolDiffRemoved": "red",
 		"toolDiffContext": "gray",
+		"toolDiffAddedBg": "diffAddedBg",
+		"toolDiffRemovedBg": "diffRemovedBg",
+		"toolDiffAddedEmphasisBg": "diffAddedEmphasisBg",
+		"toolDiffRemovedEmphasisBg": "diffRemovedEmphasisBg",
 
 		"syntaxComment": "#6A9955",
 		"syntaxKeyword": "#569CD6",

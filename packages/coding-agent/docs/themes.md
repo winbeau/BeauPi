@@ -18,7 +18,7 @@ Themes are JSON files that define colors for the TUI.
 
 Pi loads themes from:
 
-- Built-in: `dark`, `light`
+- Built-in: `dark`, `light`, `beaupi-dark`, `beaupi-light`
 - Global: `~/.pi/agent/themes/*.json`
 - Project: `.pi/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
@@ -37,7 +37,7 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, pi detects your terminal background and defaults to `dark` or `light`.
+On first run, pi detects your terminal background and defaults to `dark` or `light`. To follow terminal appearance with the BeauPi themes, use `"theme": "beaupi-light/beaupi-dark"`.
 
 ## Creating a Custom Theme
 
@@ -94,6 +94,10 @@ vim ~/.pi/agent/themes/my-theme.json
     "toolDiffAdded": "#00ff00",
     "toolDiffRemoved": "#ff0000",
     "toolDiffContext": "secondary",
+    "toolDiffAddedBg": "#1e2e1e",
+    "toolDiffRemovedBg": "#2e1e1e",
+    "toolDiffAddedEmphasisBg": "#2f6b42",
+    "toolDiffRemovedEmphasisBg": "#7a3940",
     "syntaxComment": "secondary",
     "syntaxKeyword": "primary",
     "syntaxFunction": "#00aaff",
@@ -140,13 +144,13 @@ vim ~/.pi/agent/themes/my-theme.json
 
 - `name` is required, must be unique, and must not contain `/`.
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
-- `colors` must define all 51 required tokens. `thinkingMax` is optional and falls back to `thinkingXhigh`.
+- `colors` must define all 51 required tokens. `thinkingMax` and the four structured diff background tokens are optional and use compatibility fallbacks when omitted.
 
 The `$schema` field enables editor auto-completion and validation.
 
 ## Color Tokens
 
-Every theme must define all 51 required color tokens. `thinkingMax` is optional for compatibility with existing themes; when omitted, it uses `thinkingXhigh`.
+Every theme must define all 51 required color tokens. `thinkingMax` and four structured diff background tokens are optional for compatibility with existing themes.
 
 ### Core UI (11 colors)
 
@@ -195,13 +199,19 @@ Every theme must define all 51 required color tokens. `thinkingMax` is optional 
 | `mdHr` | Horizontal rule |
 | `mdListBullet` | List bullets |
 
-### Tool Diffs (3 colors)
+### Tool Diffs (3 required foregrounds, 4 optional backgrounds)
 
-| Token | Purpose |
-|-------|---------|
-| `toolDiffAdded` | Added lines |
-| `toolDiffRemoved` | Removed lines |
-| `toolDiffContext` | Context lines |
+| Token | Purpose | Fallback |
+|-------|---------|----------|
+| `toolDiffAdded` | Added line foreground | Required |
+| `toolDiffRemoved` | Removed line foreground | Required |
+| `toolDiffContext` | Context line and gutter foreground | Required |
+| `toolDiffAddedBg` | Added line background | `toolSuccessBg` |
+| `toolDiffRemovedBg` | Removed line background | `toolErrorBg` |
+| `toolDiffAddedEmphasisBg` | Word-level added emphasis background | `toolDiffAddedBg` |
+| `toolDiffRemovedEmphasisBg` | Word-level removed emphasis background | `toolDiffRemovedBg` |
+
+Structured diff gutters use `toolDiffContext`; dashed diff borders use `borderMuted`. Dedicated gutter and border tokens are unnecessary because these existing semantics remain distinct in dark, light, truecolor, and 256-color modes.
 
 ### Syntax Highlighting (9 colors)
 
@@ -295,3 +305,5 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 See the built-in themes:
 - [dark.json](../src/modes/interactive/theme/dark.json)
 - [light.json](../src/modes/interactive/theme/light.json)
+- [beaupi-dark.json](../src/modes/interactive/theme/beaupi-dark.json)
+- [beaupi-light.json](../src/modes/interactive/theme/beaupi-light.json)

@@ -5,6 +5,7 @@
 ### Added
 
 - Added current context token usage to the footer and streamed progress for context compaction.
+- Added built-in `beaupi-dark` and `beaupi-light` themes plus shared ANSI-aware BeauPi visual helpers.
 
 ### Changed
 

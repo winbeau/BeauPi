@@ -390,6 +390,8 @@ export {
 	highlightCode,
 	initTheme,
 	Theme,
+	type ThemeBg,
+	type ThemeBgColors,
 	type ThemeColor,
 } from "./modes/interactive/theme/theme.ts";
 // Clipboard utilities
