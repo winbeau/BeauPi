@@ -305,6 +305,37 @@ describe("Execution Contract", () => {
 		}
 	});
 
+	it("does not project changelog history into the current task contract", async () => {
+		const { root, cwd, agentDir } = tempProject();
+		const changelogPath = join(root, "packages", "coding-agent", "CHANGELOG.md");
+		mkdirSync(dirname(changelogPath), { recursive: true });
+		writeFileSync(
+			changelogPath,
+			"# Unreleased\n\n- Fixed cloning or forking a session before its first assistant response to explain that the session must be saved first.\n",
+		);
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(
+			join(root, "docs", "task.md"),
+			"# Task Requirements\n- Must preserve the current task requirement.\n",
+		);
+
+		const result = await runtimeFor(cwd, agentDir).resolveTask({
+			task: "Fix the current task behavior and update packages/coding-agent/CHANGELOG.md",
+			explicitPaths: [changelogPath],
+		});
+
+		expect(result.contract.documents.some((document) => document.path === changelogPath)).toBe(false);
+		expect(result.contract.requirements.map((requirement) => requirement.text)).toContain(
+			"Must preserve the current task requirement.",
+		);
+		expect(result.contract.requirements.map((requirement) => requirement.text)).not.toContain(
+			"Fixed cloning or forking a session before its first assistant response to explain that the session must be saved first.",
+		);
+		expect(
+			result.contract.requiredChecks.flatMap((check) => check.citations.map((citation) => citation.path)),
+		).not.toContain(changelogPath);
+	});
+
 	it("does not promote policy examples, forbidden commands, or conditional commands to required checks", async () => {
 		const { root, cwd, agentDir } = tempProject();
 		writeFileSync(

@@ -126,6 +126,33 @@ describe("TaskLedger Document Runtime projection", () => {
 		}
 	});
 
+	it("does not project changelog history into task Todos", async () => {
+		const { root, runtime } = createRuntimeProject();
+		try {
+			const changelogPath = join(root, "packages", "coding-agent", "CHANGELOG.md");
+			mkdirSync(join(root, "packages", "coding-agent"), { recursive: true });
+			writeFileSync(
+				changelogPath,
+				"# Unreleased\n\n- Fixed cloning or forking a session before its first assistant response to explain that the session must be saved first.\n",
+			);
+			const resolved = await runtime.resolveTask({
+				task: "Fix current behavior and update packages/coding-agent/CHANGELOG.md",
+				explicitPaths: [changelogPath],
+			});
+			const ledger = new TaskLedger({ taskId: "changelog", cwd: root });
+			ledger.recordDocumentRuntimeDetails("resolve", detailsFor(resolved.contract));
+			const snapshot = ledger.getSnapshot();
+
+			expect(snapshot.documentContract?.contract.documents.some((document) => document.path === changelogPath)).toBe(
+				false,
+			);
+			expect(snapshot.todos.some((todo) => todo.label.includes("Fixed cloning or forking"))).toBe(false);
+			expect(snapshot.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps stale requirements blocked and does not duplicate current branch facts on restore/fork", async () => {
 		const { root, runtime } = createRuntimeProject();
 		try {

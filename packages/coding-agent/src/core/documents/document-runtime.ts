@@ -153,6 +153,11 @@ function isPolicyDocument(document: IndexedDocument): boolean {
 	);
 }
 
+function isChangelogDocument(document: IndexedDocument): boolean {
+	const name = basename(document.reference.path).toLocaleLowerCase();
+	return name === "changelog.md" || name === "changelog.markdown";
+}
+
 function factIsTaskRelevant(
 	document: IndexedDocument,
 	heading: DocumentHeading,
@@ -588,11 +593,13 @@ function selectDocuments(
 	cwd: string,
 	maxDocuments: number,
 ): IndexedDocument[] {
-	const scored = documents.map((document) => ({
-		document,
-		score: scoreDocument(document, task, cwd).score,
-		taskMatched: documentMatchesTask(document, task),
-	}));
+	const scored = documents
+		.filter((document) => !isChangelogDocument(document))
+		.map((document) => ({
+			document,
+			score: scoreDocument(document, task, cwd).score,
+			taskMatched: documentMatchesTask(document, task),
+		}));
 	const mandatory = scored.filter(
 		({ document }) =>
 			isPolicyDocument(document) ||
