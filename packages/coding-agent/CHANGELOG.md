@@ -28,6 +28,7 @@
 - Fixed generic README guidance, package scripts, and repository policy requirements from being projected as current-task Todos while preserving actionable Execution Contract constraints.
 - Added a status line when the tool output expansion is toggled ([#7180](https://github.com/earendil-works/pi/issues/7180)).
 - Fixed explicit clipboard environment overrides from being reclassified as WSL by host kernel detection.
+- Fixed `/skills` collision actions to target the selected Registry entry by ID, and clarified diagnostics for non-updateable local Skill sources.
 
 ## [0.82.1] - 2026-07-25
 

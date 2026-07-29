@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SkillRegistryEntry } from "../src/core/skill-registry.ts";
+import type { SkillRegistryEntry, SkillRegistryRecord } from "../src/core/skill-registry.ts";
 import {
 	type SkillRegistryRemoveResult,
 	SkillRegistryServiceError,
@@ -127,6 +127,69 @@ describe("InteractiveMode skill registry command integration", () => {
 		setup.call(fakeThis);
 		await defaultEditor.onSubmit?.("/skill-update review");
 		expect(handleSkillRegistryCommand).toHaveBeenCalledWith({ type: "update", name: "review" });
+	});
+
+	it("targets the selected Registry entry by id when collision records share a name", async () => {
+		const collisionEntry = { ...entry, id: "first-entry", name: "same-name" };
+		const record: SkillRegistryRecord = {
+			entry: collisionEntry,
+			registryPath: "/tmp/agent/skills-registry.json",
+			resolvedPath: "/tmp/agent/skills/first/SKILL.md",
+			managedPath: "/tmp/agent/skills/first",
+			validation: {
+				entry: collisionEntry,
+				resolvedPath: "/tmp/agent/skills/first",
+				skillFilePath: "/tmp/agent/skills/first/SKILL.md",
+				name: "same-name",
+				description: "Same-name Skill",
+				references: [],
+				inventory: { scripts: [], executables: [], truncated: false },
+				diagnostics: [],
+				valid: true,
+			},
+			metadata: {
+				source: "registry:local:/tmp/source/first",
+				scope: "user",
+				origin: "top-level",
+				baseDir: "/tmp/agent",
+			},
+		};
+		const handleSkillEnableCommand = vi.fn(async () => undefined);
+		const handleSkillValidateCommand = vi.fn(async () => undefined);
+		const handleSkillOpenCommand = vi.fn(async () => undefined);
+		const handleSkillUpdateCommand = vi.fn(async () => undefined);
+		const handleSkillRemoveCommand = vi.fn(async () => undefined);
+		const fakeThis = {
+			handleSkillEnableCommand,
+			handleSkillValidateCommand,
+			handleSkillOpenCommand,
+			handleSkillUpdateCommand,
+			handleSkillRemoveCommand,
+		};
+		const handleAction = (
+			InteractiveMode as unknown as {
+				prototype: {
+					handleSkillRegistryAction(
+						this: typeof fakeThis,
+						record: SkillRegistryRecord,
+						action: "enable" | "disable" | "validate" | "open" | "update" | "remove",
+					): Promise<void>;
+				};
+			}
+		).prototype.handleSkillRegistryAction;
+
+		await handleAction.call(fakeThis, record, "enable");
+		await handleAction.call(fakeThis, record, "disable");
+		await handleAction.call(fakeThis, record, "validate");
+		await handleAction.call(fakeThis, record, "update");
+		await handleAction.call(fakeThis, record, "remove");
+
+		expect(handleSkillEnableCommand).toHaveBeenNthCalledWith(1, "first-entry", true);
+		expect(handleSkillEnableCommand).toHaveBeenNthCalledWith(2, "first-entry", false);
+		expect(handleSkillValidateCommand).toHaveBeenCalledWith("first-entry");
+		expect(handleSkillUpdateCommand).toHaveBeenCalledWith("first-entry");
+		expect(handleSkillRemoveCommand).toHaveBeenCalledWith("first-entry");
+		expect(handleSkillOpenCommand).not.toHaveBeenCalled();
 	});
 
 	it("keeps managed files after the first remove and deletes them only after explicit confirmation", async () => {

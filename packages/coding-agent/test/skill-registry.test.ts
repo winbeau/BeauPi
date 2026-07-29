@@ -186,7 +186,12 @@ describe("BeauPi skill registry", () => {
 		expect(projection.records.map((record) => record.entry.name)).toEqual(["disabled", "enabled"]);
 		expect(projection.enabledRecords.map((record) => record.entry.name)).toEqual(["enabled"]);
 		expect(projection.diagnostics.some((item) => item.code === "project_untrusted")).toBe(true);
-		expect(projection.diagnostics.some((item) => item.code === "source_update_unavailable")).toBe(true);
+		expect(projection.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "source_update_unavailable",
+				message: "Local and external-directory Skill sources cannot be updated automatically",
+			}),
+		);
 	});
 
 	it("applies registry precedence, suppresses disabled managed skills, and reports both conflict sources", async () => {

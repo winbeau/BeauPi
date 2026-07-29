@@ -215,6 +215,56 @@ describe("SkillRegistryService", () => {
 		);
 	});
 
+	it("mutates a selected same-name collision entry by Registry id", () => {
+		createSkill(join(agentDir, "skills", "first"), "same-name");
+		createSkill(join(agentDir, "skills", "second"), "same-name");
+		writeSkillRegistry({
+			scope: "user",
+			cwd,
+			agentDir,
+			registry: {
+				version: SKILL_REGISTRY_VERSION,
+				entries: [
+					{
+						id: "first-entry",
+						name: "same-name",
+						source: { type: "local", path: "skills/first" },
+						scope: "user",
+						path: "skills/first",
+						enabled: true,
+						importedAt: 100,
+						diagnostics: [],
+					},
+					{
+						id: "second-entry",
+						name: "same-name",
+						source: { type: "local", path: "skills/second" },
+						scope: "user",
+						path: "skills/second",
+						enabled: true,
+						importedAt: 100,
+						diagnostics: [],
+					},
+				],
+			},
+		});
+		const service = createService(true);
+		writeFileSync(join(agentDir, "skills", "first", "SKILL.md"), "---\nname: same-name\ndescription: [bad\n---\n");
+
+		expect(() => service.setEnabled("same-name", false)).toThrow("ambiguous");
+		const validation = service.validate("first-entry");
+		expect(validation).toHaveLength(1);
+		expect(validation[0]).toMatchObject({
+			entry: { id: "first-entry" },
+			validation: { valid: false },
+		});
+		expect(service.setEnabled("first-entry", false).entry?.id).toBe("first-entry");
+		expect(service.remove("second-entry").entry.id).toBe("second-entry");
+		const entries = loadSkillRegistry({ scope: "user", cwd, agentDir }).registry.entries;
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({ id: "first-entry", enabled: false });
+	});
+
 	it("never overwrites a malformed Registry during mutation", async () => {
 		const paths = getSkillRegistryScopePaths({ scope: "user", cwd, agentDir });
 		mkdirSync(join(agentDir, "skills"), { recursive: true });

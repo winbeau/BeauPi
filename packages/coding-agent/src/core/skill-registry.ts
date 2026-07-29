@@ -839,7 +839,7 @@ function validateSource(entry: SkillRegistryEntry, baseDir: string, registryPath
 				diagnostic(
 					"source_update_unavailable",
 					"info",
-					"Local skill sources are referenced directly in Stage 1",
+					"Local and external-directory Skill sources cannot be updated automatically",
 					common,
 				),
 			);

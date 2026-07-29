@@ -777,16 +777,33 @@ export class SkillRegistryService {
 		return { changed: true, entry: updatedEntry };
 	}
 
-	validate(name?: string): SkillRegistryMutationResult[] {
+	validate(identifier?: string): SkillRegistryMutationResult[] {
 		const scopes = this.loadMutationScopes();
+		const normalizedIdentifier = identifier?.trim();
+		let selectedEntryId: { scope: SkillRegistryScope; id: string } | undefined;
+		if (normalizedIdentifier) {
+			for (const loaded of scopes) {
+				const entry = loaded.registry.entries.find((candidate) => candidate.id === normalizedIdentifier);
+				if (entry) {
+					selectedEntryId = { scope: loaded.scope, id: entry.id };
+					break;
+				}
+			}
+		}
+
 		const results: SkillRegistryMutationResult[] = [];
 		for (const loaded of scopes) {
-			const selected = name
-				? loaded.registry.entries.filter((entry) => entry.name === name.trim())
+			const selected = normalizedIdentifier
+				? selectedEntryId
+					? loaded.scope === selectedEntryId.scope
+						? loaded.registry.entries.filter((entry) => entry.id === selectedEntryId.id)
+						: []
+					: loaded.registry.entries.filter((entry) => entry.name === normalizedIdentifier)
 				: loaded.registry.entries;
-			if (name && selected.length === 0) continue;
+			if (normalizedIdentifier && selected.length === 0) continue;
+			const selectedIds = new Set(selected.map((entry) => entry.id));
 			const updatedEntries = loaded.registry.entries.map((entry) => {
-				if (!selected.some((candidate) => candidate.id === entry.id)) return entry;
+				if (!selectedIds.has(entry.id)) return entry;
 				const paths = getSkillRegistryScopePaths({ scope: loaded.scope, cwd: this.cwd, agentDir: this.agentDir });
 				const validation = validateSkillRegistryEntry({
 					entry,
@@ -799,8 +816,8 @@ export class SkillRegistryService {
 			});
 			if (selected.length > 0) this.writeScope(loaded.scope, updatedEntries);
 		}
-		if (name && results.length === 0) {
-			throwMutationError(`Skill ${JSON.stringify(name.trim())} is not registered`);
+		if (normalizedIdentifier && results.length === 0) {
+			throwMutationError(`Skill ${JSON.stringify(normalizedIdentifier)} is not registered`);
 		}
 		return results;
 	}

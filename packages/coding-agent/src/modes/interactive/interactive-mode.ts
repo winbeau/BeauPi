@@ -5502,22 +5502,22 @@ export class InteractiveMode {
 	): Promise<void> {
 		switch (action) {
 			case "enable":
-				await this.handleSkillEnableCommand(record.entry.name, true);
+				await this.handleSkillEnableCommand(record.entry.id, true);
 				break;
 			case "disable":
-				await this.handleSkillEnableCommand(record.entry.name, false);
+				await this.handleSkillEnableCommand(record.entry.id, false);
 				break;
 			case "validate":
-				await this.handleSkillValidateCommand(record.entry.name);
+				await this.handleSkillValidateCommand(record.entry.id);
 				break;
 			case "open":
 				await this.handleSkillOpenCommand(record, onReturnToSelector);
 				break;
 			case "update":
-				await this.handleSkillUpdateCommand(record.entry.name);
+				await this.handleSkillUpdateCommand(record.entry.id);
 				break;
 			case "remove":
-				await this.handleSkillRemoveCommand(record.entry.name);
+				await this.handleSkillRemoveCommand(record.entry.id);
 				break;
 		}
 	}
@@ -5622,25 +5622,26 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleSkillEnableCommand(name: string, enabled: boolean): Promise<void> {
+	private async handleSkillEnableCommand(identifier: string, enabled: boolean): Promise<void> {
 		try {
-			const result = this.createSkillRegistryService().setEnabled(name, enabled);
+			const result = this.createSkillRegistryService().setEnabled(identifier, enabled);
+			const skillName = result.entry?.name ?? identifier;
 			if (!result.changed) {
-				this.showStatus(`Skill ${name} is already ${enabled ? "enabled" : "disabled"}`);
+				this.showStatus(`Skill ${skillName} is already ${enabled ? "enabled" : "disabled"}`);
 				return;
 			}
 			if (!(await this.handleReloadCommand())) return;
-			this.showStatus(`${enabled ? "Enabled" : "Disabled"} skill ${name}`);
+			this.showStatus(`${enabled ? "Enabled" : "Disabled"} skill ${skillName}`);
 		} catch (error) {
 			this.showSkillRegistryError(error);
 		}
 	}
 
-	private async handleSkillValidateCommand(name?: string): Promise<void> {
+	private async handleSkillValidateCommand(identifier?: string): Promise<void> {
 		try {
-			const results = this.createSkillRegistryService().validate(name);
+			const results = this.createSkillRegistryService().validate(identifier);
 			if (results.length === 0) {
-				this.showStatus(name ? `Skill ${name} is not registered` : "No registered skills to validate");
+				this.showStatus(identifier ? `Skill ${identifier} is not registered` : "No registered skills to validate");
 				return;
 			}
 			if (!(await this.handleReloadCommand())) return;
@@ -5648,20 +5649,22 @@ export class InteractiveMode {
 				(count, result) => count + (result.validation?.diagnostics.length ?? 0),
 				0,
 			);
+			const skillName = identifier ? (results[0]?.entry?.name ?? identifier) : undefined;
 			this.showStatus(
-				`Validated ${name ? `skill ${name}` : `${results.length} skill${results.length === 1 ? "" : "s"}`} (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`,
+				`Validated ${skillName ? `skill ${skillName}` : `${results.length} skill${results.length === 1 ? "" : "s"}`} (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`,
 			);
 		} catch (error) {
 			this.showSkillRegistryError(error);
 		}
 	}
 
-	private async handleSkillRemoveCommand(name: string): Promise<void> {
+	private async handleSkillRemoveCommand(identifier: string): Promise<void> {
 		try {
 			const service = this.createSkillRegistryService();
-			const result = service.remove(name);
+			const result = service.remove(identifier);
+			const skillName = result.entry.name;
 			if (!(await this.handleReloadCommand())) return;
-			this.showStatus(`Removed Registry reference for skill ${name}`);
+			this.showStatus(`Removed Registry reference for skill ${skillName}`);
 			if (!result.managedPath) return;
 
 			const deleteFiles = await this.showExtensionConfirm(
@@ -5669,12 +5672,12 @@ export class InteractiveMode {
 				`The Registry reference has already been removed. Delete ${this.formatDisplayPath(result.managedPath)}?\nThis cannot be undone.`,
 			);
 			if (!deleteFiles) {
-				this.showStatus(`Kept managed files for skill ${name}`);
+				this.showStatus(`Kept managed files for skill ${skillName}`);
 				return;
 			}
 			service.deleteManagedFiles(result);
 			if (!(await this.handleReloadCommand())) return;
-			this.showStatus(`Deleted managed files for skill ${name}`);
+			this.showStatus(`Deleted managed files for skill ${skillName}`);
 		} catch (error) {
 			this.showSkillRegistryError(error);
 		}
