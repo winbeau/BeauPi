@@ -102,6 +102,15 @@ export {
 	validateSkillRegistryEntry,
 	writeSkillRegistry,
 } from "./skill-registry.ts";
+export { parseSkillRegistryCommand, type SkillRegistryCommand } from "./skill-registry-commands.ts";
+export {
+	type SkillRegistryImportResult,
+	type SkillRegistryMutationResult,
+	type SkillRegistryRemoveResult,
+	SkillRegistryService,
+	SkillRegistryServiceError,
+	type SkillRegistryServiceOptions,
+} from "./skill-registry-service.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";
 export {
 	attachTaskLedgerToolDetails,

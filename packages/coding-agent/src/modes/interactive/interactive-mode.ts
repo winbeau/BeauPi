@@ -86,6 +86,9 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import type { SkillRegistryRecord } from "../../core/skill-registry.ts";
+import { parseSkillRegistryCommand, type SkillRegistryCommand } from "../../core/skill-registry-commands.ts";
+import { SkillRegistryService, SkillRegistryServiceError } from "../../core/skill-registry-service.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -129,6 +132,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { type SkillRegistryAction, SkillRegistrySelectorComponent } from "./components/skill-registry-selector.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -2691,6 +2695,12 @@ export class InteractiveMode {
 			if (!text) return;
 
 			// Handle commands
+			const skillRegistryCommand = parseSkillRegistryCommand(text);
+			if (skillRegistryCommand) {
+				this.editor.setText("");
+				await this.handleSkillRegistryCommand(skillRegistryCommand);
+				return;
+			}
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
@@ -5389,14 +5399,190 @@ export class InteractiveMode {
 	// Command handlers
 	// =========================================================================
 
-	private async handleReloadCommand(): Promise<void> {
+	private createSkillRegistryService(): SkillRegistryService {
+		return new SkillRegistryService({
+			cwd: this.sessionManager.getCwd(),
+			agentDir: this.runtimeHost.services.agentDir,
+			projectTrusted: () => this.settingsManager.isProjectTrusted(),
+			getCurrentSkillNames: () => new Set(this.session.resourceLoader.getSkills().skills.map((skill) => skill.name)),
+			getCurrentSkillPaths: () =>
+				new Map(this.session.resourceLoader.getSkills().skills.map((skill) => [skill.name, skill.filePath])),
+		});
+	}
+
+	private async handleSkillRegistryCommand(command: SkillRegistryCommand): Promise<void> {
+		if (command.type === "error") {
+			this.showError(command.message);
+			return;
+		}
+		if (command.type === "list") {
+			this.showSkillRegistrySelector(command.search);
+			return;
+		}
+		if (command.type === "import") {
+			await this.handleSkillImportCommand(command.source, command.scope);
+			return;
+		}
+		if (!(await this.ensureSkillRegistryCommandIdle())) return;
+		switch (command.type) {
+			case "enable":
+				await this.handleSkillEnableCommand(command.name, true);
+				break;
+			case "disable":
+				await this.handleSkillEnableCommand(command.name, false);
+				break;
+			case "validate":
+				await this.handleSkillValidateCommand(command.name);
+				break;
+			case "remove":
+				await this.handleSkillRemoveCommand(command.name);
+				break;
+		}
+	}
+
+	private async ensureSkillRegistryCommandIdle(): Promise<boolean> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before changing skills.");
+			return false;
+		}
+		if (this.session.isCompacting) {
+			this.showWarning("Wait for compaction to finish before changing skills.");
+			return false;
+		}
+		return true;
+	}
+
+	private showSkillRegistrySelector(search?: string): void {
+		try {
+			const service = this.createSkillRegistryService();
+			const snapshot = service.getSnapshot();
+			const records = service.list(search);
+			this.showSelector((done) => {
+				const selector = new SkillRegistrySelectorComponent({
+					snapshot,
+					records,
+					formatPath: (skillPath) => this.formatDisplayPath(skillPath),
+					onAction: (record, action) => {
+						done();
+						void this.handleSkillRegistryAction(record, action);
+					},
+					onCancel: () => {
+						done();
+						this.ui.requestRender();
+					},
+				});
+				return { component: selector, focus: selector };
+			});
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private async handleSkillRegistryAction(record: SkillRegistryRecord, action: SkillRegistryAction): Promise<void> {
+		switch (action) {
+			case "enable":
+				await this.handleSkillEnableCommand(record.entry.name, true);
+				break;
+			case "disable":
+				await this.handleSkillEnableCommand(record.entry.name, false);
+				break;
+			case "validate":
+				await this.handleSkillValidateCommand(record.entry.name);
+				break;
+			case "remove":
+				await this.handleSkillRemoveCommand(record.entry.name);
+				break;
+		}
+	}
+
+	private async handleSkillImportCommand(source: string, scope: "user" | "project"): Promise<void> {
+		if (!(await this.ensureSkillRegistryCommandIdle())) return;
+		try {
+			const result = await this.createSkillRegistryService().importLocal(source, scope);
+			if (!(await this.handleReloadCommand())) return;
+			const status = result.validation.valid
+				? `Imported skill ${result.entry.name} (${scope})`
+				: `Imported skill ${result.entry.name} with validation diagnostics; it is not loaded`;
+			this.showStatus(status);
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private async handleSkillEnableCommand(name: string, enabled: boolean): Promise<void> {
+		try {
+			const result = this.createSkillRegistryService().setEnabled(name, enabled);
+			if (!result.changed) {
+				this.showStatus(`Skill ${name} is already ${enabled ? "enabled" : "disabled"}`);
+				return;
+			}
+			if (!(await this.handleReloadCommand())) return;
+			this.showStatus(`${enabled ? "Enabled" : "Disabled"} skill ${name}`);
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private async handleSkillValidateCommand(name?: string): Promise<void> {
+		try {
+			const results = this.createSkillRegistryService().validate(name);
+			if (results.length === 0) {
+				this.showStatus(name ? `Skill ${name} is not registered` : "No registered skills to validate");
+				return;
+			}
+			if (!(await this.handleReloadCommand())) return;
+			const diagnosticCount = results.reduce(
+				(count, result) => count + (result.validation?.diagnostics.length ?? 0),
+				0,
+			);
+			this.showStatus(
+				`Validated ${name ? `skill ${name}` : `${results.length} skill${results.length === 1 ? "" : "s"}`} (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`,
+			);
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private async handleSkillRemoveCommand(name: string): Promise<void> {
+		try {
+			const service = this.createSkillRegistryService();
+			const result = service.remove(name);
+			if (!(await this.handleReloadCommand())) return;
+			this.showStatus(`Removed Registry reference for skill ${name}`);
+			if (!result.managedPath) return;
+
+			const deleteFiles = await this.showExtensionConfirm(
+				"Delete managed skill files?",
+				`The Registry reference has already been removed. Delete ${this.formatDisplayPath(result.managedPath)}?\nThis cannot be undone.`,
+			);
+			if (!deleteFiles) {
+				this.showStatus(`Kept managed files for skill ${name}`);
+				return;
+			}
+			service.deleteManagedFiles(result);
+			if (!(await this.handleReloadCommand())) return;
+			this.showStatus(`Deleted managed files for skill ${name}`);
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private showSkillRegistryError(error: unknown): void {
+		if (error instanceof SkillRegistryServiceError) {
+			this.showError(error.message);
+			return;
+		}
+		this.showError(error instanceof Error ? error.message : String(error));
+	}
+
+	private async handleReloadCommand(): Promise<boolean> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
-			return;
+			return false;
 		}
 		if (this.session.isCompacting) {
 			this.showWarning("Wait for compaction to finish before reloading.");
-			return;
+			return false;
 		}
 
 		this.resetExtensionUI();
@@ -5485,11 +5671,13 @@ export class InteractiveMode {
 			);
 			dismissReloadBox(this.editor as Component);
 			reloadBoxDismissed = true;
+			return true;
 		} catch (error) {
 			if (!reloadBoxDismissed) {
 				dismissReloadBox(previousEditor as Component);
 			}
 			this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
+			return false;
 		}
 	}
 

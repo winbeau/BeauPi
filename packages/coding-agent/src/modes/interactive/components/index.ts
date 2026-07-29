@@ -29,6 +29,11 @@ export { type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent 
 export { ShowImagesSelectorComponent } from "./show-images-selector.ts";
 export { SkillInvocationMessageComponent } from "./skill-invocation-message.ts";
 export {
+	type SkillRegistryAction,
+	SkillRegistrySelectorComponent,
+	type SkillRegistrySelectorOptions,
+} from "./skill-registry-selector.ts";
+export {
 	selectTimelineCommands,
 	TaskLedgerWidget,
 	taskTodoLimit,

@@ -281,6 +281,15 @@ export {
 	validateSkillRegistryEntry,
 	writeSkillRegistry,
 } from "./core/skill-registry.ts";
+export { parseSkillRegistryCommand, type SkillRegistryCommand } from "./core/skill-registry-commands.ts";
+export {
+	type SkillRegistryImportResult,
+	type SkillRegistryMutationResult,
+	type SkillRegistryRemoveResult,
+	SkillRegistryService,
+	SkillRegistryServiceError,
+	type SkillRegistryServiceOptions,
+} from "./core/skill-registry-service.ts";
 export {
 	formatSkillsForPrompt,
 	type LoadSkillsFromDirOptions,
@@ -440,6 +449,9 @@ export {
 	SettingsSelectorComponent,
 	ShowImagesSelectorComponent,
 	SkillInvocationMessageComponent,
+	type SkillRegistryAction,
+	SkillRegistrySelectorComponent,
+	type SkillRegistrySelectorOptions,
 	selectTimelineCommands,
 	TaskLedgerWidget,
 	ThemeSelectorComponent,

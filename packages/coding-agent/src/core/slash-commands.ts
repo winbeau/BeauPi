@@ -38,5 +38,15 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "compact", description: "Manually compact the session context" },
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },
+	{ name: "skills", description: "List and manage registered skills", argumentHint: "[search]" },
+	{
+		name: "skill-import",
+		description: "Import a local, Claude, or Codex skill directory",
+		argumentHint: "<path> [user|project]",
+	},
+	{ name: "skill-enable", description: "Enable a registered skill", argumentHint: "<name>" },
+	{ name: "skill-disable", description: "Disable a registered skill", argumentHint: "<name>" },
+	{ name: "skill-validate", description: "Validate registered skill diagnostics", argumentHint: "[name]" },
+	{ name: "skill-remove", description: "Remove a skill Registry reference", argumentHint: "<name>" },
 	{ name: "quit", description: `Quit ${APP_NAME}` },
 ];
