@@ -1,0 +1,328 @@
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AgentLifecycleEvent, AgentPoolConfig } from "../src/core/agents/index.ts";
+import { createExtensionRuntime, defineTool } from "../src/core/extensions/index.ts";
+import type { ResourceLoader } from "../src/core/resource-loader.ts";
+import type { CreateAgentSessionOptions } from "../src/core/sdk.ts";
+import { createAgentSession } from "../src/core/sdk.ts";
+import { SessionManager } from "../src/core/session-manager.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
+import type { Skill } from "../src/core/skills.ts";
+import { createHarness } from "./suite/harness.ts";
+
+const cleanups: Array<() => void> = [];
+
+afterEach(() => {
+	for (const cleanup of cleanups.splice(0)) cleanup();
+});
+
+async function createCoordinator(
+	options: {
+		pool?: AgentPoolConfig;
+		resourceLoader?: ResourceLoader;
+		customTools?: CreateAgentSessionOptions["customTools"];
+	} = {},
+) {
+	const harness = await createHarness({ resourceLoader: options.resourceLoader });
+	const created = await createAgentSession({
+		cwd: harness.tempDir,
+		model: harness.getModel(),
+		modelRuntime: harness.session.modelRuntime,
+		resourceLoader: options.resourceLoader ?? harness.session.resourceLoader,
+		sessionManager: SessionManager.inMemory(harness.tempDir),
+		settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
+		customTools: options.customTools,
+		agentPool: options.pool ?? {},
+	});
+	cleanups.push(() => created.session.dispose());
+	cleanups.push(harness.cleanup);
+	return { harness, session: created.session, pool: created.session.agentPool! };
+}
+
+function eventTypes(events: readonly AgentLifecycleEvent[], taskId: string): string[] {
+	return events.filter((event) => event.taskId === taskId).map((event) => event.type);
+}
+
+function skill(name: string, description: string): Skill {
+	return {
+		name,
+		description,
+		filePath: `/tmp/${name}/SKILL.md`,
+		baseDir: `/tmp/${name}`,
+		sourceInfo: { path: `/tmp/${name}`, source: "test", scope: "temporary", origin: "top-level" },
+		disableModelInvocation: false,
+	};
+}
+
+function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
+	return {
+		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+		getSkills: () => ({ skills, diagnostics: [] }),
+		getPrompts: () => ({ prompts: [], diagnostics: [] }),
+		getThemes: () => ({ themes: [], diagnostics: [] }),
+		getAgentsFiles: () => ({ agentsFiles: [] }),
+		getSystemPrompt: () => undefined,
+		getAppendSystemPrompt: () => [],
+		extendResources: () => {},
+		reload: async () => {},
+	};
+}
+
+describe("in-process Agent Pool and delegate_task", () => {
+	it("runs a selected profile and returns only structured data", async () => {
+		const { harness, session, pool } = await createCoordinator({
+			pool: {
+				profiles: [
+					{
+						id: "researcher",
+						systemPrompt: "RESEARCHER PROFILE",
+						toolAllowlist: ["read"],
+						skillAllowlist: { allow: [] },
+					},
+				],
+				defaultProfile: "researcher",
+			},
+		});
+		harness.setResponses([fauxAssistantMessage("child summary")]);
+		const events: AgentLifecycleEvent[] = [];
+		pool.subscribe((event) => events.push(event));
+
+		const result = await pool.delegateTask({ task: "Inspect the repository", profile: "researcher" });
+
+		expect(result.status).toBe("completed");
+		expect(result.profile).toBe("researcher");
+		expect(result.summary).toBe("child summary");
+		expect(result).not.toHaveProperty("messages");
+		expect(session.messages).toEqual([]);
+		expect(eventTypes(events, result.taskId)).toEqual(
+			expect.arrayContaining(["started", "running", "progress", "completed"]),
+		);
+		expect(eventTypes(events, result.taskId).filter((type) => type === "started")).toHaveLength(1);
+		expect(eventTypes(events, result.taskId).filter((type) => type === "completed")).toHaveLength(1);
+	});
+
+	it("filters tools, Skills, file modification boundaries, and recursive delegation", async () => {
+		let seenTools: string[] = [];
+		let seenSystemPrompt = "";
+		const loader = resourceLoaderWithSkills([
+			skill("allowed-skill", "Allowed instructions"),
+			skill("blocked-skill", "Blocked instructions"),
+		]);
+		const { harness, pool } = await createCoordinator({
+			resourceLoader: loader,
+			pool: {
+				profiles: [
+					{
+						id: "controlled",
+						systemPrompt: "CONTROLLED PROFILE",
+						toolAllowlist: ["read", "edit", "write", "delegate_task", "custom_allowed"],
+						skillAllowlist: { allow: ["allowed-skill"] },
+						allowFileModifications: false,
+					},
+				],
+				defaultProfile: "controlled",
+			},
+			customTools: [
+				defineTool({
+					name: "custom_allowed",
+					label: "Allowed",
+					description: "A test tool",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+				}),
+			],
+		});
+		harness.setResponses([
+			(context) => {
+				seenTools = context.tools?.map((tool) => tool.name) ?? [];
+				seenSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("filtered");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Check boundaries", profile: "controlled" });
+
+		expect(result.status).toBe("completed");
+		expect(seenTools).toContain("read");
+		expect(seenTools).toContain("custom_allowed");
+		expect(seenTools).not.toContain("edit");
+		expect(seenTools).not.toContain("write");
+		expect(seenTools).not.toContain("delegate_task");
+		expect(seenSystemPrompt).toContain("CONTROLLED PROFILE");
+		expect(seenSystemPrompt).toContain("allowed-skill");
+		expect(seenSystemPrompt).not.toContain("blocked-skill");
+	});
+
+	it("enforces turn and token budgets with structured errors", async () => {
+		let requestedMaxTokens: number | undefined;
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [
+					{
+						id: "bounded",
+						systemPrompt: "bounded",
+						toolAllowlist: ["read"],
+						maxTokens: 3,
+						maxTurns: 5,
+					},
+					{
+						id: "turn-limited",
+						systemPrompt: "turn limited",
+						toolAllowlist: ["read"],
+						maxTokens: 128,
+						maxTurns: 1,
+					},
+				],
+				defaultProfile: "bounded",
+			},
+		});
+		harness.setResponses([
+			(_context, options) => {
+				requestedMaxTokens = options?.maxTokens;
+				return fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" });
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Use the bounded budget", profile: "bounded" });
+
+		expect(requestedMaxTokens).toBe(3);
+		expect(result.status).toBe("failed");
+		expect(result.error?.code).toBe("budget_exhausted");
+		expect(result.budget.maxTokens).toBe(3);
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" }),
+		]);
+		const turnLimited = await pool.delegateTask({ task: "Use the turn budget", profile: "turn-limited" });
+		expect(turnLimited.status).toBe("failed");
+		expect(turnLimited.error?.code).toBe("budget_exhausted");
+		expect(turnLimited.budget.maxTurns).toBe(1);
+	});
+
+	it("propagates provider and ordinary Tool failures structurally", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "failure" }],
+				defaultProfile: "failure",
+			},
+		});
+		const events: AgentLifecycleEvent[] = [];
+		pool.subscribe((event) => events.push(event));
+		harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider exploded" })]);
+		const providerFailure = await pool.delegateTask({ task: "Provider failure", profile: "failure" });
+		expect(providerFailure.status).toBe("failed");
+		expect(providerFailure.error).toEqual({ code: "provider_error", message: "provider exploded" });
+		expect(eventTypes(events, providerFailure.taskId).filter((type) => type === "failed")).toHaveLength(1);
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("recovered"),
+		]);
+		const toolFailure = await pool.delegateTask({ task: "Tool failure", profile: "failure" });
+		expect(toolFailure.status).toBe("completed");
+		expect(toolFailure.diagnostics).toContain("Tool read failed");
+	});
+
+	it("supports timeout and user cancellation while terminating the child operation", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [
+					{ ...DEFAULT_TEST_PROFILE(), id: "short", timeoutMs: 5 },
+					{ ...DEFAULT_TEST_PROFILE(), id: "cancel", timeoutMs: 1000 },
+				],
+				defaultProfile: "short",
+			},
+		});
+		const events: AgentLifecycleEvent[] = [];
+		pool.subscribe((event) => events.push(event));
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				return fauxAssistantMessage("late");
+			},
+		]);
+		const timedOut = await pool.delegateTask({ task: "Timeout", profile: "short" });
+		expect(timedOut.status).toBe("timed_out");
+		expect(eventTypes(events, timedOut.taskId).filter((type) => type === "timed_out")).toHaveLength(1);
+
+		const controller = new AbortController();
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				return fauxAssistantMessage("cancelled");
+			},
+		]);
+		const cancelledPromise = pool.delegateTask({ task: "Cancel", profile: "cancel" }, controller.signal);
+		controller.abort();
+		const cancelled = await cancelledPromise;
+		expect(cancelled.status).toBe("cancelled");
+		expect(eventTypes(events, cancelled.taskId).filter((type) => type === "cancelled")).toHaveLength(1);
+	});
+
+	it("limits pool concurrency and keeps the Coordinator transcript isolated", async () => {
+		const { harness, session, pool } = await createCoordinator({ pool: { maxConcurrency: 1 } });
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 15));
+				return fauxAssistantMessage("one");
+			},
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 15));
+				return fauxAssistantMessage("two");
+			},
+		]);
+		const results = await Promise.all([pool.delegateTask({ task: "first" }), pool.delegateTask({ task: "second" })]);
+
+		expect(results.every((result) => result.status === "completed")).toBe(true);
+		expect(pool.maxObservedConcurrency).toBe(1);
+		expect(session.messages).toEqual([]);
+	});
+
+	it("executes delegate_task through the Coordinator AgentSession without importing child history", async () => {
+		const { harness, session } = await createCoordinator();
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("delegate_task", { task: "Inspect one file" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("child structured summary"),
+			fauxAssistantMessage("coordinator completed"),
+		]);
+
+		await session.prompt("delegate this task");
+
+		const toolResult = session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role).toBe("toolResult");
+		if (toolResult?.role === "toolResult") {
+			expect(toolResult.toolName).toBe("delegate_task");
+			expect(toolResult.details).toMatchObject({ status: "completed", summary: "child structured summary" });
+			expect(toolResult.details).not.toHaveProperty("messages");
+		}
+		expect(session.getLastAssistantText()).toBe("coordinator completed");
+		const assistantMessages = session.messages.filter((message) => message.role === "assistant");
+		expect(assistantMessages).toHaveLength(2);
+	});
+
+	it("exposes delegate_task in the Coordinator registry but never in a child registry", async () => {
+		let coordinatorTools: string[] = [];
+		const { harness, session } = await createCoordinator();
+		harness.setResponses([
+			(context) => {
+				coordinatorTools = context.tools?.map((tool) => tool.name) ?? [];
+				return fauxAssistantMessage("coordinator");
+			},
+		]);
+		await session.prompt("inspect tools");
+		expect(coordinatorTools).toContain("delegate_task");
+		expect(session.getToolDefinition("delegate_task")).toBeDefined();
+	});
+});
+
+function DEFAULT_TEST_PROFILE() {
+	return {
+		id: "default-test",
+		systemPrompt: "test profile",
+		toolAllowlist: ["read"],
+		maxTokens: 128,
+		maxTurns: 4,
+		allowFileModifications: false,
+	} as const;
+}

@@ -23,6 +23,29 @@ export {
 	parseSkillBlock,
 	type SessionStats,
 } from "./core/agent-session.ts";
+export {
+	type AgentLifecycleEvent,
+	type AgentLifecycleEventListener,
+	type AgentLifecycleEventType,
+	AgentPool,
+	type AgentPoolConfig,
+	type AgentPoolDependencies,
+	type AgentProfile,
+	type AgentProgressEvent,
+	type AgentTaskBudgetSummary,
+	type AgentTaskCheck,
+	type AgentTaskError,
+	type AgentTaskProgressListener,
+	type AgentTaskResult,
+	type AgentTaskStatus,
+	type AgentTaskUsage,
+	DEFAULT_AGENT_PROFILE,
+	DEFAULT_AGENT_PROFILES,
+	DEFAULT_IMPLEMENTER_PROFILE,
+	type DelegateTaskInput,
+	validateAgentPoolConfig,
+	validateAgentProfile,
+} from "./core/agents/index.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
 // Compaction
 export {

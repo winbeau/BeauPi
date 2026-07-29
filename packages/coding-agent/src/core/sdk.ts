@@ -4,6 +4,8 @@ import { clampThinkingLevel, type Message, type Model, streamSimple } from "@ear
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
+import { AgentPool } from "./agents/agent-pool.ts";
+import type { AgentPoolConfig } from "./agents/agent-profile.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { DocumentRuntime } from "./documents/document-runtime.ts";
@@ -27,7 +29,6 @@ import {
 	createReadOnlyTools,
 	createReadTool,
 	createWriteTool,
-	type ToolName,
 	withFileMutationQueue,
 } from "./tools/index.ts";
 
@@ -85,6 +86,8 @@ export interface CreateAgentSessionOptions {
 	sessionStartEvent?: SessionStartEvent;
 	/** Optional cwd-bound Document Runtime, normally supplied by AgentSessionServices. */
 	documentRuntime?: DocumentRuntime;
+	/** Enable the BeauPi in-process Agent Pool for this Coordinator session. */
+	agentPool?: AgentPoolConfig | false;
 }
 
 /** Result from createAgentSession */
@@ -245,7 +248,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = [
+	const childAgentPool =
+		options.agentPool !== undefined && options.agentPool !== false
+			? new AgentPool(options.agentPool, {
+					cwd,
+					agentDir,
+					modelRuntime,
+					resourceLoader,
+					model,
+					customTools: options.customTools,
+					createSession: (childOptions) => createAgentSession(childOptions),
+				})
+			: undefined;
+	const customTools = childAgentPool
+		? [...(options.customTools ?? []), childAgentPool.delegateTaskTool]
+		: options.customTools;
+	const defaultActiveToolNames: string[] = [
 		"read",
 		"bash",
 		"edit",
@@ -253,6 +271,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_search",
 		"docs_read",
 		"docs_resolve_task",
+		...(childAgentPool ? ["delegate_task"] : []),
 	];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
@@ -398,8 +417,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		scopedModels: options.scopedModels,
 		resourceLoader,
-		customTools: options.customTools,
+		customTools,
 		modelRuntime,
+		agentPool: childAgentPool,
 		initialActiveToolNames,
 		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,
 		allowedToolNames,

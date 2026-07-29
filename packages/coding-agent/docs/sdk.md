@@ -578,6 +578,34 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 
 > See [examples/sdk/05-tools.ts](../examples/sdk/05-tools.ts)
 
+### In-process sub-agents (BeauPi)
+
+BeauPi can enable an in-process `AgentPool` on a Coordinator session. The pool shares the existing `ModelRuntime` and loaded `ResourceLoader`, but every child receives an independent in-memory `AgentSession` and a filtered resource/tool projection.
+
+```typescript
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
+
+const { session } = await createAgentSession({
+  agentPool: {
+    maxConcurrency: 2,
+    defaultProfile: "reviewer",
+    profiles: [{
+      id: "reviewer",
+      systemPrompt: "Review the assigned task and return concise findings.",
+      toolAllowlist: ["read", "grep", "find", "ls"],
+      skillAllowlist: { allow: [] },
+      maxTokens: 4096,
+      maxTurns: 8,
+      timeoutMs: 120_000,
+      cancelStrategy: "abort",
+      allowFileModifications: false,
+    }],
+  },
+});
+```
+
+When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator, and `delegate_task` is always excluded from child tools even when it exists in the global registry. Subscribe through `session.agentPool` for stable lifecycle/progress events.
+
 ### Extensions
 
 Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.pi/agent/extensions/`, `.pi/extensions/`, and settings.json extension sources.

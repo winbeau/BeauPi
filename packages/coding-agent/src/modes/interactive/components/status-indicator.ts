@@ -10,8 +10,8 @@ export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSu
 
 const MAX_THINKING_STATUS_WIDTH = 120;
 
-function normalizeThinkingStatusLine(line: string): string | undefined {
-	let normalized = line
+function normalizeThinkingSummaryLine(line: string): string | undefined {
+	const normalized = line
 		.trim()
 		.replace(/^#{1,6}\s+/, "")
 		.replace(/^>\s*/, "")
@@ -20,12 +20,25 @@ function normalizeThinkingStatusLine(line: string): string | undefined {
 		.replace(/__([^_]+)__/g, "$1")
 		.replace(/`([^`]+)`/g, "$1")
 		.replace(/\s+/g, " ")
-		.replace(/(?:\.{3}|…)+$/u, "")
-		.replace(/[.!?;:,]+$/u, "")
 		.trim();
 	if (!normalized || /^```/.test(normalized)) return undefined;
-	normalized = truncateToWidth(normalized, MAX_THINKING_STATUS_WIDTH - 1, "");
-	return normalized ? `${normalized}…` : undefined;
+	return normalized;
+}
+
+export function getThinkingSummaryLinesFromBlocks(thinkingBlocks: readonly string[]): string[] {
+	const summaries: string[] = [];
+	const seen = new Set<string>();
+	for (const block of thinkingBlocks) {
+		for (const line of block.split(/\r\n|\r|\n/)) {
+			const summary = normalizeThinkingSummaryLine(line);
+			if (!summary) continue;
+			const key = summary.replace(/(?:\.{3}|…)+$/u, "").trim();
+			if (!key || seen.has(key)) continue;
+			seen.add(key);
+			summaries.push(summary);
+		}
+	}
+	return summaries;
 }
 
 export function getThinkingStatusMessage(message: AssistantMessage): string | undefined {
@@ -34,8 +47,14 @@ export function getThinkingStatusMessage(message: AssistantMessage): string | un
 		if (content?.type !== "thinking") continue;
 		const lines = content.thinking.split(/\r\n|\r|\n/);
 		for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
-			const status = normalizeThinkingStatusLine(lines[lineIndex] ?? "");
-			if (status) return status;
+			const summary = normalizeThinkingSummaryLine(lines[lineIndex] ?? "");
+			if (!summary) continue;
+			const concise = summary
+				.replace(/(?:\.{3}|…)+$/u, "")
+				.replace(/[.!?;:,]+$/u, "")
+				.trim();
+			const truncated = truncateToWidth(concise, MAX_THINKING_STATUS_WIDTH - 1, "");
+			if (truncated) return `${truncated}…`;
 		}
 	}
 	return undefined;

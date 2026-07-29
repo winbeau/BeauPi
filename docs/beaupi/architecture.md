@@ -86,7 +86,28 @@ Footer 使用自定义 `setFooter()` 组件，并从 Session、模型、Git bran
 - 独立 System Prompt
 - 独立超时、轮数和 token 预算
 
-子 Agent 使用受控 ResourceLoader，避免加载委派工具并递归创建 Agent。
+子 Agent 使用受控 ResourceLoader，避免加载委派工具并递归创建 Agent。受控 Loader 复用 Coordinator 已完成的 discovery/runtime，不调用第二次 reload；M4 的 `createSkillAllowlistOverride()` 负责 allow/deny 投影。
+
+`AgentPool` 只把以下结构化结果交还 Coordinator：
+
+```typescript
+interface AgentTaskResult {
+  taskId: string;
+  profile: string;
+  status: "completed" | "failed" | "cancelled" | "timed_out";
+  summary: string;
+  citations: DocumentCitation[];
+  references: string[];
+  filesModified: string[];
+  checks: AgentTaskCheck[];
+  diagnostics: string[];
+  error?: AgentTaskError;
+  usage: AgentTaskUsage;
+  budget: AgentTaskBudgetSummary;
+}
+```
+
+生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态和错误；`started`、`running`、`progress` 与单次 terminal event 可直接由 M6 Monitor Runtime 消费。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
 
 ## Skill Registry
 

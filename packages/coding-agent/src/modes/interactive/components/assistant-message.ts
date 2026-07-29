@@ -10,7 +10,51 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { BEAUPI_STATUS_SYMBOLS } from "./beaupi-style.ts";
+import { BEAUPI_STATUS_SYMBOLS, fitSingleLine, resultGutter } from "./beaupi-style.ts";
+import { getThinkingSummaryLinesFromBlocks } from "./status-indicator.ts";
+
+const THOUGHT_CHAIN_TITLE = "Thought Chain";
+
+class ThoughtChainComponent implements Component {
+	private readonly summaries: readonly string[];
+
+	constructor(summaries: readonly string[]) {
+		this.summaries = summaries;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (availableWidth === 0 || this.summaries.length === 0) return [];
+		if (this.summaries.length === 1) {
+			return [
+				fitSingleLine(
+					[
+						{
+							text: theme.italic(theme.fg("thinkingText", this.summaries[0]!)),
+							required: true,
+							truncate: true,
+						},
+					],
+					availableWidth,
+				),
+			];
+		}
+
+		const visibleSummaries =
+			this.summaries.length === 2
+				? this.summaries
+				: [this.summaries[0]!, "…", this.summaries[this.summaries.length - 1]!];
+		return [
+			fitSingleLine(
+				[{ text: theme.bold(theme.fg("thinkingText", THOUGHT_CHAIN_TITLE)), required: true, truncate: true }],
+				availableWidth,
+			),
+			...visibleSummaries.map((summary) => resultGutter(theme.fg("thinkingText", summary), theme, availableWidth)),
+		];
+	}
+}
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -151,12 +195,15 @@ export class AssistantMessageComponent extends Container {
 			i--;
 			if (thinkingBlocks.length === 0) continue;
 
+			const thinkingSummaries = getThinkingSummaryLinesFromBlocks(thinkingBlocks);
 			const component = this.hideThinkingBlock
 				? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 0, 0)
-				: new Markdown(thinkingBlocks.join("\n\n"), 0, 0, this.markdownTheme, {
-						color: (text: string) => theme.fg("thinkingText", text),
-						italic: true,
-					});
+				: thinkingSummaries.length > 0
+					? new ThoughtChainComponent(thinkingSummaries)
+					: new Markdown(thinkingBlocks.join("\n\n"), 0, 0, this.markdownTheme, {
+							color: (text: string) => theme.fg("thinkingText", text),
+							italic: true,
+						});
 			blocks.push({ component, gapBefore: previousVisibleKind !== undefined });
 			previousVisibleKind = "thinking";
 		}

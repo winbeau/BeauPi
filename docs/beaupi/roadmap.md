@@ -8,13 +8,13 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M4 完成后，近期开发只按以下顺序推进：
+M5 已完成，近期开发只按以下顺序推进：
 
-1. 阶段 6：进程内子 Agent，先建立可隔离、可取消、可预算的执行单元。
-2. 阶段 7：Monitor 监控闭环，统一观察本地进程、Tool 和子 Agent 的状态、增量日志与异常事件。
-3. 阶段 8：SSH/tmux 远程执行，把远程命令和终端会话接入同一 Monitor Runtime。
+1. 阶段 7：Monitor 监控闭环，统一观察本地进程、Tool 和子 Agent 的状态、增量日志与异常事件。
+2. 阶段 8：SSH/tmux 远程执行，把远程命令和终端会话接入同一 Monitor Runtime。
+3. 后续再推进联网搜索、Policy/Git、多 Agent Workflow 和后台自动唤醒。
 
-联网搜索、完整 Policy/Git、多 Agent Workflow 和自动唤醒后移。Monitor 第一版提供低成本状态采集、手动等待和可视化，不提前实现自动触发模型 turn；自动唤醒仍在后台任务阶段完成。SSH/tmux 第一版只使用普通用户权限，sudo 与结构化提权继续延后。
+M5 的子 Agent 已在当前进程复用 ModelRuntime 和 ResourceLoader 生命周期；Monitor 第一版继续提供低成本状态采集、手动等待和可视化，不提前实现自动触发模型 turn。自动唤醒仍在后台任务阶段完成。SSH/tmux 第一版只使用普通用户权限，sudo 与结构化提权继续延后。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -111,6 +111,8 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 
 ## 阶段 6：进程内子 Agent
 
+状态：已完成（2026-07-29）。
+
 - 创建共享 ModelRuntime 的 Agent Pool
 - 实现受控子 Agent ResourceLoader
 - 实现 Agent Profile
@@ -122,6 +124,8 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 - 对照 `AgentProgressLine`，将真实子 Agent 状态接入阶段 2 的树形 gutter 和状态组件
 
 验收：Reviewer 子 Agent 无需启动额外 Pi 进程即可独立检查修改；Tool、Skill 和预算边界有效；主会话只接收结构化结果。
+
+M5 实现了 `AgentProfile`、受控 ResourceLoader、共享 Runtime 的 Agent Pool、`delegate_task`、结构化结果和可去重的生命周期事件。测试使用 faux provider 覆盖成功、失败、取消、超时、预算、并发和上下文隔离。
 
 ## 阶段 7：Monitor 监控闭环
 
@@ -272,7 +276,7 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 2. Task Ledger 和 Todo（已完成）
 3. 文档发现与读取（已完成）
 4. Skill Registry 和 `/skills`（已完成）
-5. 进程内 `delegate_task`
+5. 进程内 `delegate_task`（已完成）
 6. Monitor Runtime、增量日志和运行状态可视化
 7. SSH/tmux 远程执行并接入 Monitor Runtime
 8. 一个搜索 Provider

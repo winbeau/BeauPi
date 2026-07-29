@@ -394,6 +394,26 @@ Compact 保留 Pi 当前跳动小图标，并在下一行显示 Claude Code 风�
 - Thinking summary 与 Tool call 同属一个 Assistant message 时，原 summary 仍保留在消息历史中；`Update`、Diff 和其他 Tool Result 不受影响。
 - 不替换图标帧，不复制 Claude Code spinner。
 
+消息历史中的 Thinking summary 使用紧凑 Thought Chain：
+
+```text
+Planning README verification
+
+Thought Chain
+  ⎿  Planning README verification
+  ⎿  Inspecting code checks
+
+Thought Chain
+  ⎿  Planning README verification
+  ⎿  …
+  ⎿  Confirming naming
+```
+
+- 只有一条 summary 时不显示标题或 gutter，仅将原文显示为斜体。
+- 两条时显示地道英文标题 `Thought Chain`，并完整显示两条 `  ⎿  ` 分支项。
+- 三条及以上时只显示第一条、`…` 和最新一条。
+- 流式更新重建当前摘要投影并去重，不能将同一条或旧的“最新一条”重复追加到消息历史。
+
 ## Pi 实现路径
 
 ### Theme

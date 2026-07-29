@@ -257,7 +257,7 @@ skills:
 
 M4 提供 `createSkillAllowlistOverride({ allow, deny })` 作为受控 `ResourceLoader` 的稳定过滤接口。`allow` 存在时只加载列出的名称，`allow: []` 表示不加载 Skill，`deny` 始终优先；未发现的 allow 名称会产生结构化错误诊断。M5 的 `AgentProfile` 负责把 profile 配置映射到这个接口。
 
-这样可以降低上下文体积并避免子 Agent 获得不必要能力。
+这样可以降低上下文体积并避免子 Agent 获得不必要能力。M5 的 AgentPool 在创建受控 Session 时直接把 `AgentProfile.skillAllowlist` 映射到该过滤器；未提供 allowlist 时使用 `allow: []`，因此子 Agent 不继承 Coordinator 的全部 Skill。受控 Loader 不 reload 或扩展 Coordinator 的资源集合。
 
 ## 安全
 
@@ -321,5 +321,5 @@ pi.getSkills()
 4. 导入后无需重启进程，通过 reload 生效。
 5. `/skills` 展示来源、scope、状态和诊断。
 6. 同名 Skill 不静默覆盖。
-7. 子 Agent 可配置独立 Skill allowlist；M4 已提供 ResourceLoader allow/deny 接口，M5 负责接入 AgentProfile。
+7. 子 Agent 可配置独立 Skill allowlist；M4 提供的 ResourceLoader allow/deny 接口已由 M5 AgentProfile 接入。
 8. URL 和项目 Skill 在加载前经过安全确认；交互式本地 Skill 导入也经过同一安全审查。

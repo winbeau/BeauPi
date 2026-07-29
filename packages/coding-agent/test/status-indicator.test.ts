@@ -28,6 +28,7 @@ describe("status indicators", () => {
 		]);
 
 		expect(getThinkingStatusMessage(message)).toBe("Designing dynamic tool grouping logic…");
+		expect(getThinkingStatusMessage(fauxAssistantMessage([fauxThinking("First\n\nSecond\n\nFirst")]))).toBe("First…");
 	});
 
 	it("normalizes markdown and existing ellipses without exposing multiple lines", () => {

@@ -103,6 +103,64 @@ describe("AssistantMessageComponent", () => {
 		);
 
 		expect(plainLines(component)).toEqual(["", "Defining optional renderer exports"]);
+		expect(component.render(80).join("\n")).toContain(
+			theme.italic(theme.fg("thinkingText", "Defining optional renderer exports")),
+		);
+	});
+
+	test("renders two thinking summaries as a Thought Chain", () => {
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{
+					type: "thinking",
+					thinking: "**Planning README verification**\n\n**Inspecting code checks**",
+				},
+			]),
+			false,
+			undefined,
+			"Thinking...",
+			0,
+		);
+
+		expect(plainLines(component)).toEqual([
+			"",
+			"Thought Chain",
+			"  ⎿  Planning README verification",
+			"  ⎿  Inspecting code checks",
+		]);
+	});
+
+	test("keeps the first and latest summaries without duplicating streaming updates", () => {
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Planning README verification**\n\n**Drafting update**" },
+			]),
+			false,
+			undefined,
+			"Thinking...",
+			0,
+		);
+
+		component.updateContent(
+			createAssistantMessage([
+				{
+					type: "thinking",
+					thinking:
+						"**Planning README verification**\n\n**Inspecting code checks**\n\n**Confirming naming**\n\n**Confirming naming**",
+				},
+			]),
+		);
+
+		const lines = plainLines(component);
+		expect(lines).toEqual([
+			"",
+			"Thought Chain",
+			"  ⎿  Planning README verification",
+			"  ⎿  …",
+			"  ⎿  Confirming naming",
+		]);
+		expect(lines.join("\n")).not.toContain("Drafting update");
+		expect(lines.join("\n").match(/Confirming naming/g)).toHaveLength(1);
 	});
 
 	test("does not add a trailing blank line before the first tool title", () => {
@@ -205,6 +263,26 @@ describe("AssistantMessageComponent", () => {
 		component.setOutputPad(0);
 		expect(plainLines(component).some((line) => line.startsWith("hello"))).toBe(true);
 		expect(plainLines(component).some((line) => line.startsWith("reasoning"))).toBe(true);
+	});
+
+	test("keeps Thought Chain rows within every target width", () => {
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{
+					type: "thinking",
+					thinking:
+						"**Planning a long Unicode change 🚀**\n\n**Inspecting implementation details**\n\n**Confirming final behavior**",
+				},
+			]),
+			false,
+			undefined,
+			"Thinking...",
+			1,
+		);
+
+		for (const width of WIDTHS) {
+			for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
 	});
 
 	test("keeps text, thinking, and errors within every target width", () => {

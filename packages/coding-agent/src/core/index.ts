@@ -25,6 +25,29 @@ export {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
+export {
+	type AgentLifecycleEvent,
+	type AgentLifecycleEventListener,
+	type AgentLifecycleEventType,
+	AgentPool,
+	type AgentPoolConfig,
+	type AgentPoolDependencies,
+	type AgentProfile,
+	type AgentProgressEvent,
+	type AgentTaskBudgetSummary,
+	type AgentTaskCheck,
+	type AgentTaskError,
+	type AgentTaskProgressListener,
+	type AgentTaskResult,
+	type AgentTaskStatus,
+	type AgentTaskUsage,
+	DEFAULT_AGENT_PROFILE,
+	DEFAULT_AGENT_PROFILES,
+	DEFAULT_IMPLEMENTER_PROFILE,
+	type DelegateTaskInput,
+	validateAgentPoolConfig,
+	validateAgentProfile,
+} from "./agents/index.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
 export * from "./documents/index.ts";

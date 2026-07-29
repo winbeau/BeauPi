@@ -12,6 +12,7 @@
 - Added local BeauPi Skill Registry management with a searchable `/skills` UI, local/Claude/Codex directory import, enable/disable, validation, safe removal confirmation, trust gating, collision checks, and hot reload.
 - Added remote BeauPi Skill imports and updates from Git, npm, and HTTPS sources with lifecycle-free staging, SHA-256 pins, validation/security review, explicit confirmation, symlink/cache filtering, atomic replacement, structured diagnostics, `/skill-update`, and controlled ResourceLoader Skill allowlists.
 - Added complete `/skills` registry management details, searchable source/scope/path/diagnostic fields, collision-side display, SKILL.md viewing, and explicit disabled actions for non-updateable sources.
+- Added BeauPi M5 in-process sub-agents with isolated `AgentSession` contexts, shared ModelRuntime/Provider/ResourceLoader lifecycles, AgentProfile Tool/Skill/file boundaries and budgets, bounded concurrency/cancellation/timeouts, non-recursive `delegate_task`, structured results, and Monitor-ready lifecycle/progress events.
 
 ### Changed
 
@@ -23,6 +24,7 @@
 - Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
 - Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
+- Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
 
 ### Fixed
 

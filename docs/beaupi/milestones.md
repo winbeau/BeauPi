@@ -331,6 +331,16 @@ interface TaskLedger {
 
 Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主会话不会接收完整子 Agent 消息历史；结果和生命周期事件可以被 M6 Monitor Runtime 消费。
 
+### 验收记录（2026-07-29）
+
+- `AgentPool` 已接入现有 `createAgentSession()`：子 Agent 在当前进程创建独立 `AgentSession` 和内存 `SessionManager`，共享 Coordinator 的 `ModelRuntime`、认证和 Provider 配置，不创建第二套 Runtime、CLI 或 ResourceLoader 生命周期。
+- `AgentProfile` 支持独立 System Prompt、Tool/Skill allowlist、最大 output token、最大轮数、超时、取消策略和文件修改边界；受控 ResourceLoader 直接复用 M4 `createSkillAllowlistOverride()`，默认不继承 Skill。
+- BeauPi CLI 通过 `agentPool: {}` 启用 Coordinator 的 `delegate_task`；受控子 Agent 始终排除 `delegate_task`，即使 Coordinator 的全局 Tool registry 中存在该 Tool。
+- `delegate_task` 的 Tool 参数使用 TypeBox 校验。Coordinator 只接收包含状态、summary、citations/references、filesModified、checks、diagnostics、error、usage 和 budget 的结构化结果，不接收子 Agent transcript。
+- Agent Pool 使用共享 Runtime 的并发槽位，子 Agent 的 Provider、Tool 和 bash 操作都服从同一 AbortSignal；正常、失败、取消、超时、Provider/Tool 错误均转换为结构化状态。
+- 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态和错误字段发出；started/running/progress 与单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
+- faux provider 定向测试覆盖成功委派、Profile 选择、Tool/Skill/文件边界、token/轮数预算、超时、取消、Provider/Tool 失败、Coordinator transcript 隔离、递归委派阻断、生命周期事件去重和并发限制。
+
 ---
 
 ## M6：Monitor 监控闭环
@@ -601,7 +611,7 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 当前实现任务按以下顺序推进：
 
 1. 盘点并复用现有 AgentSession、AgentSessionServices、Tool registry、Skill allowlist 和 M1/M2 的状态渲染组件。
-2. 完成 M5 `AgentProfile`、Agent Pool 和 `delegate_task`，先闭环成功、失败、取消、超时和结构化结果。
+2. M5 `AgentProfile`、Agent Pool 和 `delegate_task` 已完成，覆盖成功、失败、取消、超时和结构化结果。
 3. 完成 M6 Monitor Registry、状态机、增量日志和 `monitor_*` Tool，并接入子 Agent 与 Footer/Tasks Widget。
 4. 完成 M7 Execution Target、SSH ControlMaster、远程 Tool 和 tmux 会话控制，再接入同一 Monitor Runtime。
 5. M5–M7 每个阶段都使用 faux provider、fake process/SSH/tmux adapter 覆盖正常、失败、取消、超时、恢复和安全边界。

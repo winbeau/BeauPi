@@ -51,6 +51,7 @@ import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
+import type { AgentPool } from "./agents/agent-pool.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
@@ -239,6 +240,8 @@ export interface AgentSessionConfig {
 	sessionStartEvent?: SessionStartEvent;
 	/** Unique cwd-bound Document Runtime. Created by AgentSessionServices in normal application flows. */
 	documentRuntime?: DocumentRuntime;
+	/** Optional in-process child-agent pool owned by this Coordinator session. */
+	agentPool?: AgentPool;
 }
 
 export interface ExtensionBindings {
@@ -382,6 +385,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	private _agentPool?: AgentPool;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -416,6 +420,7 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		this._agentPool = config.agentPool;
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
@@ -438,6 +443,10 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	get agentPool(): AgentPool | undefined {
+		return this._agentPool;
 	}
 
 	/** Validate the branch-restored contract before the first provider request. */
@@ -916,6 +925,7 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.agent.abort();
+			this._agentPool?.dispose();
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
 		}
