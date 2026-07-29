@@ -111,8 +111,10 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi 开发基线、Claude Code 风格 TUI、Task Ledger、任务可视化、Document Runtime 和 Skill Registry 已完成。后续按顺序推进：
+BeauPi 开发基线、Claude Code 风格 TUI、Task Ledger、任务可视化、Document Runtime 和 Skill Registry 已完成。当前按紧急需求推进：
 
-1. 实现进程内子 Agent 和多 Agent Workflow。
-2. 在策略系统稳定后实现搜索、远程执行和受控权限能力。
-3. 功能稳定后再决定独立 npm 发行物和二进制方案。
+1. M5：实现进程内子 Agent 和 `delegate_task`。
+2. M6：实现 Monitor Runtime、增量日志、状态恢复和 TUI 监控。
+3. M7：实现 SSH/tmux 远程执行，并接入同一 Monitor Runtime。
+4. 后续再实现联网搜索、Policy/Git、Workflow、后台自动唤醒和受控权限。
+5. 功能稳定后再决定独立 npm 发行物和二进制方案。

@@ -33,11 +33,18 @@ BeauPi 在 `session_start` 生命周期中启动进程内监控器。任务触�
 
 ## 组件
 
+M6 先交付独立的 Monitor Runtime，负责目标注册、状态快照、增量日志和生命周期事件；本阶段（M11）只在其上增加后台任务启动、持久化和自动唤醒，不创建第二套进程监控器。
+
 ```text
+Monitor Runtime
+├── Monitor Registry
+├── Process/Tool/Sub-Agent/Remote Adapters
+├── Incremental Log Reader
+├── State Snapshot and Event Deduper
+└── Monitor Widget
+
 Background Task Manager
 ├── Process Runner
-├── Process Monitor
-├── Incremental Log Reader
 ├── Trigger Evaluator
 ├── Wake Queue
 ├── Progress Reviewer

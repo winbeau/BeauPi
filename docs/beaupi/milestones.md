@@ -42,13 +42,15 @@
 | M2 | 建立任务状态闭环 | Task Ledger、事件采集、Todo | M1 |
 | M3 | 建立文档驱动执行 | 文档发现、读取、Execution Contract | M2 |
 | M4 | 建立 Skill 管理闭环 | Registry、导入、校验、启停、重载 | M3 |
-| M5 | 建立进程内子 Agent | Agent Pool、Profile、`delegate_task` | M1、M3 |
-| M6 | 建立受预算搜索能力 | `web_search`、`web_fetch`、引用与缓存 | M3 |
-| M7 | 建立执行策略与 Git 工具 | Policy Engine、失败预算、Git Tools | M2、M3 |
-| M8 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M7 |
-| M9 | 建立后台任务自动唤醒 | 后台进程、Wake Queue、Session 恢复 | M5、M7 |
-| M10 | 建立远程与受控权限能力 | SSH、tmux、结构化 sudo | M7、M9 |
-| M11 | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | M0–M10 |
+| M5 | 建立进程内子 Agent | Agent Pool、Profile、`delegate_task` | M1、M3、M4 |
+| M6 | 建立 Monitor 监控闭环 | Monitor Runtime、状态、增量日志、事件 | M1、M2、M5 |
+| M7 | 建立 SSH/tmux 远程执行 | Execution Target、SSH、tmux、远程 Tool | M3、M6 |
+| M8 | 建立受预算搜索能力 | `web_search`、`web_fetch`、引用与缓存 | M3 |
+| M9 | 建立执行策略与 Git 工具 | Policy Engine、失败预算、Git Tools | M2、M3、M6、M7 |
+| M10 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M9 |
+| M11 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M9 |
+| M12 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M11 |
+| M13 | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | M0–M12 |
 
 ---
 
@@ -298,7 +300,7 @@ interface TaskLedger {
 
 ### 目标
 
-使用 Pi SDK 在当前进程创建隔离的子 Agent，并只向 Coordinator 返回结构化结果。
+使用 Pi SDK 在当前进程创建隔离的子 Agent，并只向 Coordinator 返回结构化结果，为后续监控和 Workflow 提供可靠执行单元。
 
 ### 交付物
 
@@ -307,8 +309,9 @@ interface TaskLedger {
 - 受控 ResourceLoader
 - 独立 System Prompt、Tool allowlist、Skill allowlist、预算和超时
 - `delegate_task`
-- 流式进度、取消和错误传播
+- 流式进度、取消、超时、轮数和 token 预算
 - 结构化输出：摘要、引用、修改、检查和错误
+- 稳定的 started/running/completed/failed/cancelled 生命周期事件
 - 禁止默认递归委派
 
 ### 测试
@@ -322,14 +325,94 @@ interface TaskLedger {
 - Provider 失败
 - Coordinator 只接收结构化结果
 - 子 Agent 无法再次调用 `delegate_task`
+- 生命周期事件在正常、失败和取消路径各只产生一次
 
 ### 验收标准
 
-Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主会话不会接收完整子 Agent 消息历史。
+Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主会话不会接收完整子 Agent 消息历史；结果和生命周期事件可以被 M6 Monitor Runtime 消费。
 
 ---
 
-## M6：联网搜索闭环
+## M6：Monitor 监控闭环
+
+### 目标
+
+建立统一的执行监控能力，先覆盖本地长进程、Tool 和子 Agent，再为 SSH/tmux 提供适配接口。监控器只采集和呈现确定性事实，不从日志文本猜测业务状态。
+
+### 交付物
+
+- session-scoped Monitor Registry 和 `MonitorRecord`
+- Process、Tool、Sub-Agent monitor adapter
+- `monitor_attach`、`monitor_list`、`monitor_status`、`monitor_logs`、`monitor_wait`、`monitor_stop`
+- `starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 状态
+- 开始时间、运行时长、最后活动、退出原因和资源快照
+- 基于 cursor/hash 的增量日志读取，完整输出文件路径
+- 完成、失败、超时、停滞和连接丢失事件的去重
+- 低成本进程轮询；模型 Progress Reviewer 为可选、有限预算的扩展
+- Monitor 状态接入 Tool renderer、Tasks Widget 和 Footer
+- Session 恢复后的状态重建；无法确认的目标必须标记为 `lost`
+- SSH/tmux adapter 接口，后续不创建第二套监控系统
+
+### 测试
+
+使用 faux provider、fake process adapter 和可控时钟覆盖：
+
+- 本地进程和子 Agent 的注册、状态转换和停止
+- 日志 cursor/hash 增量读取与完整日志路径
+- 无变化日志不触发模型调用
+- stalled、timeout、failed、cancelled 和 lost 事件
+- 相同状态事件去重以及多事件串行处理
+- Session 恢复后不重复计数，无法确认的状态保持 `lost`
+- Monitor Widget/Footer 在 80、120、160 列下不溢出
+
+### 验收标准
+
+用户能够统一查看本地进程、Tool 和子 Agent 的状态、运行时长、最后活动和新增日志，并能等待或停止支持取消的目标；历史日志不会重复注入上下文，监控轮询不会在无变化时消耗模型 token。
+
+### 实现边界
+
+M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动唤醒在 M11 完成，SSH/tmux 在 M7 接入本 Monitor Runtime。
+
+---
+
+## M7：SSH、tmux 远程执行
+
+### 目标
+
+以结构化 Tool 建立稳定的 SSH/tmux 连接能力，并将远程命令和长会话纳入 M6 Monitor Runtime。
+
+### 交付物
+
+- user/project scope 的 Execution Target 配置和信任边界
+- `target_select`、`remote_exec`
+- 复用系统 OpenSSH 配置、SSH Agent 和 known_hosts，不保存私钥或口令
+- SSH ControlMaster 连接复用、连接超时和明确关闭
+- 远程 read/write/edit/bash Operation adapter
+- `terminal_create`、`terminal_send`、`terminal_capture`、`terminal_status`、`terminal_close`
+- tmux 增量 capture、日志摘要和完整输出文件
+- 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
+- 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
+- 第一版普通用户模式边界；不实现 sudo 或任意 root shell
+
+### 测试
+
+使用 fake SSH/tmux adapter 覆盖：
+
+- 目标选择、参数验证和信任边界
+- 连接建立、复用、超时、关闭和断线
+- 远程命令成功、失败、取消和退出码
+- tmux 创建、发送、增量捕获、状态和关闭
+- 远程长日志 cursor、摘要和完整文件路径
+- Monitor 状态与远程会话生命周期一致
+- 不保存认证秘密，不把完整历史日志注入上下文
+
+### 验收标准
+
+Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；断线、超时和会话丢失状态可见；长日志默认增量展示。
+
+---
+
+## M8：联网搜索闭环
 
 ### 目标
 
@@ -353,17 +436,17 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 
 ---
 
-## M7：Policy Engine 与 Git Tools
+## M9：Policy Engine 与 Git Tools
 
 ### 目标
 
-把重复命令、失败预算、权限边界和高频 Git 操作从模型提示转化为确定性执行策略。
+把重复命令、失败预算、权限边界和高频 Git 操作从模型提示转化为确定性执行策略，并覆盖本地与远程执行。
 
 ### 交付物
 
 - 命令与错误分类
 - 等价操作签名
-- Shell、网络和失败预算
+- Shell、远程执行、网络和失败预算
 - `PolicyDecision`
 - `project_inspect`
 - `git_snapshot`
@@ -379,11 +462,11 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 
 ---
 
-## M8：多 Agent Workflow
+## M10：多 Agent Workflow
 
 ### 目标
 
-在已稳定的子 Agent 和策略系统上实现 DAG 调度。
+在已稳定的子 Agent、Monitor 和策略系统上实现 DAG 调度。
 
 ### 交付物
 
@@ -393,65 +476,71 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 - 单写者调度
 - 并行写入 Worktree 隔离
 - 节点结构化输入输出
+- 节点状态接入 Monitor、Todo、Footer 和统一状态符号
 - 首批工作流：`research`、`implement-review`、`parallel-review`、`debug`、`docs-execute`
 
 ### 验收标准
 
-`implement-review` 能串行完成实现与审查；两个只读节点能够并行；两个共享工作区写入节点不会并发执行。
+`implement-review` 能串行完成实现与审查；两个只读节点能够并行；两个共享工作区写入节点不会并发执行；节点状态和日志可在 Monitor 中查询。
 
 ---
 
-## M9：后台任务与自动唤醒
+## M11：后台任务与自动唤醒
 
 ### 目标
 
-让长时间运行的任务在模型回合结束后继续执行，并在关键事件发生时恢复 Agent。
+在 M6 Monitor Runtime 之上让长时间运行的本地或远程任务在模型回合结束后继续执行，并在关键事件发生时恢复 Agent。
 
 ### 交付物
 
 - `background_start`
+- `background_attach`
 - `background_status`
 - `background_logs`
 - `background_wait`
 - `background_cancel`
-- 增量日志和持久化任务状态
-- 自适应进程轮询
+- Monitor Registry 复用、增量日志和持久化任务状态
+- 自适应进程/远程会话轮询
 - Wake Queue 去重与串行处理
 - 空闲时触发 turn，忙碌时发送 follow-up
 - 受预算约束的 Progress Reviewer
 - Session 恢复时重新接管任务
 
+### 测试
+
+- 本地和远程长任务启动、接管、完成、失败、超时、停滞和取消
+- 日志无变化时不调用模型
+- Agent 忙碌时事件进入 follow-up 队列
+- 多个同时完成事件不会并发启动多个 Coordinator turn
+- Session 恢复后不重复消费事件
+- 后台任务继承当前用户模式，不能绕过权限策略
+
 ### 验收标准
 
-脚本完成后自动触发新的 Agent turn；无日志变化时不调用模型；多个同时完成事件不会并发启动多个 Coordinator turn。
+脚本完成后自动触发新的 Agent turn；无日志变化时不调用模型；多个同时完成事件不会并发启动多个 Coordinator turn；本地和远程任务使用同一套 Monitor 状态和日志语义。
 
----
-
-## M10：SSH、tmux 与受控权限
+## M12：受控权限能力
 
 ### 目标
 
-以结构化 Tool 替代远程执行和提权 Skill，并保持普通用户进程边界。
+在 SSH/tmux 和 Policy Engine 稳定后提供可审计的结构化提权，不改变 Agent 进程的普通用户边界。
 
 ### 交付物
 
-- Execution Target 配置
-- `target_select` 和 `remote_exec`
-- tmux create/send/capture/status/close
-- 增量远程日志
 - `/mode user`
 - `/mode sudo once`
 - `/mode sudo session <duration>`
-- `privileged_exec`
-- 参数验证、确认、超时降权和 JSONL 审计
+- 结构化 `privileged_exec`
+- 参数验证、显式确认和权限/超时降权
+- 非交互模式默认阻止
+- JSONL 审计日志
+- permission/confirm/blocked 状态复用统一 Tool renderer 和 Monitor
 
 ### 验收标准
 
-Agent 本身始终以普通用户运行；未授权 sudo 被阻止；结构化授权到期后自动恢复用户模式；远程长任务日志不会整体注入上下文。
+Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化授权到期后自动恢复用户模式；本地与远程提权均有审计记录。
 
----
-
-## M11：发行准备
+## M13：发行准备
 
 ### 目标
 
@@ -471,7 +560,7 @@ Agent 本身始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 新环境可以安装、启动、配置模型、运行交互会话并安全升级；发布产物不依赖仓库 workspace 文件。
 
-## 第一开发周期
+## 第一开发周期（已完成的历史记录）
 
 开始开发时只执行以下顺序：
 
@@ -507,10 +596,14 @@ Agent 本身始终以普通用户运行；未授权 sudo 被阻止；结构化�
 - 相关 BeauPi 文档和 `CHANGELOG.md` 已更新
 - 已记录下一里程碑所依赖的稳定接口
 
-## 推荐开发入口
+## 当前推荐开发入口
 
-第一项实现任务：
+当前实现任务按以下顺序推进：
 
-> 盘点 `packages/coding-agent/src/modes/interactive/` 中现有消息、ToolExecutionComponent、Tool renderer、Diff、Footer、Compact 和主题实现，先制定最小的 Claude Code 风格渲染基础，然后完成普通 Tool shell 与 Read/Write/Edit/Bash/Search 的第一轮改造。
+1. 盘点并复用现有 AgentSession、AgentSessionServices、Tool registry、Skill allowlist 和 M1/M2 的状态渲染组件。
+2. 完成 M5 `AgentProfile`、Agent Pool 和 `delegate_task`，先闭环成功、失败、取消、超时和结构化结果。
+3. 完成 M6 Monitor Registry、状态机、增量日志和 `monitor_*` Tool，并接入子 Agent 与 Footer/Tasks Widget。
+4. 完成 M7 Execution Target、SSH ControlMaster、远程 Tool 和 tmux 会话控制，再接入同一 Monitor Runtime。
+5. M5–M7 每个阶段都使用 faux provider、fake process/SSH/tmux adapter 覆盖正常、失败、取消、超时、恢复和安全边界。
 
-实现时先固定视觉组件和交互行为，再让后续 Task Ledger、Todo、子 Agent、Workflow 与后台任务接入这些组件。Write 折叠提示动态跳数字、Ctrl+O 展开和 Pi 跳动加载图标必须保留。
+不要创建第二套 Runtime、Session 或 ResourceLoader；不要在 M7 前实现 sudo，也不要用自动唤醒代替可验证的 Monitor 状态。Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。

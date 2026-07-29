@@ -9,8 +9,9 @@ BeauPi CLI / TUI
 │   ├── Task Ledger
 │   ├── Document Runtime
 │   ├── Skill Registry
-│   ├── Workflow Engine
 │   ├── Agent Pool
+│   ├── Monitor Runtime
+│   ├── Workflow Engine
 │   ├── Background Task Manager
 │   └── Policy Engine
 │
@@ -54,8 +55,9 @@ packages/coding-agent/
 │   │   ├── documents/       # Document Runtime 和 Execution Contract
 │   │   ├── skills/          # Skill Registry、导入和诊断
 │   │   ├── agents/          # Agent Pool、Profile 和委派
+│   │   ├── monitor/         # 进程、Tool、子 Agent 和远程目标监控
 │   │   ├── workflow/        # DAG、调度和节点状态
-│   │   ├── background/      # 后台任务、监控和唤醒队列
+│   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
 │   │   ├── policy/          # 命令、失败、预算和权限策略
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
@@ -193,9 +195,11 @@ M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract�
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
 - Tasks Widget 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
 
-## 后台任务与唤醒
+## Monitor 与后台任务
 
-Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列。进程完成或满足触发条件后，通过现有 Session 消息机制重新触发 Agent turn。
+Monitor Runtime 是本地进程、Tool、子 Agent、SSH 连接和 tmux 会话的统一观察层，负责确定性状态、最后活动时间、增量日志 cursor、生命周期事件去重和可视化。它不从日志文本猜测业务结论，也不会在无变化时调用模型。
+
+Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列，并复用 Monitor Runtime；进程完成或满足触发条件后，才通过现有 Session 消息机制重新触发 Agent turn。M6 先交付 Monitor，M11 再增加后台自动唤醒。
 
 系统区分两种轮询：
 

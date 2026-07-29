@@ -6,6 +6,16 @@ BeauPi 第一项开发工作是建立 Claude Code 风格 TUI。先固定消息�
 
 TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染现有真实数据，并为未来组件定义稳定的视觉接口；Todo、Agent、Workflow 和 Background 的真实状态分别在对应阶段接入。
 
+## 当前优先主线
+
+M4 完成后，近期开发只按以下顺序推进：
+
+1. 阶段 6：进程内子 Agent，先建立可隔离、可取消、可预算的执行单元。
+2. 阶段 7：Monitor 监控闭环，统一观察本地进程、Tool 和子 Agent 的状态、增量日志与异常事件。
+3. 阶段 8：SSH/tmux 远程执行，把远程命令和终端会话接入同一 Monitor Runtime。
+
+联网搜索、完整 Policy/Git、多 Agent Workflow 和自动唤醒后移。Monitor 第一版提供低成本状态采集、手动等待和可视化，不提前实现自动触发模型 turn；自动唤醒仍在后台任务阶段完成。SSH/tmux 第一版只使用普通用户权限，sudo 与结构化提权继续延后。
+
 ## 阶段 1：BeauPi 基础整合
 
 目标：在现有 `packages/coding-agent` 中建立最小可运行的 BeauPi 发行版，不创建新 Package。
@@ -97,19 +107,54 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 
 详细设计见 [Skill 导入与注册](./skills.md)。
 
+状态：已完成（2026-07-29）。
+
 ## 阶段 6：进程内子 Agent
 
 - 创建共享 ModelRuntime 的 Agent Pool
 - 实现受控子 Agent ResourceLoader
 - 实现 Agent Profile
 - 实现 `delegate_task`
-- 支持流式状态、取消、超时和预算
-- 返回结构化结果，不回传完整会话
+- 支持流式状态、取消、超时、轮数和 token 预算
+- 返回结构化摘要、引用、修改、检查和错误，不回传完整会话
+- 禁止子 Agent 默认递归调用 `delegate_task`
+- 输出稳定生命周期事件，供阶段 7 的 Monitor Runtime 接管
 - 对照 `AgentProgressLine`，将真实子 Agent 状态接入阶段 2 的树形 gutter 和状态组件
 
-验收：子 Agent 无需启动额外 Pi 进程，并能在 TUI 中实时展示状态。
+验收：Reviewer 子 Agent 无需启动额外 Pi 进程即可独立检查修改；Tool、Skill 和预算边界有效；主会话只接收结构化结果。
 
-## 阶段 7：联网搜索
+## 阶段 7：Monitor 监控闭环
+
+- 建立统一 Monitor Runtime 和 session-scoped Monitor Registry
+- 定义 Process、Tool 和 Sub-Agent monitor adapter
+- 实现 `monitor_attach`、`monitor_list`、`monitor_status`、`monitor_logs`、`monitor_wait` 和 `monitor_stop`
+- 统一 starting/running/healthy/stalled/completed/failed/cancelled/lost 状态
+- 记录开始时间、运行时长、最后活动、退出原因和可用资源快照
+- 日志按 cursor/hash 增量读取，完整输出保存在文件中
+- 对完成、失败、超时、停滞和连接丢失事件去重
+- 默认轮询不调用模型；只有显式 Progress Reviewer 才消耗模型预算
+- 状态接入 Tool renderer、Tasks Widget 和 Footer
+- Session 恢复后重建可确认状态，无法确认的目标标记为 lost，不猜测成功
+- 预留 SSH/tmux monitor adapter，避免阶段 8 创建第二套监控系统
+
+验收：本地长进程和子 Agent 可被统一列出、等待、查看增量日志和停止；状态变化不会重复计数；无日志变化时不调用模型或重复注入历史输出。
+
+## 阶段 8：SSH 和 tmux 远程执行
+
+- 增加 user/project scope 的 Execution Target 配置和信任边界
+- 实现 `target_select` 和 `remote_exec`
+- 复用系统 OpenSSH 配置、SSH Agent 和 known_hosts，不保存私钥或口令
+- 支持 SSH ControlMaster 连接复用、连接超时和明确关闭
+- 增加远程 read/write/edit/bash Operation adapter
+- 实现 `terminal_create`、`terminal_send`、`terminal_capture`、`terminal_status` 和 `terminal_close`
+- tmux capture 使用增量 cursor，完整日志写入文件
+- 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
+- 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
+- 第一版只允许普通用户执行，不实现 sudo 或任意 root shell
+
+验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；断线、超时和会话丢失状态可见；长日志不会整体污染上下文。
+
+## 阶段 9：联网搜索
 
 - 实现统一 SearchProvider 接口
 - 首先接入一个 Provider
@@ -123,33 +168,23 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 
 验收：研究结果优先使用官方来源，并保留可验证引用。
 
-## 阶段 8：失败与命令策略
+## 阶段 10：Policy Engine 与 Git Tools
 
-- 命令分类
-- 错误分类
+- 命令和错误分类
 - 等价操作签名
-- 缺少依赖时暂停
-- 权限错误时暂停
-- 网络 fallback 限制
-- Shell 软/硬预算
-- 专用 Tool 替代高频 Bash 操作
-- Policy block/confirm/replace/pause 状态接入统一 Tool 状态组件
-
-验收：达到失败或 fallback 预算后 Agent 暂停并报告原因，不继续尝试等价 Shell 方案。
-
-## 阶段 9：Git Tools
-
+- 缺少依赖、权限、认证、网络和超时停止策略
+- Shell、远程执行和网络 fallback 预算
+- `project_inspect`
 - `git_snapshot`
 - `git_diff`
 - `git_sync_status`
 - `git_commit`
-- 缓存失效规则
-- 并发会话安全检查
-- Git diff 和 commit 结果复用阶段 2 的 Diff 与 Tool renderer
+- 缓存失效和并发会话安全检查
+- Policy block/confirm/replace/pause 状态接入统一 Tool 状态组件
 
-验收：普通 commit 流程不再反复调用多个 Git 检查命令。
+验收：达到失败或 fallback 预算后 Agent 暂停并报告原因；普通 commit 流程通过结构化 Git Tool 完成，不重复执行等价检查。
 
-## 阶段 10：多 Agent Workflow
+## 阶段 11：多 Agent Workflow
 
 - 定义 Workflow YAML/JSON Schema
 - 实现 DAG 调度
@@ -157,7 +192,7 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 - 默认单写者
 - 增加 Worktree 隔离写入
 - 实现 `workflow_run/status/cancel`
-- 将真实节点状态接入统一 Todo、树形 gutter 和状态符号
+- 将真实节点状态接入统一 Monitor、Todo、树形 gutter 和状态符号
 
 首批工作流：
 
@@ -169,31 +204,18 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 
 验收：只读节点可以并行；共享工作区写入节点不能并发；Workflow 状态在 TUI 中实时更新。
 
-## 阶段 11：后台任务与自动唤醒
+## 阶段 12：后台任务与自动唤醒
 
-- 实现 Background Task Manager
+- 在阶段 7 Monitor Runtime 上增加 Background Task Manager，不创建第二套进程监控器
+- 实现 `background_start`、`background_attach`、`background_status`、`background_logs`、`background_wait` 和 `background_cancel`
 - 后台进程输出写入独立日志文件
 - 实现完成、失败、超时和关键日志触发器
 - Agent 空闲时通过现有 Session 消息机制自动恢复 turn
 - Agent 忙碌时进入 Wake Queue
-- 实现自适应进程轮询
-- 实现受预算约束的模型进度复查
-- Session 恢复时重新接管仍在运行的任务
-- 将真实后台状态接入阶段 2 的状态组件和 Footer
+- 实现自适应进程轮询和受预算约束的 Progress Reviewer
+- Session 恢复时重新接管仍在运行的本地或远程任务
 
-验收：模型回合结束后脚本继续执行，脚本结束时 Agent 自动读取结果并继续处理。
-
-## 阶段 12：SSH 和 tmux
-
-- Execution Target 配置
-- SSH ControlMaster 支持
-- 代理 read/write/edit/bash Operations
-- tmux 会话创建、发送、状态和停止
-- 增量日志捕获
-- 日志摘要和完整输出文件
-- 远程目标和长任务状态接入 Footer 与 Tool renderer
-
-验收：远程和 tmux 操作使用结构化 Tool；长日志默认增量展示且不会整体污染上下文。
+验收：模型回合结束后本地或远程脚本继续执行；脚本退出后自动唤醒 Agent；无变化时不调用模型；多个事件不会并发触发 Coordinator turn。
 
 ## 阶段 13：权限模式
 
@@ -201,7 +223,7 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 - `/mode sudo once`
 - `/mode sudo session <duration>`
 - 结构化 privileged actions
-- 非交互模式默认阻止
+- 本地和远程非交互模式默认阻止未授权提权
 - JSONL 审计日志
 - 自动超时降权
 - permission/confirm/blocked 状态复用统一 Tool renderer
@@ -244,14 +266,16 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 
 ## 第一版建议范围
 
-第一版按以下顺序实现：
+第一版按以下顺序形成可用闭环：
 
-1. Claude Code 风格 TUI 基础
-2. Task Ledger 和 Todo
-3. 文档发现与读取
-4. Skill Registry 和 `/skills`
+1. Claude Code 风格 TUI 基础（已完成）
+2. Task Ledger 和 Todo（已完成）
+3. 文档发现与读取（已完成）
+4. Skill Registry 和 `/skills`（已完成）
 5. 进程内 `delegate_task`
-6. 一个搜索 Provider
-7. 重复命令和缺少依赖检测
+6. Monitor Runtime、增量日志和运行状态可视化
+7. SSH/tmux 远程执行并接入 Monitor Runtime
+8. 一个搜索 Provider
+9. 重复命令、失败预算和结构化 Git Tools
 
-第一步只处理当前已有消息、Tool、Diff、Footer 和 Compact，不提前实现 Workflow、sudo、SSH、tmux 或后台 daemon。完成 TUI 基础后，所有新增功能必须直接使用统一的状态符号、gutter、折叠和宽度处理。
+当前从阶段 6 开始连续完成子 Agent、Monitor、SSH/tmux 三个闭环。除非它们出现确定性安全阻塞，否则不提前铺开 Workflow、自动唤醒或 sudo；后续功能继续复用统一状态符号、gutter、折叠和宽度处理。

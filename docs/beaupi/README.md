@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0 开发基线、M1 Claude Code 风格 TUI、M2 Task Ledger、M3 Document Runtime 和 M4 Skill Registry 已完成；下一阶段为 M5 进程内子 Agent。
+当前进度：M0 开发基线、M1 Claude Code 风格 TUI、M2 Task Ledger、M3 Document Runtime 和 M4 Skill Registry 已完成。当前优先主线为 M5 进程内子 Agent、M6 Monitor 监控闭环、M7 SSH/tmux 远程执行；联网搜索、Workflow、自动唤醒和 sudo 后置。
 
 ## 文档
 
@@ -27,6 +27,16 @@ BeauPi 是一个文档驱动、工具优先、支持多 Agent 协作的终端编
 - 长任务过程难以理解和观察
 - 缺少原生领域工具、受控提权和流畅的子 Agent 调度
 - Agent 空闲后无法等待后台任务并在关键事件发生时自动恢复工作
+
+## 当前优先级
+
+近期先交付三个可直接使用的能力闭环：
+
+1. 进程内 `delegate_task` 子 Agent
+2. 本地进程、Tool 和子 Agent 的 Monitor 监控、增量日志和状态恢复
+3. SSH/tmux 远程执行，并复用同一 Monitor Runtime
+
+Monitor 第一版不自动触发模型 turn；自动唤醒在后续后台任务阶段实现。SSH/tmux 第一版保持普通用户边界，不包含 sudo。
 
 ## 实现策略
 
