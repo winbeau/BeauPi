@@ -101,6 +101,8 @@ export interface TaskTodo {
 export type TaskDocumentItemStatus = "pending" | "active" | "completed" | "failed" | "cancelled" | "blocked" | "stale";
 
 export interface TaskRequirementState extends Requirement {
+	/** Policy requirements remain enforceable in the contract but do not project as task Todos. */
+	projection: "task" | "policy";
 	status: TaskDocumentItemStatus;
 	evidenceCommandIds: string[];
 }
@@ -183,6 +185,11 @@ const SHELL_OPERATORS = new Set([";", "&&", "||", "|", "&", "\n"]);
 const VERIFICATION_TOOL_NAMES = new Set(["test", "tests", "check", "verify", "lint", "typecheck", "build"]);
 const READ_TOOL_NAMES = new Set(["read", "docs_read"]);
 const MODIFY_TOOL_NAMES = new Set(["edit", "write"]);
+const POLICY_DOCUMENT_KINDS: ReadonlySet<ExecutionContract["documents"][number]["kind"]> = new Set([
+	"agents",
+	"claude",
+	"contributing",
+]);
 const DEFAULT_TASK_OWNER = "main";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1003,10 +1010,20 @@ export class TaskLedger {
 			return "pending";
 		};
 		const requirementStates: TaskRequirementState[] = contract.requirements.map((requirement) => {
+			const citedDocuments = contract.documents.filter((document) =>
+				requirement.citations.some((citation) => citation.documentId === document.id),
+			);
+			const projection =
+				citedDocuments.length > 0 &&
+				citedDocuments.every(
+					(document) => POLICY_DOCUMENT_KINDS.has(document.kind) && !document.sources.includes("explicit"),
+				)
+					? "policy"
+					: "task";
 			const evidenceCommandIds = checkStates
 				.filter((check) => requirement.requiredCheckIds.includes(check.id))
 				.flatMap((check) => check.evidenceCommandIds);
-			return { ...requirement, status: statusForRequirement(requirement), evidenceCommandIds };
+			return { ...requirement, projection, status: statusForRequirement(requirement), evidenceCommandIds };
 		});
 		const completionCriteria: TaskCompletionCriterionState[] = contract.completionCriteria.map((criterion) => {
 			const checks = checkStates.filter((check) => criterion.requiredCheckIds.includes(check.id));
@@ -1071,6 +1088,7 @@ export class TaskLedger {
 				source: contractSource ? `${contractSource.displayPath}:${contractSource.startLine}` : undefined,
 			});
 			for (const requirement of documentSnapshot.requirements) {
+				if (requirement.projection === "policy") continue;
 				const status: TaskTodoStatus =
 					requirement.status === "completed"
 						? "completed"

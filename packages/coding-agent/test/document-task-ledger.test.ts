@@ -63,6 +63,10 @@ describe("TaskLedger Document Runtime projection", () => {
 			const before = ledger.getSnapshot();
 			expect(before.documentContract?.contract.id).toBe(resolved.contract.id);
 			expect(before.documentContract?.requiredChecks.some((check) => check.status === "pending")).toBe(true);
+			expect(before.documentContract?.requirements.every((requirement) => requirement.projection === "policy")).toBe(
+				true,
+			);
+			expect(before.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
 			ledger.handleAgentEvent({
 				type: "tool_execution_start",
 				toolCallId: "check",
