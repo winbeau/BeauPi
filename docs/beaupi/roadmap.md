@@ -129,6 +129,8 @@ M5 实现了 `AgentProfile`、受控 ResourceLoader、共享 Runtime 的 Agent P
 
 ## 阶段 7：Monitor 监控闭环
 
+状态：已完成（2026-07-29）。
+
 - 建立统一 Monitor Runtime 和 session-scoped Monitor Registry
 - 定义 Process、Tool 和 Sub-Agent monitor adapter
 - 实现 `monitor_attach`、`monitor_list`、`monitor_status`、`monitor_logs`、`monitor_wait` 和 `monitor_stop`
@@ -142,6 +144,8 @@ M5 实现了 `AgentProfile`、受控 ResourceLoader、共享 Runtime 的 Agent P
 - 预留 SSH/tmux monitor adapter，避免阶段 8 创建第二套监控系统
 
 验收：本地长进程和子 Agent 可被统一列出、等待、查看增量日志和停止；状态变化不会重复计数；无日志变化时不调用模型或重复注入历史输出。
+
+M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、cursor/hash 日志读取、session 恢复丢失判定、M5 AgentPool 事件接入、六个 `monitor_*` Tool 以及 Tool/Tasks/Footer 可视化均接入现有 AgentSession 生命周期。默认轮询不调用模型；SSH/tmux、自动唤醒和 sudo 保持后续阶段边界。
 
 ## 阶段 8：SSH 和 tmux 远程执行
 

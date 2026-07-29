@@ -82,6 +82,7 @@ import {
 	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
 } from "../../core/model-resolver.ts";
+import { MONITOR_SESSION_ENTRY_TYPE } from "../../core/monitor/index.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -398,8 +399,9 @@ export class InteractiveMode {
 	// Skill commands: command name -> skill file path
 	private skillCommands = new Map<string, string>();
 
-	// Agent subscription unsubscribe function
+	// Agent and Monitor subscription unsubscribe functions
 	private unsubscribe?: () => void;
+	private unsubscribeMonitor?: () => void;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !)
@@ -1756,6 +1758,9 @@ export class InteractiveMode {
 
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		this.unsubscribeMonitor?.();
+		this.unsubscribeMonitor = undefined;
+		this.session.monitorRuntime.stopPolling();
 		this.applyRuntimeSettings();
 
 		if (options.renderBeforeBind) {
@@ -1772,6 +1777,12 @@ export class InteractiveMode {
 		if (!options.renderBeforeBind) {
 			this.subscribeToAgent();
 		}
+		this.unsubscribeMonitor = this.session.monitorRuntime.subscribe(() => {
+			this.footer.invalidate();
+			this.taskLedgerWidget.invalidate();
+			this.ui.requestRender();
+		});
+		this.session.monitorRuntime.startPolling();
 
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
@@ -1791,6 +1802,7 @@ export class InteractiveMode {
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
+		this.streamingComponent?.setThoughtAnimationEnabled(false);
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.dynamicWorkingMessage = undefined;
@@ -2969,7 +2981,9 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.ui,
 					);
+					this.streamingComponent.setThoughtAnimationEnabled(true);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage);
@@ -3042,6 +3056,7 @@ export class InteractiveMode {
 						this.streamingMessage.errorMessage = errorMessage;
 					}
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.setThoughtAnimationEnabled(false);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3127,6 +3142,7 @@ export class InteractiveMode {
 				this.clearStatusIndicator("working");
 				this.dynamicWorkingMessage = undefined;
 				if (this.streamingComponent) {
+					this.streamingComponent.setThoughtAnimationEnabled(false);
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
@@ -3442,7 +3458,7 @@ export class InteractiveMode {
 
 		for (const item of items) {
 			if (isCustomSessionEntry(item)) {
-				this.addCustomEntryToChat(item);
+				if (item.customType !== MONITOR_SESSION_ENTRY_TYPE) this.addCustomEntryToChat(item);
 				continue;
 			}
 
@@ -6414,6 +6430,7 @@ export class InteractiveMode {
 			this.ui.terminal.setProgress(false);
 		}
 		this.clearStatusIndicator();
+		this.streamingComponent?.setThoughtAnimationEnabled(false);
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
@@ -6421,6 +6438,9 @@ export class InteractiveMode {
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}
+		this.unsubscribeMonitor?.();
+		this.unsubscribeMonitor = undefined;
+		this.session.monitorRuntime.stopPolling();
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;

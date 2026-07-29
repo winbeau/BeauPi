@@ -205,6 +205,7 @@ export {
 	ModelRuntime,
 	type ModelRuntimeAuthOverrides,
 } from "./core/model-runtime.ts";
+export * from "./core/monitor/index.ts";
 export type {
 	PackageManager,
 	PathMetadata,

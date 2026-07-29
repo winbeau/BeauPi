@@ -2,6 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
+import type { MonitorRecord } from "../src/core/monitor/index.ts";
 import type { TaskPhase, TaskVerificationStatus } from "../src/core/state/task-ledger.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -28,6 +29,7 @@ function createSession(options: {
 	taskPhase?: TaskPhase;
 	filesModified?: string[];
 	verificationStatus?: TaskVerificationStatus;
+	monitors?: MonitorRecord[];
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -84,6 +86,19 @@ function createSession(options: {
 		getContextUsage: () => ({ tokens: 24_600, contextWindow: 200_000, percent: 12.3 }),
 		modelRuntime: {
 			isUsingOAuth: () => false,
+		},
+		monitorRuntime: {
+			getSummary: () => ({
+				total: options.monitors?.length ?? 0,
+				starting: 0,
+				running: options.monitors?.filter((record) => record.status === "running").length ?? 0,
+				healthy: options.monitors?.filter((record) => record.status === "healthy").length ?? 0,
+				stalled: options.monitors?.filter((record) => record.status === "stalled").length ?? 0,
+				completed: options.monitors?.filter((record) => record.status === "completed").length ?? 0,
+				failed: options.monitors?.filter((record) => record.status === "failed").length ?? 0,
+				cancelled: options.monitors?.filter((record) => record.status === "cancelled").length ?? 0,
+				lost: options.monitors?.filter((record) => record.status === "lost").length ?? 0,
+			}),
 		},
 		taskLedger: {
 			getSnapshot: () => ({
@@ -248,6 +263,34 @@ describe("FooterComponent width handling", () => {
 		const lines = footer.render(120).map(stripAnsi);
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("/tmp/project (main) · verify · 2 files · verify passed");
+	});
+
+	it("shows Monitor running and attention counts without overflowing", () => {
+		const monitors: MonitorRecord[] = [
+			{
+				version: 1,
+				id: "mon-footer",
+				sessionId: "session",
+				target: { kind: "process", pid: 42 },
+				kind: "process",
+				name: "build",
+				taskSummary: "Build",
+				createdAt: 1,
+				startedAt: 1,
+				durationMs: 10,
+				lastActivityAt: 1,
+				status: "stalled",
+				logCursor: 0,
+				diagnostics: [],
+			},
+		];
+		const session = createSession({ sessionName: "", monitors });
+		const footer = new FooterComponent(session, createFooterData(1));
+		for (const width of [80, 120, 160]) {
+			const lines = footer.render(width).map(stripAnsi);
+			expect(lines[0]).toContain("mon 0 run · 1 attention");
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
 	});
 
 	it("marks Kimi Coding costs as subscription estimates", () => {

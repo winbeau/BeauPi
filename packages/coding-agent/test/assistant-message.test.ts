@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { setCapabilities, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -45,6 +45,7 @@ describe("AssistantMessageComponent", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		initTheme("dark", false);
 	});
 
@@ -104,7 +105,7 @@ describe("AssistantMessageComponent", () => {
 
 		expect(plainLines(component)).toEqual(["", "Defining optional renderer exports"]);
 		expect(component.render(80).join("\n")).toContain(
-			theme.italic(theme.fg("thinkingText", "Defining optional renderer exports")),
+			theme.fg("toolTitle", theme.bold(theme.italic("Defining optional renderer exports"))),
 		);
 	});
 
@@ -128,6 +129,40 @@ describe("AssistantMessageComponent", () => {
 			"  ⎿  Planning README verification",
 			"  ⎿  Inspecting code checks",
 		]);
+		const rendered = component.render(80).join("\n");
+		expect(rendered).toContain(theme.fg("toolTitle", theme.bold(theme.italic("Thought Chain"))));
+		expect(rendered).toContain(theme.fg("toolTitle", theme.bold(theme.italic("Planning README verification"))));
+		expect(rendered).toContain(theme.fg("toolTitle", theme.bold(theme.italic("Inspecting code checks"))));
+	});
+
+	test("animates only the latest summary with cycling period suffixes", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const tui = { requestRender } as unknown as TUI;
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "**Planning changes**\n\n**Checking behavior**" }]),
+			false,
+			undefined,
+			"Thinking...",
+			0,
+			tui,
+		);
+
+		component.setThoughtAnimationEnabled(true);
+		const firstFrame = stripAnsi(component.render(80).join("\n"));
+		expect(firstFrame).toContain("Checking behavior.");
+		expect(firstFrame).not.toContain("Planning changes.");
+		vi.advanceTimersByTime(500);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Checking behavior..");
+		vi.advanceTimersByTime(500);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Checking behavior...");
+		expect(requestRender).toHaveBeenCalledTimes(2);
+
+		component.setThoughtAnimationEnabled(false);
+		const callsBeforeAdvance = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(1000);
+		expect(requestRender).toHaveBeenCalledTimes(callsBeforeAdvance);
+		expect(plainLines(component)).toEqual(["", "Thought Chain", "  ⎿  Planning changes", "  ⎿  Checking behavior"]);
 	});
 
 	test("keeps the first and latest summaries without duplicating streaming updates", () => {
@@ -179,7 +214,7 @@ describe("AssistantMessageComponent", () => {
 		expect(plainLines(component)).toEqual(["", "first", "second"]);
 	});
 
-	test("renders expanded thinking as foreground-only dim italic content", () => {
+	test("renders summarized thinking as foreground-only bright bold italic content", () => {
 		const component = new AssistantMessageComponent(
 			createAssistantMessage([{ type: "thinking", thinking: "private reasoning" }]),
 			false,
@@ -189,7 +224,8 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain(theme.getFgAnsi("thinkingText"));
+		expect(rendered).toContain(theme.getFgAnsi("toolTitle"));
+		expect(rendered).toContain(theme.fg("toolTitle", theme.bold(theme.italic("private reasoning"))));
 		expect(rendered).not.toContain(theme.getBgAnsi("userMessageBg"));
 		expect(rendered).not.toContain(theme.getBgAnsi("customMessageBg"));
 		expect(stripAnsi(rendered)).toContain("private reasoning");

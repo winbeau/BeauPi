@@ -383,6 +383,16 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 
 M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动唤醒在 M11 完成，SSH/tmux 在 M7 接入本 Monitor Runtime。
 
+### 验收记录（2026-07-29）
+
+- `MonitorRuntime` 持有唯一 session-scoped `MonitorRegistry`，复用现有 `AgentSession`、`AgentPool`、Tool registry、SessionManager 和 ResourceLoader；没有创建第二套 Agent Runtime、Session 或任务账本。
+- `MonitorRecord` 固化稳定 ID、Process/Tool/Sub-Agent/SSH-tmux 目标、任务摘要、时间、运行时长、最后活动、资源快照、退出信息、日志 cursor/hash 和完整日志路径；状态机严格限制为 `starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost`。
+- Node/fake Process adapter、事件驱动 Tool/Sub-Agent adapter 和未实现的 SSH/tmux adapter 接口已接入。M5 `AgentPool` 的生命周期事件直接映射到同一 Monitor record，并支持通过现有 pool 请求取消。
+- `monitor_attach`、`monitor_list`、`monitor_status`、`monitor_logs`、`monitor_wait`、`monitor_stop` 使用 TypeBox/Compile 参数校验并返回结构化 details；等待、停止和日志读取均不启动模型回合。
+- `IncrementalLogReader` 使用 cursor、完整内容 hash、prefix hash 和文件 identity 识别追加、截断、轮转、目标丢失及日志文件不可用，不重复返回历史日志；完整日志路径始终保留在 record/details 中。
+- 生命周期事件按状态/原因/退出事实去重并串行派发；Session 恢复重建当前 branch 的最新 record，Process 只能在 adapter 确认后恢复，无法确认的非终态目标标记为 `lost`，不猜测成功。
+- Monitor 状态接入 Tool renderer、Tasks Widget 和 Footer；测试覆盖 faux provider、fake adapter、可控时钟、状态转换、超时/停滞/丢失、增量日志、事件去重串行化、M5 事件接入和 80/120/160 列宽度。
+
 ---
 
 ## M7：SSH、tmux 远程执行

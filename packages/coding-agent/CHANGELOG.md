@@ -13,6 +13,7 @@
 - Added remote BeauPi Skill imports and updates from Git, npm, and HTTPS sources with lifecycle-free staging, SHA-256 pins, validation/security review, explicit confirmation, symlink/cache filtering, atomic replacement, structured diagnostics, `/skill-update`, and controlled ResourceLoader Skill allowlists.
 - Added complete `/skills` registry management details, searchable source/scope/path/diagnostic fields, collision-side display, SKILL.md viewing, and explicit disabled actions for non-updateable sources.
 - Added BeauPi M5 in-process sub-agents with isolated `AgentSession` contexts, shared ModelRuntime/Provider/ResourceLoader lifecycles, AgentProfile Tool/Skill/file boundaries and budgets, bounded concurrency/cancellation/timeouts, non-recursive `delegate_task`, structured results, and Monitor-ready lifecycle/progress events.
+- Added the M6 session-scoped MonitorRuntime and MonitorRegistry with deterministic Process/Tool/Sub-Agent records, fake adapters, the reserved SSH/tmux adapter interface, six `monitor_*` Tools, cursor/hash incremental logs, lifecycle event deduplication, and Session restoration loss handling.
 
 ### Changed
 
@@ -25,6 +26,7 @@
 - Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
+- Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
 
 ### Fixed
 

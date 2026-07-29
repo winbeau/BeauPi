@@ -7,6 +7,7 @@ import type { AgentPoolConfig } from "./agents/agent-profile.ts";
 import { DocumentRuntime } from "./documents/document-runtime.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+import type { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import {
 	DefaultResourceLoader,
 	type DefaultResourceLoaderOptions,
@@ -64,6 +65,7 @@ export interface CreateAgentSessionFromServicesOptions {
 	noTools?: CreateAgentSessionOptions["noTools"];
 	customTools?: ToolDefinition[];
 	agentPool?: AgentPoolConfig | false;
+	monitorRuntime?: MonitorRuntime;
 }
 
 /**
@@ -222,6 +224,7 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		agentPool: options.agentPool,
+		monitorRuntime: options.monitorRuntime,
 		sessionStartEvent: options.sessionStartEvent,
 	});
 }

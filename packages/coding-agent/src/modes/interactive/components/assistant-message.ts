@@ -6,6 +6,7 @@ import {
 	type MarkdownTheme,
 	Spacer,
 	Text,
+	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -14,12 +15,19 @@ import { BEAUPI_STATUS_SYMBOLS, fitSingleLine, resultGutter } from "./beaupi-sty
 import { getThinkingSummaryLinesFromBlocks } from "./status-indicator.ts";
 
 const THOUGHT_CHAIN_TITLE = "Thought Chain";
+const THOUGHT_ACTIVITY_SUFFIXES = [".", "..", "..."] as const;
+
+function thoughtChainText(text: string): string {
+	return theme.fg("toolTitle", theme.bold(theme.italic(text)));
+}
 
 class ThoughtChainComponent implements Component {
 	private readonly summaries: readonly string[];
+	private readonly getLatestSuffix: () => string;
 
-	constructor(summaries: readonly string[]) {
+	constructor(summaries: readonly string[], getLatestSuffix: () => string = () => "") {
 		this.summaries = summaries;
+		this.getLatestSuffix = getLatestSuffix;
 	}
 
 	invalidate(): void {}
@@ -27,12 +35,15 @@ class ThoughtChainComponent implements Component {
 	render(width: number): string[] {
 		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
 		if (availableWidth === 0 || this.summaries.length === 0) return [];
+		const latestIndex = this.summaries.length - 1;
+		const renderSummary = (summary: string, index: number): string =>
+			thoughtChainText(`${summary}${index === latestIndex ? this.getLatestSuffix() : ""}`);
 		if (this.summaries.length === 1) {
 			return [
 				fitSingleLine(
 					[
 						{
-							text: theme.italic(theme.fg("thinkingText", this.summaries[0]!)),
+							text: renderSummary(this.summaries[0]!, 0),
 							required: true,
 							truncate: true,
 						},
@@ -48,10 +59,16 @@ class ThoughtChainComponent implements Component {
 				: [this.summaries[0]!, "…", this.summaries[this.summaries.length - 1]!];
 		return [
 			fitSingleLine(
-				[{ text: theme.bold(theme.fg("thinkingText", THOUGHT_CHAIN_TITLE)), required: true, truncate: true }],
+				[{ text: thoughtChainText(THOUGHT_CHAIN_TITLE), required: true, truncate: true }],
 				availableWidth,
 			),
-			...visibleSummaries.map((summary) => resultGutter(theme.fg("thinkingText", summary), theme, availableWidth)),
+			...visibleSummaries.map((summary, index) =>
+				resultGutter(
+					renderSummary(summary, index === visibleSummaries.length - 1 ? latestIndex : index),
+					theme,
+					availableWidth,
+				),
+			),
 		];
 	}
 }
@@ -99,6 +116,10 @@ export class AssistantMessageComponent extends Container {
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
+	private readonly tui?: TUI;
+	private thoughtAnimationTimer: ReturnType<typeof setInterval> | undefined;
+	private thoughtAnimationPhase = 0;
+	private thoughtAnimationEnabled = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -106,9 +127,11 @@ export class AssistantMessageComponent extends Container {
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
+		tui?: TUI,
 	) {
 		super();
 
+		this.tui = tui;
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
@@ -149,6 +172,24 @@ export class AssistantMessageComponent extends Container {
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
+	}
+
+	setThoughtAnimationEnabled(enabled: boolean): void {
+		if (this.thoughtAnimationEnabled === enabled) return;
+		this.thoughtAnimationEnabled = enabled;
+		if (enabled && this.tui) {
+			this.thoughtAnimationPhase = 0;
+			this.thoughtAnimationTimer ??= setInterval(() => {
+				this.thoughtAnimationPhase = (this.thoughtAnimationPhase + 1) % THOUGHT_ACTIVITY_SUFFIXES.length;
+				this.tui?.requestRender();
+			}, 500);
+			this.thoughtAnimationTimer.unref?.();
+		} else if (this.thoughtAnimationTimer) {
+			clearInterval(this.thoughtAnimationTimer);
+			this.thoughtAnimationTimer = undefined;
+			this.thoughtAnimationPhase = 0;
+		}
+		if (this.lastMessage) this.updateContent(this.lastMessage);
 	}
 
 	override render(width: number): string[] {
@@ -199,7 +240,9 @@ export class AssistantMessageComponent extends Container {
 			const component = this.hideThinkingBlock
 				? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 0, 0)
 				: thinkingSummaries.length > 0
-					? new ThoughtChainComponent(thinkingSummaries)
+					? new ThoughtChainComponent(thinkingSummaries, () =>
+							this.thoughtAnimationEnabled ? THOUGHT_ACTIVITY_SUFFIXES[this.thoughtAnimationPhase]! : "",
+						)
 					: new Markdown(thinkingBlocks.join("\n\n"), 0, 0, this.markdownTheme, {
 							color: (text: string) => theme.fg("thinkingText", text),
 							italic: true,

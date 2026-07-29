@@ -1,5 +1,6 @@
 import { type Component, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
+import type { MonitorRecord, MonitorStatus } from "../../../core/monitor/index.ts";
 import {
 	type CommandRecord,
 	selectTaskTodos,
@@ -8,7 +9,7 @@ import {
 	type TaskTodoStatus,
 } from "../../../core/state/task-ledger.ts";
 import { theme } from "../theme/theme.ts";
-import { fitSingleLine } from "./beaupi-style.ts";
+import { activityStateSymbol, fitSingleLine } from "./beaupi-style.ts";
 
 function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
@@ -120,6 +121,58 @@ function verificationLabel(snapshot: TaskLedgerSnapshot): string {
 	return snapshot.verification.status === "none" ? "" : `verify ${snapshot.verification.status}`;
 }
 
+function monitorActivityState(
+	status: MonitorStatus,
+): "pending" | "active" | "completed" | "failed" | "blocked" | "cancelled" {
+	if (status === "starting") return "pending";
+	if (status === "running" || status === "healthy") return "active";
+	if (status === "completed") return "completed";
+	if (status === "failed") return "failed";
+	if (status === "cancelled") return "cancelled";
+	return "blocked";
+}
+
+function monitorRank(record: MonitorRecord): number {
+	if (record.status === "failed" || record.status === "stalled" || record.status === "lost") return 0;
+	if (record.status === "starting" || record.status === "running" || record.status === "healthy") return 1;
+	return 2;
+}
+
+function selectMonitorRows(records: readonly MonitorRecord[], maxVisible: number): MonitorRecord[] {
+	return records
+		.map((record, index) => ({ record, index }))
+		.sort(
+			(left, right) =>
+				monitorRank(left.record) - monitorRank(right.record) ||
+				right.record.lastActivityAt - left.record.lastActivityAt ||
+				right.index - left.index,
+		)
+		.slice(0, Math.max(0, Math.floor(maxVisible)))
+		.map(({ record }) => record);
+}
+
+function formatMonitorDuration(milliseconds: number): string {
+	const seconds = Math.max(0, milliseconds) / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	return `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)
+		.toString()
+		.padStart(2, "0")}s`;
+}
+
+function renderMonitor(record: MonitorRecord, width: number): string {
+	const prefix = `  ${activityStateSymbol(monitorActivityState(record.status))} `;
+	return fitSingleLine(
+		[
+			{ text: prefix, required: true },
+			{ text: theme.fg("dim", "Monitor"), required: true },
+			{ text: record.name, separator: " ", required: true, truncate: true },
+			{ text: theme.fg("dim", record.status), separator: " · ", priority: 1 },
+			{ text: theme.fg("dim", formatMonitorDuration(record.durationMs)), separator: " · ", priority: 2 },
+		],
+		width,
+	);
+}
+
 export class TaskLedgerWidget implements Component {
 	private session: AgentSession;
 	private readonly tui: TUI;
@@ -139,10 +192,13 @@ export class TaskLedgerWidget implements Component {
 		const availableWidth = safeWidth(width);
 		if (availableWidth === 0) return [];
 		const snapshot = this.session.taskLedger.getSnapshot();
-		if (snapshot.todos.length === 0) return [];
+		const monitorRuntime = this.session.monitorRuntime;
+		const monitorRecords = monitorRuntime?.list({ includeTerminal: true }) ?? [];
+		if (snapshot.todos.length === 0 && monitorRecords.length === 0) return [];
 		const rows = terminalRows(this.tui);
 		const todoLimit = taskTodoLimit(rows);
 		const selection = selectTaskTodos(snapshot.todos, todoLimit);
+		const monitorSummary = monitorRuntime?.getSummary();
 		const header = fitSingleLine(
 			[
 				{ text: theme.bold("Tasks"), required: true },
@@ -160,6 +216,23 @@ export class TaskLedgerWidget implements Component {
 				},
 				{ text: theme.fg("dim", verificationLabel(snapshot)), separator: " · ", priority: 0 },
 				{
+					text:
+						monitorSummary && monitorSummary.total > 0
+							? theme.fg(
+									monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
+										? "warning"
+										: "accent",
+									`monitors ${monitorSummary.running + monitorSummary.healthy} running${
+										monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
+											? ` · ${monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost} attention`
+											: ""
+									}`,
+								)
+							: "",
+					separator: " · ",
+					priority: 1,
+				},
+				{
 					text: snapshot.documentContract
 						? theme.fg(
 								snapshot.documentContract.stale ? "warning" : "dim",
@@ -175,6 +248,9 @@ export class TaskLedgerWidget implements Component {
 		const lines = [header, ...selection.visible.map((todo) => renderTodo(todo, availableWidth))];
 		const hiddenSummary = hiddenTodoSummary(selection.hidden, availableWidth);
 		if (hiddenSummary) lines.push(hiddenSummary);
+		for (const record of selectMonitorRows(monitorRecords, Math.max(2, Math.min(4, todoLimit)))) {
+			lines.push(renderMonitor(record, availableWidth));
+		}
 
 		return lines;
 	}

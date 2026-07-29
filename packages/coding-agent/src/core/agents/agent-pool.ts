@@ -323,6 +323,14 @@ export class AgentPool {
 		return this.maxObservedConcurrencyValue;
 	}
 
+	/** Request cancellation for an active task without exposing child session state. */
+	cancelTask(taskId: string): boolean {
+		const task = this.activeTasks.get(taskId);
+		if (!task) return false;
+		task.cancel();
+		return true;
+	}
+
 	subscribe(listener: AgentLifecycleEventListener): () => void {
 		this.eventListeners.add(listener);
 		return () => this.eventListeners.delete(listener);

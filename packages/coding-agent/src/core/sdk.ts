@@ -13,6 +13,7 @@ import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefi
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
@@ -88,6 +89,8 @@ export interface CreateAgentSessionOptions {
 	documentRuntime?: DocumentRuntime;
 	/** Enable the BeauPi in-process Agent Pool for this Coordinator session. */
 	agentPool?: AgentPoolConfig | false;
+	/** Inject a session-scoped Monitor Runtime, primarily for deterministic tests. */
+	monitorRuntime?: MonitorRuntime;
 }
 
 /** Result from createAgentSession */
@@ -260,9 +263,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					createSession: (childOptions) => createAgentSession(childOptions),
 				})
 			: undefined;
-	const customTools = childAgentPool
-		? [...(options.customTools ?? []), childAgentPool.delegateTaskTool]
-		: options.customTools;
+	const monitorRuntime =
+		options.monitorRuntime ??
+		new MonitorRuntime({
+			sessionId: sessionManager.getSessionId(),
+			cwd,
+			sessionManager,
+			agentPool: childAgentPool,
+		});
+	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
+	const customTools = [...(options.customTools ?? [])];
+	if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
+	for (const monitorTool of monitorTools) {
+		if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
+	}
 	const defaultActiveToolNames: string[] = [
 		"read",
 		"bash",
@@ -420,6 +434,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		customTools,
 		modelRuntime,
 		agentPool: childAgentPool,
+		monitorRuntime,
 		initialActiveToolNames,
 		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,
 		allowedToolNames,
@@ -429,6 +444,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		documentRuntime,
 	});
 	await session.initializeDocumentRuntime();
+	await session.initializeMonitorRuntime();
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

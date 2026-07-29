@@ -106,6 +106,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
@@ -242,6 +243,8 @@ export interface AgentSessionConfig {
 	documentRuntime?: DocumentRuntime;
 	/** Optional in-process child-agent pool owned by this Coordinator session. */
 	agentPool?: AgentPool;
+	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
+	monitorRuntime?: MonitorRuntime;
 }
 
 export interface ExtensionBindings {
@@ -386,6 +389,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private _agentPool?: AgentPool;
+	readonly monitorRuntime: MonitorRuntime;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -421,6 +425,14 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._agentPool = config.agentPool;
+		this.monitorRuntime =
+			config.monitorRuntime ??
+			new MonitorRuntime({
+				sessionId: config.sessionManager.getSessionId(),
+				cwd: config.cwd,
+				sessionManager: config.sessionManager,
+				agentPool: this._agentPool,
+			});
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
@@ -439,6 +451,11 @@ export class AgentSession {
 			activeToolNames: this._initialActiveToolNames,
 			includeAllExtensionTools: true,
 		});
+		this.monitorRuntime.bindAgentSession({
+			subscribe: (listener) => this.subscribe(listener),
+			getAbortSignal: () => this.agent.signal,
+			agentPool: this._agentPool,
+		});
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -454,6 +471,10 @@ export class AgentSession {
 		const contract = await this.documentRuntime.initialize();
 		this.taskLedger.setDocumentRuntimeContract(contract);
 		this._refreshDocumentRuntimePrompt();
+	}
+
+	async initializeMonitorRuntime(): Promise<void> {
+		await this.monitorRuntime.initialize();
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -925,6 +946,7 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.agent.abort();
+			this.monitorRuntime.dispose();
 			this._agentPool?.dispose();
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
@@ -3287,6 +3309,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
+			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 			const documentContract = await this.documentRuntime.validateCurrentContract();
 			this.taskLedger.setDocumentRuntimeContract(documentContract);
