@@ -26,7 +26,7 @@ function setupNoisyRules(harness: Harness): void {
 	mkdirSync(`${harness.tempDir}/docs`, { recursive: true });
 	writeFileSync(
 		`${harness.tempDir}/docs/task.md`,
-		"# Task Requirements\n- Must keep the task-specific requirement visible in the Tasks panel.\n",
+		"# Task Requirements\n- Must keep the task-specific requirement enforceable in the Execution Contract.\n",
 	);
 	writeFileSync(
 		`${harness.tempDir}/README.md`,
@@ -77,16 +77,19 @@ describe("AgentSession Document Runtime integration", () => {
 		expect(providerSystemPrompt).toContain("Must run `npm run check`");
 		expect(providerSystemPrompt).toContain("AGENTS.md:");
 		expect(harness.session.taskLedger.getSnapshot().documentContract?.contract.documents[0]?.path).toBe(rulesPath);
-		expect(harness.session.taskLedger.getSnapshot().todos.some((todo) => todo.id === "document-contract")).toBe(true);
+		expect(harness.session.taskLedger.getSnapshot().todos.some((todo) => todo.id === "document-contract")).toBe(
+			false,
+		);
+		expect(harness.session.taskLedger.getSnapshot().todos.some((todo) => todo.id === "discover")).toBe(true);
 	});
 
-	it("does not project generic policy requirements as Todos across Session branch rebuild", async () => {
+	it("does not project Execution Contract requirements as Todos across Session branch rebuild", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		setupNoisyRules(harness);
 		harness.setResponses([fauxAssistantMessage("done")]);
 
-		await harness.session.prompt("Keep the task-specific requirement visible in the Tasks panel.");
+		await harness.session.prompt("Keep the task-specific requirement enforceable in the Execution Contract.");
 
 		const genericRules = [
 			"Read files in full before wide-ranging changes.",
@@ -118,7 +121,8 @@ describe("AgentSession Document Runtime integration", () => {
 		for (const genericCheck of ["npm run clean --workspaces", "npm run build", "npm run lint"]) {
 			expect(requiredCheckCommands).not.toContain(genericCheck);
 		}
-		expect(todos).toContain("Requirement: Must keep the task-specific requirement visible in the Tasks panel.");
+		expect(snapshot.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
+		expect(snapshot.todos.some((todo) => todo.id === "document-contract")).toBe(false);
 
 		const restored = new TaskLedger({
 			taskId: harness.session.sessionId,
@@ -127,9 +131,7 @@ describe("AgentSession Document Runtime integration", () => {
 		}).getSnapshot();
 		const restoredTodos = restored.todos.map((todo) => todo.label);
 		for (const rule of genericRules) expect(restoredTodos).not.toContain(`Requirement: ${rule}`);
-		expect(restoredTodos).toContain(
-			"Requirement: Must keep the task-specific requirement visible in the Tasks panel.",
-		);
+		expect(restored.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
 	});
 
 	it("does not project broad explicitly injected requirement docs as fresh-session Todos", async () => {
@@ -178,7 +180,7 @@ describe("AgentSession Document Runtime integration", () => {
 			expect(requirements).not.toContain(unrelatedRequirement);
 			expect(todos).not.toContain(`Requirement: ${unrelatedRequirement}`);
 		}
-		expect(todos).toContain("Requirement: Skill allowlist policy must match Skill names and keep deny after allow.");
+		expect(snapshot.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
 	});
 
 	it("removes stale contract constraints after a file mutation and rebuilds after restoration", async () => {

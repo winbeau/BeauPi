@@ -222,7 +222,7 @@ interface TaskLedger {
 - 无关文档不会全部注入上下文
 - 文档变化后 Contract 失效并重建
 - 冲突要求能够保留来源并报告
-- 文档要求可映射为 Todo 和验证项
+- 文档 Requirement 保留在 Execution Contract 与 Task Ledger，可执行 required check 和 completion criterion 映射为 Todo 与验证项
 
 ### 验收标准
 
@@ -236,7 +236,7 @@ interface TaskLedger {
 - `docs_search`、`docs_read`、`docs_resolve_task` 已接入默认 Tool registry、prompt snippet、minimal renderer 和普通编码任务默认激活策略；URL 返回结构化 unsupported 诊断，不执行网络 fallback。
 - Execution Contract details 使用版本化 `documentRuntime` key；自动解析和 Tool Result 存入当前 Session branch，Task Ledger 从当前 branch 去重重建，Extension 替换 Tool details 后仍重新附加 metadata。
 - Requirement、required check、completion criterion 只使用结构化文档与 Tool/Shell 证据；冲突保留双方引用，无法判断的状态保持 pending/blocked，关键文档变化会 stale，恢复原 hash 后确定性恢复 active。
-- 精简 active Contract 通过现有 System Prompt 重建链注入，stale Contract 不会继续发送；Todo、Footer 和 Task Ledger 展示文档、requirement、check、completion、来源和 stale/blocked 状态。
+- 精简 active Contract 通过现有 System Prompt 重建链注入，stale Contract 不会继续发送；Task Ledger 保留 Contract 与 requirement/check/completion 证据状态，Todo 与 Footer 只展示 actionable required check、completion、来源和 stale/blocked 状态，不单独投影文档 Contract 或 Requirement Todo。
 - 定向 Runtime、Tool、Ledger、Session、Widget/Footer 测试覆盖 hash 失效、branch 恢复、Extension metadata、预算、引用、宽度和 faux provider 场景。
 
 ---

@@ -76,9 +76,8 @@ describe("TaskLedger Document Runtime projection", () => {
 					(requirement) => requirement.text === "Must run `npm run check`.",
 				)?.projection,
 			).toBe("task");
-			const requirementTodos = before.todos.filter((todo) => todo.id.startsWith("requirement:"));
-			expect(requirementTodos).toHaveLength(1);
-			expect(requirementTodos[0]?.label).toContain("Must run `npm run check`.");
+			expect(before.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
+			expect(before.todos.some((todo) => todo.id.startsWith("required-check:"))).toBe(true);
 			ledger.handleAgentEvent({
 				type: "tool_execution_start",
 				toolCallId: "check",
@@ -98,8 +97,8 @@ describe("TaskLedger Document Runtime projection", () => {
 			expect(after.documentContract?.requirements.some((requirement) => requirement.status === "completed")).toBe(
 				true,
 			);
-			const contractTodo = after.todos.find((todo) => todo.id === "document-contract");
-			expect(contractTodo?.source).toContain("AGENTS.md:");
+			expect(after.todos.some((todo) => todo.id === "document-contract")).toBe(false);
+			expect(after.todos.some((todo) => todo.id.startsWith("required-check:"))).toBe(true);
 
 			const policyContract = structuredClone(resolved.contract);
 			const policyRequirement = policyContract.requirements.find(

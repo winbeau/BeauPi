@@ -101,7 +101,7 @@ export interface TaskTodo {
 export type TaskDocumentItemStatus = "pending" | "active" | "completed" | "failed" | "cancelled" | "blocked" | "stale";
 
 export interface TaskRequirementState extends Requirement {
-	/** Policy requirements remain enforceable in the contract but do not project as task Todos. */
+	/** Requirements remain enforceable in the contract and tracked here, but never project as task Todos. */
 	projection: "task" | "policy";
 	status: TaskDocumentItemStatus;
 	evidenceCommandIds: string[];
@@ -1109,44 +1109,7 @@ export class TaskLedger {
 		const todos: TaskTodo[] = [];
 		const documentSnapshot = this.buildDocumentContractSnapshot(commands);
 		if (documentSnapshot) {
-			const contractSource = documentSnapshot.sourceCitations[0];
 			const contractTime = Date.parse(documentSnapshot.contract.updatedAt) || now;
-			todos.push({
-				id: "document-contract",
-				label: documentSnapshot.stale ? "Refresh document Execution Contract" : "Resolve task documents",
-				status: documentSnapshot.stale ? "blocked" : "completed",
-				sequence: -100,
-				updatedAt: contractTime,
-				owner: DEFAULT_TASK_OWNER,
-				blockedBy: documentSnapshot.stale ? documentSnapshot.staleReasons : undefined,
-				source: contractSource ? `${contractSource.displayPath}:${contractSource.startLine}` : undefined,
-			});
-			for (const requirement of documentSnapshot.requirements) {
-				if (requirement.projection === "policy") continue;
-				const status: TaskTodoStatus =
-					requirement.status === "completed"
-						? "completed"
-						: requirement.status === "failed"
-							? "failed"
-							: requirement.status === "stale"
-								? "blocked"
-								: requirement.status === "active"
-									? "active"
-									: requirement.status === "blocked"
-										? "blocked"
-										: "pending";
-				const source = requirement.citations[0];
-				todos.push({
-					id: `requirement:${requirement.id}`,
-					label: `Requirement: ${requirement.text}`,
-					status,
-					sequence: -90 + todos.length,
-					updatedAt: contractTime,
-					owner: DEFAULT_TASK_OWNER,
-					blockedBy: status === "blocked" ? requirement.requiredCheckIds : undefined,
-					source: source ? `${source.displayPath}:${source.startLine}` : undefined,
-				});
-			}
 			for (const check of documentSnapshot.requiredChecks) {
 				if (check.projection === "policy") continue;
 				const status: TaskTodoStatus =

@@ -59,7 +59,7 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 - 加入重复 `git status` 检测
 - 基于 Ledger 实现 Todo Widget
 - 对照 `TaskListV2` 实现 Todo 排序、动态截断、owner、blocked 和最近完成保留
-- 将任务阶段、要求和验证状态接入阶段 2 的 Footer/Todo 组件
+- 将任务阶段和验证状态接入阶段 2 的 Footer/Todo 组件；文档 Requirement 保留在 Task Ledger，不单独投影为 Todo
 
 验收：普通编辑任务能够展示当前阶段、已修改文件、待验证事项和 Tool 状态；工作区未变化时能够识别短时间内重复的 `git status`。
 
@@ -75,7 +75,7 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 - 跟踪 Markdown 引用
 - 生成 Execution Contract
 - 检测文档变更
-- 在 Todo Widget 展示文档要求和验证状态
+- 在 Task Ledger 保留文档 Contract 与 Requirement，并在 Todo Widget 只展示 actionable required check、completion 和验证状态
 
 验收：Agent 能按 `AGENTS.md` 和相关文档执行任务，并说明关键操作来源。
 

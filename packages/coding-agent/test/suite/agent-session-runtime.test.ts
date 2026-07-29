@@ -257,15 +257,17 @@ describe("AgentSessionRuntime characterization", () => {
 		]);
 	});
 
-	it("clears document-derived Todos when a new session receives an unrelated prompt", async () => {
+	it("keeps Execution Contract requirements out of Todos across new sessions", async () => {
 		const { runtime, tempDir } = await createRuntimeForTest(() => {});
 		mkdirSync(join(tempDir, "docs"), { recursive: true });
 		writeFileSync(join(tempDir, "docs", "task.md"), "# Current Task\n- Must preserve first-session behavior.\n");
 
 		await runtime.session.prompt("Preserve first-session behavior.");
-		expect(runtime.session.taskLedger.getSnapshot().todos.map((todo) => todo.label)).toContain(
-			"Requirement: Must preserve first-session behavior.",
+		const firstSnapshot = runtime.session.taskLedger.getSnapshot();
+		expect(firstSnapshot.documentContract?.requirements.map((requirement) => requirement.text)).toContain(
+			"Must preserve first-session behavior.",
 		);
+		expect(firstSnapshot.todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(false);
 
 		const replacement = await runtime.newSession();
 		expect(replacement.cancelled).toBe(false);
@@ -279,8 +281,8 @@ describe("AgentSessionRuntime characterization", () => {
 			].join("\n"),
 		);
 
-		expect(runtime.session.taskLedger.getSnapshot().todos.map((todo) => todo.label)).not.toContain(
-			"Requirement: Must preserve first-session behavior.",
+		expect(runtime.session.taskLedger.getSnapshot().todos.some((todo) => todo.id.startsWith("requirement:"))).toBe(
+			false,
 		);
 	});
 

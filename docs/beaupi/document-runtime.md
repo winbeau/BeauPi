@@ -58,7 +58,7 @@ Contract 的 `details.documentRuntime` 是版本化状态格式。自动任务�
 
 关键文档使用内容 hash，而非只使用 mtime。Prompt 前、reload、Session 恢复和关键文件修改后验证 Contract。关键文档变更会使 Contract stale，并从 System Prompt 移除旧约束；文档恢复为原 hash 后 Contract 恢复 active。非 Contract 文档变化不会使其失效。
 
-Required check 只关联结构化 Tool/Shell 命令签名及 success/failed/cancelled 状态，不分析日志文案。Requirement、check 和 completion criterion 都投影到现有 `AgentSession.taskLedger` 与 `TaskLedgerWidget`；Document Runtime 不维护第二套 Todo 状态。
+Required check 只关联结构化 Tool/Shell 命令签名及 success/failed/cancelled 状态，不分析日志文案。Requirement、check 和 completion criterion 都保留在现有 `AgentSession.taskLedger`；只有 actionable required check 和 completion criterion 投影到 `TaskLedgerWidget`，文档 Contract 与 Requirement 不生成独立 Todo，Document Runtime 不维护第二套 Todo 状态。
 
 ## 内置 Tools
 

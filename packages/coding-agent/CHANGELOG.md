@@ -22,6 +22,7 @@
 - Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
 - Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
 - Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
+- Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 
 ### Fixed
 
