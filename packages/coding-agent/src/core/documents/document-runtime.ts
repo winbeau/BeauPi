@@ -56,6 +56,40 @@ const COMMAND_DIRECTIVE_PATTERN =
 	/^(?:run|execute|invoke)\b|\b(?:must|shall|need(?:s)? to|have to|has to|required to)\s+(?:run|execute|invoke)\b|(?:必须|需要|应当|应该)?(?:运行|执行)/i;
 const LIST_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/;
 const INLINE_CODE_PATTERN = /`([^`\n]+)`/g;
+const TASK_RELEVANCE_STOPWORDS = new Set([
+	"after",
+	"and",
+	"are",
+	"before",
+	"change",
+	"changes",
+	"current",
+	"document",
+	"documents",
+	"docs",
+	"file",
+	"files",
+	"for",
+	"from",
+	"implement",
+	"implementation",
+	"实现",
+	"into",
+	"read",
+	"reading",
+	"requirement",
+	"requirements",
+	"rule",
+	"rules",
+	"task",
+	"tasks",
+	"the",
+	"this",
+	"update",
+	"updates",
+	"with",
+	"without",
+]);
 
 interface RuntimeCacheEntry {
 	document: IndexedDocument;
@@ -108,6 +142,13 @@ function normalizeText(value: string): string {
 
 function taskTokens(value: string): string[] {
 	return uniqueStrings(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []);
+}
+
+function taskRelevanceTokens(value: string): string[] {
+	const withoutPathReferences = value
+		.replace(/(?:^|[\s(`'"])(?:~?\/|\.\.?\/)[^\s)`'"]+/g, " ")
+		.replace(/\b[\w./-]+\.(?:md|markdown|json|ts|tsx|js|jsx|sh|bash)\b/gi, " ");
+	return taskTokens(withoutPathReferences).filter((token) => !TASK_RELEVANCE_STOPWORDS.has(token));
 }
 
 function commandSignature(command: string): string {
@@ -164,10 +205,12 @@ function factIsTaskRelevant(
 	text: string,
 	relevantTaskTokens: readonly string[],
 ): boolean {
-	if (isPolicyDocument(document) || document.reference.sources.includes("explicit")) return true;
+	if (isPolicyDocument(document)) return true;
 	if (relevantTaskTokens.length === 0) return false;
 	const context = normalizeText(`${heading?.path.join(" ") ?? ""} ${text}`);
-	return relevantTaskTokens.some((token) => context.includes(token));
+	const matchingTokens = relevantTaskTokens.filter((token) => context.includes(token));
+	const minimumMatches = relevantTaskTokens.length >= 8 ? 4 : relevantTaskTokens.length >= 4 ? 2 : 1;
+	return matchingTokens.length >= minimumMatches;
 }
 
 function cleanFactText(value: string): string {
@@ -390,7 +433,7 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 	const stopConditions: StopCondition[] = [];
 	const completionCriteria: CompletionCriterion[] = [];
 	const diagnostics: DocumentDiagnostic[] = [];
-	const relevantTaskTokens = taskTokens(task);
+	const relevantTaskTokens = taskRelevanceTokens(task);
 
 	for (const document of documents) {
 		for (const script of document.packageScripts) {
@@ -575,7 +618,7 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 }
 function documentMatchesTask(document: IndexedDocument, task: string): boolean {
 	const normalizedTask = normalizeText(task);
-	const tokens = taskTokens(task);
+	const tokens = taskRelevanceTokens(task);
 	const headingText = normalizeText(document.headings.map((heading) => heading.path.join(" ")).join(" "));
 	const bodyText = normalizeText(document.content);
 	const metadataText = normalizeText(`${basename(document.reference.path)} ${document.reference.kind}`);

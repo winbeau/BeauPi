@@ -305,6 +305,47 @@ describe("Execution Contract", () => {
 		}
 	});
 
+	it("does not turn explicitly referenced repository requirements into current-task Todos", async () => {
+		const { root, cwd, agentDir } = tempProject();
+		const requirementsPath = join(root, "docs", "beaupi", "requirements.md");
+		const skillsPath = join(root, "docs", "beaupi", "skills.md");
+		mkdirSync(dirname(requirementsPath), { recursive: true });
+		writeFileSync(
+			requirementsPath,
+			[
+				"# Core Requirements",
+				"- Original commands and complete output must be collapsed by default and expandable on demand.",
+				"- Skill guidance remains workflow knowledge; deterministic structured or permissioned behavior must be a Tool.",
+				"- Model polling must set a minimum interval, maximum attempts, and token budget.",
+			].join("\n"),
+		);
+		writeFileSync(
+			skillsPath,
+			[
+				"# M4-R3 Skill Allowlist",
+				"- Skill allowlist policy must match Skill names and keep deny after allow.",
+				"# M5",
+				"- Agent Pool creation must wait for the next milestone.",
+			].join("\n"),
+		);
+
+		const result = await runtimeFor(cwd, agentDir).resolveTask({
+			task: "Implement M4-R3 Skill allowlist projection with allow and deny policy.",
+			explicitPaths: [requirementsPath, skillsPath],
+		});
+		const requirements = result.contract.requirements.map((requirement) => requirement.text);
+
+		expect(requirements).toContain("Skill allowlist policy must match Skill names and keep deny after allow.");
+		for (const genericRequirement of [
+			"Original commands and complete output must be collapsed by default and expandable on demand.",
+			"Skill guidance remains workflow knowledge; deterministic structured or permissioned behavior must be a Tool.",
+			"Model polling must set a minimum interval, maximum attempts, and token budget.",
+			"Agent Pool creation must wait for the next milestone.",
+		]) {
+			expect(requirements).not.toContain(genericRequirement);
+		}
+	});
+
 	it("does not project changelog history into the current task contract", async () => {
 		const { root, cwd, agentDir } = tempProject();
 		const changelogPath = join(root, "packages", "coding-agent", "CHANGELOG.md");
@@ -316,17 +357,17 @@ describe("Execution Contract", () => {
 		mkdirSync(join(root, "docs"), { recursive: true });
 		writeFileSync(
 			join(root, "docs", "task.md"),
-			"# Task Requirements\n- Must preserve the current task requirement.\n",
+			"# Task Requirements\n- Must preserve the current session behavior.\n",
 		);
 
 		const result = await runtimeFor(cwd, agentDir).resolveTask({
-			task: "Fix the current task behavior and update packages/coding-agent/CHANGELOG.md",
+			task: "Preserve the current session behavior and update packages/coding-agent/CHANGELOG.md",
 			explicitPaths: [changelogPath],
 		});
 
 		expect(result.contract.documents.some((document) => document.path === changelogPath)).toBe(false);
 		expect(result.contract.requirements.map((requirement) => requirement.text)).toContain(
-			"Must preserve the current task requirement.",
+			"Must preserve the current session behavior.",
 		);
 		expect(result.contract.requirements.map((requirement) => requirement.text)).not.toContain(
 			"Fixed cloning or forking a session before its first assistant response to explain that the session must be saved first.",

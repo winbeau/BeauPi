@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -255,6 +255,26 @@ describe("AgentSessionRuntime characterization", () => {
 			{ type: "session_shutdown", reason: "resume", targetSessionFile: originalSessionFile },
 			{ type: "session_start", reason: "resume", previousSessionFile: secondSessionFile },
 		]);
+	});
+
+	it("clears document-derived Todos when a new session receives an unrelated prompt", async () => {
+		const { runtime, tempDir } = await createRuntimeForTest(() => {});
+		mkdirSync(join(tempDir, "docs"), { recursive: true });
+		writeFileSync(join(tempDir, "docs", "task.md"), "# Current Task\n- Must preserve first-session behavior.\n");
+
+		await runtime.session.prompt("Preserve first-session behavior.");
+		expect(runtime.session.taskLedger.getSnapshot().todos.map((todo) => todo.label)).toContain(
+			"Requirement: Must preserve first-session behavior.",
+		);
+
+		const replacement = await runtime.newSession();
+		expect(replacement.cancelled).toBe(false);
+		await runtime.session.bindExtensions({});
+		await runtime.session.prompt("Implement an unrelated second-session widget.");
+
+		expect(runtime.session.taskLedger.getSnapshot().todos.map((todo) => todo.label)).not.toContain(
+			"Requirement: Must preserve first-session behavior.",
+		);
 	});
 
 	it("honors session_before_switch cancellation for new and resume", async () => {

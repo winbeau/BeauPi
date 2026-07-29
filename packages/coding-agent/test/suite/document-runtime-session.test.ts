@@ -132,6 +132,50 @@ describe("AgentSession Document Runtime integration", () => {
 		);
 	});
 
+	it("does not project broad explicitly injected requirement docs as fresh-session Todos", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		mkdirSync(`${harness.tempDir}/docs/beaupi`, { recursive: true });
+		writeFileSync(
+			`${harness.tempDir}/docs/beaupi/requirements.md`,
+			[
+				"# Core Requirements",
+				"- Original commands and complete output must be collapsed by default and expandable on demand.",
+				"- Skill guidance remains workflow knowledge; deterministic structured or permissioned behavior must be a Tool.",
+				"- Model polling must set a minimum interval, maximum attempts, and token budget.",
+			].join("\n"),
+		);
+		writeFileSync(
+			`${harness.tempDir}/docs/beaupi/skills.md`,
+			[
+				"# M4-R3 Skill Allowlist",
+				"- Skill allowlist policy must match Skill names and keep deny after allow.",
+				"# M5",
+				"- Agent Pool creation must wait for the next milestone.",
+			].join("\n"),
+		);
+		harness.setResponses([fauxAssistantMessage("done")]);
+
+		await harness.session.prompt(
+			"Implement M4-R3 Skill allowlist projection with allow and deny policy. Read docs/beaupi/requirements.md and docs/beaupi/skills.md.",
+		);
+
+		const snapshot = harness.session.taskLedger.getSnapshot();
+		const requirements = snapshot.documentContract?.requirements.map((requirement) => requirement.text) ?? [];
+		const todos = snapshot.todos.map((todo) => todo.label);
+		expect(requirements).toContain("Skill allowlist policy must match Skill names and keep deny after allow.");
+		for (const unrelatedRequirement of [
+			"Original commands and complete output must be collapsed by default and expandable on demand.",
+			"Skill guidance remains workflow knowledge; deterministic structured or permissioned behavior must be a Tool.",
+			"Model polling must set a minimum interval, maximum attempts, and token budget.",
+			"Agent Pool creation must wait for the next milestone.",
+		]) {
+			expect(requirements).not.toContain(unrelatedRequirement);
+			expect(todos).not.toContain(`Requirement: ${unrelatedRequirement}`);
+		}
+		expect(todos).toContain("Requirement: Skill allowlist policy must match Skill names and keep deny after allow.");
+	});
+
 	it("removes stale contract constraints after a file mutation and rebuilds after restoration", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
