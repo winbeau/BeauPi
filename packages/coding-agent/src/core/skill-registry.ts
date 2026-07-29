@@ -138,31 +138,153 @@ export interface SkillAllowlist {
 export interface SkillResourceSet {
 	skills: Skill[];
 	diagnostics: ResourceDiagnostic[];
+	/** Registry records remain available to explain policy filtering; the filter never mutates them. */
+	registryProjection?: SkillRegistryProjection;
+}
+
+function normalizeSkillPolicyNames(names: readonly string[] | undefined): string[] | undefined {
+	return names === undefined ? undefined : Array.from(new Set(names.map((name) => name.trim())));
+}
+
+function findSkillPolicyReason(
+	name: string,
+	base: SkillResourceSet,
+): { reason: "disabled" | "invalid" | "untrusted-project"; path?: string } | undefined {
+	for (const record of base.registryProjection?.records ?? []) {
+		const recordName = record.validation.name ?? record.entry.name;
+		if (recordName !== name) continue;
+		if (!record.entry.enabled) {
+			return { reason: "disabled", path: record.resolvedPath };
+		}
+		if (!record.validation.valid) {
+			const reason = record.validation.diagnostics.some((item) => item.code === "project_untrusted")
+				? "untrusted-project"
+				: "invalid";
+			return { reason, path: record.resolvedPath };
+		}
+	}
+	return undefined;
+}
+
+function createSkillPolicyDiagnostic(options: {
+	code: "skill_allowlist_missing" | "skill_denylist_missing" | "skill_policy_filtered";
+	name: string;
+	policy: "allow" | "deny";
+	reason: ResourceDiagnostic["reason"];
+	message: string;
+	path?: string;
+}): ResourceDiagnostic {
+	return {
+		type: options.code === "skill_allowlist_missing" ? "error" : "warning",
+		code: options.code,
+		name: options.name,
+		policy: options.policy,
+		reason: options.reason,
+		message: options.message,
+		...(options.path ? { path: options.path } : {}),
+	};
 }
 
 /**
- * Create a ResourceLoader skillsOverride for a controlled Agent profile.
- * Explicit allow entries that are not discovered remain unavailable and produce diagnostics.
+ * Create an instance-safe ResourceLoader Skill projection for a future AgentProfile.
+ * This is only a Skill policy/filter; it does not create or start an Agent.
  */
 export function createSkillAllowlistOverride(policy: SkillAllowlist): (base: SkillResourceSet) => SkillResourceSet {
-	const allowNames =
-		policy.allow === undefined
-			? undefined
-			: Array.from(new Set(policy.allow.map((name) => name.trim()).filter((name) => name.length > 0)));
-	const allow = allowNames ? new Set(allowNames) : undefined;
-	const deny = new Set(policy.deny?.map((name) => name.trim()).filter((name) => name.length > 0) ?? []);
+	const allowNames = normalizeSkillPolicyNames(policy.allow);
+	const denyNames = normalizeSkillPolicyNames(policy.deny) ?? [];
+	const allow = allowNames === undefined ? undefined : new Set(allowNames);
+	const deny = new Set(denyNames);
 
 	return (base) => {
 		const discoveredNames = new Set(base.skills.map((skill) => skill.name));
-		const missingDiagnostics: ResourceDiagnostic[] = (allowNames ?? [])
-			.filter((name) => !discoveredNames.has(name))
-			.map((name) => ({
-				type: "error",
-				message: `Skill allowlist entry ${JSON.stringify(name)} was not discovered`,
-			}));
+		const policyDiagnostics: ResourceDiagnostic[] = [];
+
+		for (const name of allowNames ?? []) {
+			if (discoveredNames.has(name)) continue;
+			const policyReason = findSkillPolicyReason(name, base);
+			if (policyReason) {
+				policyDiagnostics.push(
+					createSkillPolicyDiagnostic({
+						code: "skill_policy_filtered",
+						name,
+						policy: "allow",
+						reason: policyReason.reason,
+						path: policyReason.path,
+						message: `Skill allowlist entry ${JSON.stringify(name)} was filtered because it is ${policyReason.reason}`,
+					}),
+				);
+				continue;
+			}
+			policyDiagnostics.push(
+				createSkillPolicyDiagnostic({
+					code: "skill_allowlist_missing",
+					name,
+					policy: "allow",
+					reason: "missing",
+					message: `Skill allowlist entry ${JSON.stringify(name)} was not discovered`,
+				}),
+			);
+		}
+
+		for (const name of denyNames) {
+			if (discoveredNames.has(name)) continue;
+			const policyReason = findSkillPolicyReason(name, base);
+			if (policyReason) {
+				policyDiagnostics.push(
+					createSkillPolicyDiagnostic({
+						code: "skill_policy_filtered",
+						name,
+						policy: "deny",
+						reason: policyReason.reason,
+						path: policyReason.path,
+						message: `Skill denylist entry ${JSON.stringify(name)} remains unavailable because it is ${policyReason.reason}`,
+					}),
+				);
+				continue;
+			}
+			policyDiagnostics.push(
+				createSkillPolicyDiagnostic({
+					code: "skill_denylist_missing",
+					name,
+					policy: "deny",
+					reason: "missing",
+					message: `Skill denylist entry ${JSON.stringify(name)} was not discovered`,
+				}),
+			);
+		}
+
+		const filteredDiagnostics = base.skills.flatMap((skill) => {
+			if (deny.has(skill.name)) {
+				return [
+					createSkillPolicyDiagnostic({
+						code: "skill_policy_filtered",
+						name: skill.name,
+						policy: "deny",
+						reason: "denied",
+						path: skill.filePath,
+						message: `Skill ${JSON.stringify(skill.name)} was filtered by the denylist`,
+					}),
+				];
+			}
+			if (allow && !allow.has(skill.name)) {
+				return [
+					createSkillPolicyDiagnostic({
+						code: "skill_policy_filtered",
+						name: skill.name,
+						policy: "allow",
+						reason: "not-allowed",
+						path: skill.filePath,
+						message: `Skill ${JSON.stringify(skill.name)} was filtered by the allowlist`,
+					}),
+				];
+			}
+			return [];
+		});
+
 		return {
+			...base,
 			skills: base.skills.filter((skill) => (allow ? allow.has(skill.name) : true) && !deny.has(skill.name)),
-			diagnostics: [...base.diagnostics, ...missingDiagnostics],
+			diagnostics: [...base.diagnostics, ...policyDiagnostics, ...filteredDiagnostics],
 		};
 	};
 }

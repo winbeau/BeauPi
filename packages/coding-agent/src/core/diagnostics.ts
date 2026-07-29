@@ -7,9 +7,21 @@ export interface ResourceCollision {
 	loserSource?: string;
 }
 
+export type SkillPolicyDiagnosticReason =
+	| "missing"
+	| "not-allowed"
+	| "denied"
+	| "disabled"
+	| "invalid"
+	| "untrusted-project";
+
 export interface ResourceDiagnostic {
 	type: "warning" | "error" | "collision";
 	message: string;
 	path?: string;
+	code?: string;
+	name?: string;
+	policy?: "allow" | "deny";
+	reason?: SkillPolicyDiagnosticReason;
 	collision?: ResourceCollision;
 }

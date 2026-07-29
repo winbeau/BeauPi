@@ -6,7 +6,7 @@ import { CONFIG_DIR_NAME } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 
-export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
+export type { ResourceCollision, ResourceDiagnostic, SkillPolicyDiagnosticReason } from "./diagnostics.ts";
 
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
@@ -22,10 +22,14 @@ import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import {
+	createSkillAllowlistOverride,
 	formatSkillSource,
 	resolveSkillRegistryProjection,
+	type SkillAllowlist,
 	type SkillRegistryDiagnostic,
+	type SkillRegistryProjection,
 	type SkillRegistryRecord,
+	type SkillResourceSet,
 } from "./skill-registry.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
@@ -42,9 +46,18 @@ export interface ResourceLoaderReloadOptions {
 	resolveProjectTrust?: (input: { extensionsResult: LoadExtensionsResult }) => Promise<boolean>;
 }
 
+export interface ResourceLoaderSkillProjection {
+	/** Unfiltered discovery result with source metadata and Registry diagnostics intact. */
+	raw: SkillResourceSet;
+	/** Effective Skill set exposed to the System Prompt and /skill:name invocation. */
+	projected: SkillResourceSet;
+}
+
 export interface ResourceLoader {
 	getExtensions(): LoadExtensionsResult;
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
+	/** Available on loaders that expose controlled Skill projection diagnostics. */
+	getSkillProjection?(): ResourceLoaderSkillProjection;
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
@@ -147,10 +160,9 @@ export interface DefaultResourceLoaderOptions {
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
-	skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
-		skills: Skill[];
-		diagnostics: ResourceDiagnostic[];
-	};
+	/** Typed M4 Skill policy for a controlled loader. Applied after skillsOverride so it cannot be bypassed. */
+	skillPolicy?: SkillAllowlist;
+	skillsOverride?: (base: SkillResourceSet) => SkillResourceSet;
 	promptsOverride?: (base: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] }) => {
 		prompts: PromptTemplate[];
 		diagnostics: ResourceDiagnostic[];
@@ -185,10 +197,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private systemPromptSource?: string;
 	private appendSystemPromptSource?: string[];
 	private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
-	private skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
-		skills: Skill[];
-		diagnostics: ResourceDiagnostic[];
-	};
+	private skillsOverride?: (base: SkillResourceSet) => SkillResourceSet;
 	private promptsOverride?: (base: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] }) => {
 		prompts: PromptTemplate[];
 		diagnostics: ResourceDiagnostic[];
@@ -206,7 +215,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private extensionsResult: LoadExtensionsResult;
 	private skills: Skill[];
 	private skillDiagnostics: ResourceDiagnostic[];
+	private skillProjection: ResourceLoaderSkillProjection;
 	private registrySkillDiagnostics: ResourceDiagnostic[];
+	private registryProjection?: SkillRegistryProjection;
 	private prompts: PromptTemplate[];
 	private promptDiagnostics: ResourceDiagnostic[];
 	private themes: Theme[];
@@ -246,7 +257,18 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.systemPromptSource = options.systemPrompt;
 		this.appendSystemPromptSource = options.appendSystemPrompt;
 		this.extensionsOverride = options.extensionsOverride;
-		this.skillsOverride = options.skillsOverride;
+		const skillsOverride = options.skillsOverride;
+		const policyOverride = options.skillPolicy ? createSkillAllowlistOverride(options.skillPolicy) : undefined;
+		this.skillsOverride = policyOverride
+			? (base) => {
+					const overridden = skillsOverride ? skillsOverride(base) : base;
+					return policyOverride(
+						base.registryProjection && !overridden.registryProjection
+							? { ...overridden, registryProjection: base.registryProjection }
+							: overridden,
+					);
+				}
+			: skillsOverride;
 		this.promptsOverride = options.promptsOverride;
 		this.themesOverride = options.themesOverride;
 		this.agentsFilesOverride = options.agentsFilesOverride;
@@ -256,6 +278,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
 		this.skills = [];
 		this.skillDiagnostics = [];
+		this.skillProjection = {
+			raw: { skills: [], diagnostics: [] },
+			projected: { skills: [], diagnostics: [] },
+		};
 		this.registrySkillDiagnostics = [];
 		this.prompts = [];
 		this.promptDiagnostics = [];
@@ -279,6 +305,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
 		return { skills: this.skills, diagnostics: this.skillDiagnostics };
+	}
+
+	getSkillProjection(): ResourceLoaderSkillProjection {
+		return this.skillProjection;
 	}
 
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
@@ -437,6 +467,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentDir: this.agentDir,
 			projectTrusted: this.settingsManager.isProjectTrusted(),
 		});
+		this.registryProjection = registryProjection;
 		this.registrySkillDiagnostics = registryProjection.diagnostics
 			.filter((diagnostic) => diagnostic.severity !== "info")
 			.map((diagnostic) => this.mapSkillRegistryDiagnostic(diagnostic));
@@ -720,6 +751,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		if (diagnostic.code === "name_conflict" && diagnostic.relatedPath && diagnostic.path) {
 			return {
 				type: "collision",
+				code: diagnostic.code,
+				name: diagnostic.name ?? "unknown",
 				message: diagnostic.message,
 				path: diagnostic.path,
 				collision: {
@@ -736,6 +769,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 		return {
 			type: diagnostic.severity === "error" ? "error" : "warning",
+			code: diagnostic.code,
+			...(diagnostic.name ? { name: diagnostic.name } : {}),
 			message: `[skill registry:${diagnostic.code}] ${diagnostic.message}`,
 			path: diagnostic.path ?? diagnostic.registryPath,
 		};
@@ -756,27 +791,21 @@ export class DefaultResourceLoader implements ResourceLoader {
 		});
 	}
 
-	private updateSkillsFromPaths(skillPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
-		let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
-		if (this.noSkills && skillPaths.length === 0) {
-			skillsResult = { skills: [], diagnostics: [] };
-		} else {
-			skillsResult = loadSkills({
-				cwd: this.cwd,
-				agentDir: this.agentDir,
-				skillPaths,
-				includeDefaults: false,
-			});
-		}
-		const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
-		this.skills = resolvedSkills.skills.map((skill) => ({
+	private applySkillSourceInfo(skills: Skill[], metadataByPath?: Map<string, PathMetadata>): Skill[] {
+		return skills.map((skill) => ({
 			...skill,
 			sourceInfo:
 				this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
 				skill.sourceInfo ??
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
-		const diagnostics = resolvedSkills.diagnostics.map((diagnostic) => {
+	}
+
+	private applySkillDiagnosticSourceInfo(
+		diagnostics: ResourceDiagnostic[],
+		metadataByPath?: Map<string, PathMetadata>,
+	): ResourceDiagnostic[] {
+		return diagnostics.map((diagnostic) => {
 			if (diagnostic.type !== "collision" || !diagnostic.collision) {
 				return diagnostic;
 			}
@@ -799,7 +828,40 @@ export class DefaultResourceLoader implements ResourceLoader {
 				},
 			};
 		});
-		this.skillDiagnostics = this.dedupeDiagnostics([...this.registrySkillDiagnostics, ...diagnostics]);
+	}
+
+	private updateSkillsFromPaths(skillPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
+		let skillsResult: SkillResourceSet;
+		if (this.noSkills && skillPaths.length === 0) {
+			skillsResult = { skills: [], diagnostics: [] };
+		} else {
+			skillsResult = loadSkills({
+				cwd: this.cwd,
+				agentDir: this.agentDir,
+				skillPaths,
+				includeDefaults: false,
+			});
+		}
+		const baseSkills: SkillResourceSet = {
+			...skillsResult,
+			...(this.registryProjection ? { registryProjection: this.registryProjection } : {}),
+		};
+		const resolvedSkills = this.skillsOverride ? this.skillsOverride(baseSkills) : baseSkills;
+		const rawSkills = this.applySkillSourceInfo(skillsResult.skills, metadataByPath);
+		this.skills = this.applySkillSourceInfo(resolvedSkills.skills, metadataByPath);
+		const rawDiagnostics = this.dedupeDiagnostics([
+			...this.registrySkillDiagnostics,
+			...this.applySkillDiagnosticSourceInfo(skillsResult.diagnostics, metadataByPath),
+		]);
+		this.skillDiagnostics = this.dedupeDiagnostics([
+			...this.registrySkillDiagnostics,
+			...this.applySkillDiagnosticSourceInfo(resolvedSkills.diagnostics, metadataByPath),
+		]);
+		const registryContext = this.registryProjection ? { registryProjection: this.registryProjection } : {};
+		this.skillProjection = {
+			raw: { skills: rawSkills, diagnostics: rawDiagnostics, ...registryContext },
+			projected: { skills: this.skills, diagnostics: this.skillDiagnostics, ...registryContext },
+		};
 	}
 
 	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {

@@ -192,7 +192,15 @@ export type {
 	StagedPackageSource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
-export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
+export type {
+	DefaultResourceLoaderOptions,
+	ResourceCollision,
+	ResourceDiagnostic,
+	ResourceLoader,
+	ResourceLoaderReloadOptions,
+	ResourceLoaderSkillProjection,
+	SkillPolicyDiagnosticReason,
+} from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
 // SDK for programmatic usage
 export {

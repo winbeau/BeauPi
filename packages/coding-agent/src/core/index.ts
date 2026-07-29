@@ -79,6 +79,17 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export {
+	DefaultResourceLoader,
+	type DefaultResourceLoaderOptions,
+	loadProjectContextFiles,
+	type ResourceCollision,
+	type ResourceDiagnostic,
+	type ResourceLoader,
+	type ResourceLoaderReloadOptions,
+	type ResourceLoaderSkillProjection,
+	type SkillPolicyDiagnosticReason,
+} from "./resource-loader.ts";
+export {
 	createSkillAllowlistOverride,
 	formatSkillSource,
 	formatSkillSourceDetails,
