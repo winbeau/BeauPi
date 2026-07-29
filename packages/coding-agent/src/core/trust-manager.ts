@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import { SKILL_REGISTRY_FILENAME } from "./skill-registry.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -30,6 +31,7 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"settings.json",
 	"extensions",
 	"skills",
+	SKILL_REGISTRY_FILENAME,
 	"prompts",
 	"themes",
 	"SYSTEM.md",

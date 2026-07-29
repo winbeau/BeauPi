@@ -78,6 +78,30 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	formatSkillSource,
+	getSkillRegistryScopePaths,
+	loadSkillRegistry,
+	resolveSkillRegistryProjection,
+	SKILL_REGISTRY_FILENAME,
+	SKILL_REGISTRY_VERSION,
+	type SkillDiagnosticCode,
+	type SkillDiagnosticSeverity,
+	type SkillInventory,
+	type SkillRegistryDiagnostic,
+	type SkillRegistryEntry,
+	type SkillRegistryFile,
+	type SkillRegistryLoadResult,
+	type SkillRegistryProjection,
+	type SkillRegistryRecord,
+	type SkillRegistryScope,
+	type SkillRegistryScopePaths,
+	type SkillRegistrySnapshot,
+	type SkillSource,
+	type SkillValidationResult,
+	validateSkillRegistryEntry,
+	writeSkillRegistry,
+} from "./skill-registry.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";
 export {
 	attachTaskLedgerToolDetails,

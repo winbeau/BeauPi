@@ -261,6 +261,14 @@ interface TaskLedger {
 - Registry 与 ResourceLoader discovery 合并
 - 修改后调用 `ctx.reload()`
 
+### Stage 1 验收记录（2026-07-29）
+
+- 已实现 typed user/project Registry、版本化确定性 JSON、原子安全写入、scope 路径和 malformed-file 诊断。
+- 已复用现有 ResourceLoader 与 Agent Skills discovery，接入 Registry precedence、disabled/invalid 路径抑制、来源保留和同名 collision 诊断。
+- 已实现 `SKILL.md`、frontmatter、相对引用、脚本/可执行文件清单、来源/更新能力和 project trust 校验；不会执行 Skill 脚本或 npm lifecycle。
+- 已覆盖 persistence、validation、precedence、disabled、conflict、malformed、trust 和 reload rebuild 测试。
+- 导入/获取、命令/UI、更新、删除和子 Agent allowlist 留给后续 M4 Stage。
+
 ### 安全要求
 
 - URL 导入只允许 HTTPS，并要求内容预览和确认

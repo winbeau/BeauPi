@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -20,6 +21,12 @@ import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from 
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
+import {
+	formatSkillSource,
+	resolveSkillRegistryProjection,
+	type SkillRegistryDiagnostic,
+	type SkillRegistryRecord,
+} from "./skill-registry.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import { createSourceInfo, type SourceInfo } from "./source-info.ts";
@@ -199,6 +206,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private extensionsResult: LoadExtensionsResult;
 	private skills: Skill[];
 	private skillDiagnostics: ResourceDiagnostic[];
+	private registrySkillDiagnostics: ResourceDiagnostic[];
 	private prompts: PromptTemplate[];
 	private promptDiagnostics: ResourceDiagnostic[];
 	private themes: Theme[];
@@ -248,6 +256,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
 		this.skills = [];
 		this.skillDiagnostics = [];
+		this.registrySkillDiagnostics = [];
 		this.prompts = [];
 		this.promptDiagnostics = [];
 		this.themes = [];
@@ -385,7 +394,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
 		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
 
-		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
+		const enabledSkills = enabledSkillResources.map((resource) => ({
+			...resource,
+			path: this.mapSkillPath(resource, metadataByPath),
+		}));
 
 		// Add CLI paths metadata
 		for (const r of cliExtensionPaths.extensions) {
@@ -420,9 +432,27 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionsResult = this.extensionsOverride ? this.extensionsOverride(extensionsResult) : extensionsResult;
 		this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
 
-		const skillPaths = this.noSkills
-			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
-			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
+		const registryProjection = resolveSkillRegistryProjection({
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			projectTrusted: this.settingsManager.isProjectTrusted(),
+		});
+		this.registrySkillDiagnostics = registryProjection.diagnostics
+			.filter((diagnostic) => diagnostic.severity !== "info")
+			.map((diagnostic) => this.mapSkillRegistryDiagnostic(diagnostic));
+		for (const record of registryProjection.records) {
+			metadataByPath.set(record.resolvedPath, record.metadata);
+			if (record.validation.skillFilePath) {
+				metadataByPath.set(record.validation.skillFilePath, record.metadata);
+			}
+		}
+
+		const skillPaths = this.buildSkillPaths({
+			cliEnabledSkills,
+			enabledSkills,
+			registryRecords: registryProjection.records,
+			enabledRegistryRecords: registryProjection.enabledRecords,
+		});
 
 		this.lastSkillPaths = skillPaths;
 		this.updateSkillsFromPaths(skillPaths, metadataByPath);
@@ -619,6 +649,113 @@ export class DefaultResourceLoader implements ResourceLoader {
 		});
 	}
 
+	private buildSkillPaths(options: {
+		cliEnabledSkills: string[];
+		enabledSkills: ResolvedResource[];
+		registryRecords: SkillRegistryRecord[];
+		enabledRegistryRecords: SkillRegistryRecord[];
+	}): string[] {
+		const explicitSkills = this.mergePaths(options.cliEnabledSkills, this.additionalSkillPaths);
+		if (this.noSkills) {
+			return explicitSkills;
+		}
+		if (options.registryRecords.length === 0) {
+			return this.mergePaths(
+				[...options.cliEnabledSkills, ...options.enabledSkills.map((resource) => resource.path)],
+				this.additionalSkillPaths,
+			);
+		}
+
+		const registryOwnedPaths = new Set(
+			options.registryRecords.map((record) => canonicalizePath(record.resolvedPath)),
+		);
+		const nativeSkills = options.enabledSkills.filter(
+			(resource) => !registryOwnedPaths.has(canonicalizePath(resource.path)),
+		);
+		const projectRegistry = options.enabledRegistryRecords.filter((record) => record.entry.scope === "project");
+		const externalRegistry = options.enabledRegistryRecords.filter(
+			(record) =>
+				record.entry.scope === "user" &&
+				record.entry.source.type === "external-directory" &&
+				(record.entry.source.harness === "claude" || record.entry.source.harness === "codex"),
+		);
+		const externalRegistryIds = new Set(externalRegistry.map((record) => record.entry.id));
+		const userRegistry = options.enabledRegistryRecords.filter(
+			(record) => record.entry.scope === "user" && !externalRegistryIds.has(record.entry.id),
+		);
+		const projectNative = nativeSkills.filter((resource) => resource.metadata.scope === "project");
+		const userNative = nativeSkills.filter(
+			(resource) => resource.metadata.scope === "user" && !this.isExternalHarnessSkillPath(resource.path),
+		);
+		const externalNative = nativeSkills.filter(
+			(resource) => resource.metadata.scope === "user" && this.isExternalHarnessSkillPath(resource.path),
+		);
+		const remainingNative = nativeSkills.filter(
+			(resource) => resource.metadata.scope !== "project" && resource.metadata.scope !== "user",
+		);
+
+		return this.mergePaths(
+			[
+				...explicitSkills,
+				...projectRegistry.map((record) => record.resolvedPath),
+				...projectNative.map((resource) => resource.path),
+				...userRegistry.map((record) => record.resolvedPath),
+				...userNative.map((resource) => resource.path),
+				...externalRegistry.map((record) => record.resolvedPath),
+				...externalNative.map((resource) => resource.path),
+				...remainingNative.map((resource) => resource.path),
+			],
+			[],
+		);
+	}
+
+	private isExternalHarnessSkillPath(skillPath: string): boolean {
+		const resolvedSkillPath = resolve(skillPath);
+		return [join(homedir(), ".claude", "skills"), join(homedir(), ".codex", "skills")].some((root) =>
+			this.isUnderPath(resolvedSkillPath, root),
+		);
+	}
+
+	private mapSkillRegistryDiagnostic(diagnostic: SkillRegistryDiagnostic): ResourceDiagnostic {
+		if (diagnostic.code === "name_conflict" && diagnostic.relatedPath && diagnostic.path) {
+			return {
+				type: "collision",
+				message: diagnostic.message,
+				path: diagnostic.path,
+				collision: {
+					resourceType: "skill",
+					name: diagnostic.name ?? "unknown",
+					winnerPath: diagnostic.relatedPath,
+					loserPath: diagnostic.path,
+					winnerSource: diagnostic.relatedSource
+						? `registry:${formatSkillSource(diagnostic.relatedSource)}`
+						: undefined,
+					loserSource: diagnostic.source ? `registry:${formatSkillSource(diagnostic.source)}` : undefined,
+				},
+			};
+		}
+		return {
+			type: diagnostic.severity === "error" ? "error" : "warning",
+			message: `[skill registry:${diagnostic.code}] ${diagnostic.message}`,
+			path: diagnostic.path ?? diagnostic.registryPath,
+		};
+	}
+
+	private dedupeDiagnostics(diagnostics: ResourceDiagnostic[]): ResourceDiagnostic[] {
+		const seen = new Set<string>();
+		return diagnostics.filter((diagnostic) => {
+			const collision = diagnostic.collision;
+			const key = collision
+				? [diagnostic.type, collision.resourceType, collision.name, collision.winnerPath, collision.loserPath].join(
+						"\0",
+					)
+				: [diagnostic.type, diagnostic.path ?? "", diagnostic.message].join("\0");
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	}
+
 	private updateSkillsFromPaths(skillPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
 		let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 		if (this.noSkills && skillPaths.length === 0) {
@@ -639,7 +776,30 @@ export class DefaultResourceLoader implements ResourceLoader {
 				skill.sourceInfo ??
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
-		this.skillDiagnostics = resolvedSkills.diagnostics;
+		const diagnostics = resolvedSkills.diagnostics.map((diagnostic) => {
+			if (diagnostic.type !== "collision" || !diagnostic.collision) {
+				return diagnostic;
+			}
+			const winnerSource = this.findSourceInfoForPath(
+				diagnostic.collision.winnerPath,
+				this.extensionSkillSourceInfos,
+				metadataByPath,
+			)?.source;
+			const loserSource = this.findSourceInfoForPath(
+				diagnostic.collision.loserPath,
+				this.extensionSkillSourceInfos,
+				metadataByPath,
+			)?.source;
+			return {
+				...diagnostic,
+				collision: {
+					...diagnostic.collision,
+					...(winnerSource ? { winnerSource } : {}),
+					...(loserSource ? { loserSource } : {}),
+				},
+			};
+		});
+		this.skillDiagnostics = this.dedupeDiagnostics([...this.registrySkillDiagnostics, ...diagnostics]);
 	}
 
 	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {

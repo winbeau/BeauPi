@@ -89,7 +89,7 @@ export interface LoadSkillsResult {
  * Validate skill name per Agent Skills spec.
  * Returns array of validation error messages (empty if valid).
  */
-function validateName(name: string): string[] {
+export function validateSkillName(name: string): string[] {
 	const errors: string[] = [];
 
 	if (name.length > MAX_NAME_LENGTH) {
@@ -114,7 +114,7 @@ function validateName(name: string): string[] {
 /**
  * Validate description per Agent Skills spec.
  */
-function validateDescription(description: string | undefined): string[] {
+export function validateSkillDescription(description: string | undefined): string[] {
 	const errors: string[] = [];
 
 	if (!description || description.trim() === "") {
@@ -287,7 +287,7 @@ function loadSkillFromFile(
 		const parentDirName = basename(skillDir);
 
 		// Validate description
-		const descErrors = validateDescription(frontmatter.description);
+		const descErrors = validateSkillDescription(frontmatter.description);
 		for (const error of descErrors) {
 			diagnostics.push({ type: "warning", message: error, path: filePath });
 		}
@@ -296,7 +296,7 @@ function loadSkillFromFile(
 		const name = frontmatter.name || parentDirName;
 
 		// Validate name
-		const nameErrors = validateName(name);
+		const nameErrors = validateSkillName(name);
 		for (const error of nameErrors) {
 			diagnostics.push({ type: "warning", message: error, path: filePath });
 		}
@@ -418,6 +418,8 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 						name: skill.name,
 						winnerPath: existing.filePath,
 						loserPath: skill.filePath,
+						winnerSource: existing.sourceInfo.source,
+						loserSource: skill.sourceInfo.source,
 					},
 				});
 			} else {

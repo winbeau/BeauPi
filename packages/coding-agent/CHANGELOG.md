@@ -8,6 +8,7 @@
 - Added built-in `beaupi-dark` and `beaupi-light` themes plus shared ANSI-aware BeauPi visual helpers.
 - Added a Session-restorable Task Ledger with phase, Tool/Shell/file/verification facts, repeated `git status` detection, a responsive Tasks widget, and Footer task status.
 - Added the M3 Document Runtime with bounded local Markdown discovery/indexing, structured citations, content-hash invalidation, `docs_search`, `docs_read`, `docs_resolve_task`, and versioned Execution Contract details projected into the existing Task Ledger.
+- Added the BeauPi Skill Registry core with deterministic user/project persistence, validation and inventory diagnostics, project-trust gating, conflict-aware precedence, and ResourceLoader reload projection.
 
 ### Changed
 

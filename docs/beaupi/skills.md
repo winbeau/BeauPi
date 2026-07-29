@@ -93,6 +93,19 @@ interface SkillRegistryEntry {
 }
 ```
 
+## Stage 1 Registry Core
+
+状态：已完成（2026-07-29）。
+
+- Registry 使用版本化、确定性排序的 JSON；user 路径为 `~/.beaupi/agent/skills-registry.json`，project 路径为 `.beaupi/skills-registry.json`。相对 `path` 和本地来源路径都以对应 Registry 所在目录为基准。
+- 写入使用同目录临时文件、原子 rename 和进程间锁；缺失文件视为空 Registry，格式错误返回结构化诊断且不覆盖原文件。
+- 校验复用现有 Pi Skill frontmatter 约束，并增加 `SKILL.md`、相对 Markdown 引用、脚本、可执行文件、来源、SHA-256 和更新能力诊断；校验只建立清单，不执行脚本。
+- ResourceLoader 仍使用现有 Agent Skills discovery。存在有效 Registry 记录时，顺序为显式临时 Skill、project Registry、project 原生 Skill、user Registry、user 原生 Skill、Claude/Codex 外部目录；被 Registry 管理但 disabled/invalid 的路径不会通过原生自动发现重新出现。
+- project Registry 文件本身触发现有项目信任流程；未受信任时不读取或投影 project Registry。
+- Registry 冲突保留双方 entry、path 和 source，并在 Skill 进入 System Prompt 或 `/skill:name` 前产生结构化 collision 诊断。
+
+本阶段不包含导入/获取、`/skills` 命令与 UI、更新、删除或子 Agent allowlist。
+
 ## 命令
 
 ### `/skills`
