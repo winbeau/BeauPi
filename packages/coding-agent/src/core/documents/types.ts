@@ -422,7 +422,9 @@ function parseRequiredCheck(value: unknown): RequiredCheck | undefined {
 		typeof record.id !== "string" ||
 		typeof record.label !== "string" ||
 		!isStringArray(record.commands) ||
-		!citations
+		record.commands.length === 0 ||
+		!citations ||
+		citations.length === 0
 	) {
 		return undefined;
 	}
@@ -463,6 +465,45 @@ function parseArray<T>(value: unknown, parser: (item: unknown) => T | undefined)
 	return parsed;
 }
 
+function hasValidContractRelations(
+	documents: readonly DocumentReference[],
+	requirements: readonly Requirement[],
+	allowedCommands: readonly DocumentedCommand[],
+	requiredChecks: readonly RequiredCheck[],
+	stopConditions: readonly StopCondition[],
+	completionCriteria: readonly CompletionCriterion[],
+): boolean {
+	const documentById = new Map(documents.map((document) => [document.id, document]));
+	const citations = [
+		...requirements.flatMap((item) => item.citations),
+		...allowedCommands.flatMap((item) => item.citations),
+		...requiredChecks.flatMap((item) => item.citations),
+		...stopConditions.flatMap((item) => item.citations),
+		...completionCriteria.flatMap((item) => item.citations),
+	];
+	if (
+		citations.some((citation) => {
+			const document = documentById.get(citation.documentId);
+			return document === undefined || document.path !== citation.path || document.hash !== citation.documentHash;
+		})
+	) {
+		return false;
+	}
+	const checkIds = new Set(requiredChecks.map((check) => check.id));
+	if (checkIds.size !== requiredChecks.length) return false;
+	if (
+		requirements.some((requirement) => requirement.requiredCheckIds.some((id) => !checkIds.has(id))) ||
+		completionCriteria.some((criterion) => criterion.requiredCheckIds.some((id) => !checkIds.has(id)))
+	) {
+		return false;
+	}
+	const referencedCheckIds = new Set([
+		...requirements.flatMap((requirement) => requirement.requiredCheckIds),
+		...completionCriteria.flatMap((criterion) => criterion.requiredCheckIds),
+	]);
+	return requiredChecks.every((check) => referencedCheckIds.has(check.id));
+}
+
 export function parseExecutionContract(value: unknown): ExecutionContract | undefined {
 	const record = asRecord(value);
 	if (!record || record.version !== EXECUTION_CONTRACT_VERSION) return undefined;
@@ -490,7 +531,15 @@ export function parseExecutionContract(value: unknown): ExecutionContract | unde
 		typeof record.updatedAt !== "string" ||
 		(record.status !== "active" && record.status !== "stale") ||
 		!isStringArray(record.staleReasons) ||
-		!diagnostics
+		!diagnostics ||
+		!hasValidContractRelations(
+			documents,
+			requirements,
+			allowedCommands,
+			requiredChecks,
+			stopConditions,
+			completionCriteria,
+		)
 	) {
 		return undefined;
 	}

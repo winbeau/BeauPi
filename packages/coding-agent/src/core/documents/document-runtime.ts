@@ -37,15 +37,23 @@ import {
 
 const REQUIRED_HEADING_PATTERN =
 	/requirements?|rules?|constraints?|guidelines?|testing|tests?|verification|verify|acceptance|completion|contributing/i;
+const REQUIREMENT_LIST_HEADING_PATTERN = /^(?:requirements?|constraints?|acceptance criteria)$/i;
 const CHECK_HEADING_PATTERN = /testing|tests?|verification|verify|checks?|acceptance/i;
 const COMPLETION_HEADING_PATTERN = /acceptance|completion|done|finish|verification/i;
-const STOP_HEADING_PATTERN = /constraints?|rules?|stop|safety|guidelines?/i;
 const CODE_LANGUAGE_PATTERN = /^(bash|sh|shell|zsh|console|shellscript|text)?$/i;
 const COMMAND_PREFIX_PATTERN =
 	/^(?:\$\s*)?(?:npm|pnpm|yarn|bun|node|npx|git|cargo|go|python(?:3)?|pytest|vitest|jest|tsc|eslint|prettier|make|\.\/|docker|deno|ruby|java|mvn)\b/i;
 const NEGATIVE_PATTERN =
 	/\b(?:must not|do not|don't|never|forbid|forbidden|prohibited|不得|禁止|不允许|不要|不可|不能)\b/i;
-const POSITIVE_MODAL_PATTERN = /\b(?:must|required|shall|should|need to|ensure|遵循|必须|需要|应当|应该)\b/i;
+const POSITIVE_MODAL_PATTERN =
+	/\b(?:must|shall|should|need(?:s)? to|have to|has to|ensure)\b|\bis required to\b|(?:必须|需要|应当|应该)/i;
+const CHINESE_RESTRICTION_PATTERN = /只(?:能|可|应|使用|关联|来自)/;
+const IMPERATIVE_PATTERN =
+	/^(?:always\s+)?(?:add|ask|avoid|check|ensure|explain|fix|follow|include|keep|put|read|refresh|run|stage|state|treat|update|use|verify|write)\b/i;
+const CONDITIONAL_PATTERN =
+	/^(?:after|before|if|when|whenever|unless|otherwise|for\s+(?:all|any|each)|only\s+(?:if|when))\b|\bunless requested\b|^(?:如果|若|当|仅当|除非|在.+(?:后|前))/i;
+const COMMAND_DIRECTIVE_PATTERN =
+	/^(?:run|execute|invoke)\b|\b(?:must|shall|need(?:s)? to|have to|has to|required to)\s+(?:run|execute|invoke)\b|(?:必须|需要|应当|应该)?(?:运行|执行)/i;
 const LIST_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/;
 const INLINE_CODE_PATTERN = /`([^`\n]+)`/g;
 
@@ -137,10 +145,6 @@ function headingIsCompletion(heading: DocumentHeading): boolean {
 	return headingMatches(heading, COMPLETION_HEADING_PATTERN);
 }
 
-function headingIsStop(heading: DocumentHeading): boolean {
-	return headingMatches(heading, STOP_HEADING_PATTERN);
-}
-
 function isPolicyDocument(document: IndexedDocument): boolean {
 	return (
 		document.reference.kind === "agents" ||
@@ -172,6 +176,36 @@ function cleanFactText(value: string): string {
 
 function factPolarity(text: string): "positive" | "negative" {
 	return NEGATIVE_PATTERN.test(text) ? "negative" : "positive";
+}
+
+function isRequirementDirective(text: string): boolean {
+	return (
+		POSITIVE_MODAL_PATTERN.test(text) ||
+		NEGATIVE_PATTERN.test(text) ||
+		CHINESE_RESTRICTION_PATTERN.test(text) ||
+		IMPERATIVE_PATTERN.test(text)
+	);
+}
+
+function isConditionalDirective(text: string): boolean {
+	return CONDITIONAL_PATTERN.test(text);
+}
+
+function isDirectRequiredCommand(text: string, command: string, requirement: Requirement): boolean {
+	if (requirement.polarity !== "positive" || requirement.level !== "required") return false;
+	if (isConditionalDirective(text)) return false;
+	const commandIndex = text.toLocaleLowerCase().indexOf(command.toLocaleLowerCase());
+	if (commandIndex < 0) return false;
+	return COMMAND_DIRECTIVE_PATTERN.test(text.slice(0, commandIndex).trim());
+}
+
+function headingIsRequirementList(heading: DocumentHeading): boolean {
+	const title = heading?.path.at(-1);
+	return title !== undefined && REQUIREMENT_LIST_HEADING_PATTERN.test(title.trim());
+}
+
+function taskDocument(document: IndexedDocument): boolean {
+	return !isPolicyDocument(document);
 }
 
 function citationForLine(document: IndexedDocument, lineNumber: number): DocumentCitation {
@@ -282,7 +316,7 @@ function bestMatchLine(
 	return { line: 1, heading: undefined };
 }
 
-function mergeRequirement(requirements: Requirement[], candidate: Requirement): void {
+function mergeRequirement(requirements: Requirement[], candidate: Requirement): Requirement {
 	const existing = requirements.find(
 		(item) => normalizeText(item.text) === normalizeText(candidate.text) && item.polarity === candidate.polarity,
 	);
@@ -291,9 +325,10 @@ function mergeRequirement(requirements: Requirement[], candidate: Requirement): 
 		for (const checkId of candidate.requiredCheckIds) {
 			if (!existing.requiredCheckIds.includes(checkId)) existing.requiredCheckIds.push(checkId);
 		}
-		return;
+		return existing;
 	}
 	requirements.push(candidate);
+	return candidate;
 }
 
 function mergeCommand(commands: DocumentedCommand[], candidate: DocumentedCommand): void {
@@ -322,15 +357,16 @@ function mergeCheck(checks: RequiredCheck[], candidate: RequiredCheck): Required
 	return candidate;
 }
 
-function mergeCompletion(criteria: CompletionCriterion[], candidate: CompletionCriterion): void {
+function mergeCompletion(criteria: CompletionCriterion[], candidate: CompletionCriterion): CompletionCriterion {
 	const existing = criteria.find((item) => normalizeText(item.text) === normalizeText(candidate.text));
 	if (existing) {
 		for (const citation of candidate.citations) addCitation(existing, citation);
 		for (const checkId of candidate.requiredCheckIds)
 			if (!existing.requiredCheckIds.includes(checkId)) existing.requiredCheckIds.push(checkId);
-		return;
+		return existing;
 	}
 	criteria.push(candidate);
+	return candidate;
 }
 
 function mergeStopCondition(conditions: StopCondition[], candidate: StopCondition): void {
@@ -353,15 +389,13 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 
 	for (const document of documents) {
 		for (const script of document.packageScripts) {
-			const citation = citationForLine(document, script.line);
-			const command: DocumentedCommand = {
+			mergeCommand(allowedCommands, {
 				id: stableDocumentId("command", document.reference.id, script.name, script.command),
 				command: script.command,
 				kind: "recommended",
 				scriptName: script.name,
-				citations: [citation],
-			};
-			mergeCommand(allowedCommands, command);
+				citations: [citationForLine(document, script.line)],
+			});
 		}
 		if (document.reference.kind === "package-json") continue;
 
@@ -370,38 +404,20 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 			const heading = headingByLine(block.startLine);
 			if (!CODE_LANGUAGE_PATTERN.test(block.language ?? "") && !headingIsRelevant(heading)) continue;
 			for (let offset = 0; offset < block.lines.length; offset++) {
-				const commandText = block.lines[offset]!.trim();
-				if (!commandText || commandText.startsWith("#") || commandText.startsWith("//")) continue;
-				const command = commandText.replace(/^\$\s*/, "");
-				if (!isCommandLike(command)) continue;
+				const command = block.lines[offset]!.trim().replace(/^\$\s*/, "");
+				if (!command || command.startsWith("#") || command.startsWith("//") || !isCommandLike(command)) continue;
 				const line = block.contentStartLine + offset;
-				const citation = citationForLine(document, line);
 				mergeCommand(allowedCommands, {
 					id: stableDocumentId("command", document.reference.id, command),
 					command,
-					kind: headingIsCheck(heading) ? "recommended" : "allowed",
-					citations: [citation],
+					kind:
+						headingIsCheck(heading) &&
+						taskDocument(document) &&
+						factIsTaskRelevant(document, heading, command, relevantTaskTokens)
+							? "recommended"
+							: "allowed",
+					citations: [citationForLine(document, line)],
 				});
-				if (headingIsCheck(heading) && factIsTaskRelevant(document, heading, command, relevantTaskTokens)) {
-					const check = mergeCheck(requiredChecks, {
-						id: stableDocumentId("check", document.reference.id, command),
-						label: `Run ${command}`,
-						commands: [command],
-						citations: [citation],
-					});
-					for (const requirement of requirements) {
-						if (
-							requirement.citations.some(
-								(item) =>
-									item.documentId === document.reference.id &&
-									item.startLine >= (heading?.startLine ?? 1) &&
-									item.startLine <= block.endLine,
-							)
-						) {
-							if (!requirement.requiredCheckIds.includes(check.id)) requirement.requiredCheckIds.push(check.id);
-						}
-					}
-				}
 			}
 		}
 
@@ -414,28 +430,30 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 			const listMatch = line.match(LIST_PATTERN);
 			const text = cleanFactText(listMatch?.[1] ?? line);
 			if (!text || text.length > 500) continue;
-			const explicit = POSITIVE_MODAL_PATTERN.test(text) || NEGATIVE_PATTERN.test(text);
-			const eligibleList = listMatch !== null && (isPolicyDocument(document) || headingIsRelevant(heading));
-			if ((!explicit && !eligibleList) || !factIsTaskRelevant(document, heading, text, relevantTaskTokens)) continue;
+			const directive = isRequirementDirective(text);
+			const eligibleList = listMatch !== null && headingIsRequirementList(heading);
+			if ((!directive && !eligibleList) || !factIsTaskRelevant(document, heading, text, relevantTaskTokens))
+				continue;
+
 			const citation = citationForLine(document, lineNumber);
 			const polarity = factPolarity(text);
-			const requirement: Requirement = {
+			const requirement = mergeRequirement(requirements, {
 				id: stableDocumentId("requirement", normalizeText(text), polarity),
 				text,
 				level: /\b(?:should|recommended|建议|可以)\b/i.test(text) ? "recommended" : "required",
 				polarity,
 				citations: [citation],
 				requiredCheckIds: [],
-			};
-			mergeRequirement(requirements, requirement);
-			if (polarity === "negative" && (headingIsStop(heading) || explicit)) {
+			});
+
+			if (polarity === "negative") {
 				mergeStopCondition(stopConditions, {
 					id: stableDocumentId("stop", normalizeText(text)),
 					text,
 					citations: [citation],
 				});
 			}
-			if (headingIsCompletion(heading) || /\b(?:done|complete|completion|acceptance)\b/i.test(text)) {
+			if (headingIsCompletion(heading) && (directive || eligibleList)) {
 				mergeCompletion(completionCriteria, {
 					id: stableDocumentId("completion", normalizeText(text)),
 					text,
@@ -443,48 +461,47 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 					citations: [citation],
 				});
 			}
-			if (headingIsCheck(heading) && isCommandLike(text)) {
-				const check = mergeCheck(requiredChecks, {
-					id: stableDocumentId("check", document.reference.id, text),
-					label: text,
-					commands: [text],
-					citations: [citation],
-				});
-				requirement.requiredCheckIds.push(check.id);
-			}
-		}
 
-		for (let index = 0; index < document.lines.length; index++) {
-			const lineNumber = index + 1;
-			const line = document.lines[index] ?? "";
-			const heading = headingByLine(lineNumber);
-			for (const match of line.matchAll(INLINE_CODE_PATTERN)) {
+			for (const match of text.matchAll(INLINE_CODE_PATTERN)) {
 				const command = match[1]!.trim();
 				if (!isCommandLike(command)) continue;
-				const citation = citationForLine(document, lineNumber);
 				mergeCommand(allowedCommands, {
 					id: stableDocumentId("command", document.reference.id, command),
 					command,
 					kind: headingIsCheck(heading) ? "recommended" : "allowed",
 					citations: [citation],
 				});
+				if (!taskDocument(document) || !isDirectRequiredCommand(text, command, requirement)) continue;
+				const check = mergeCheck(requiredChecks, {
+					id: stableDocumentId("check", document.reference.id, command),
+					label: `Run ${command}`,
+					commands: [command],
+					citations: [citation],
+				});
+				if (!requirement.requiredCheckIds.includes(check.id)) requirement.requiredCheckIds.push(check.id);
+			}
+		}
+
+		for (let index = 0; index < document.lines.length; index++) {
+			const lineNumber = index + 1;
+			const line = document.lines[index] ?? "";
+			if (document.codeBlocks.some((block) => lineNumber >= block.startLine && lineNumber <= block.endLine))
+				continue;
+			const heading = headingByLine(lineNumber);
+			for (const match of line.matchAll(INLINE_CODE_PATTERN)) {
+				const command = match[1]!.trim();
+				if (!isCommandLike(command)) continue;
+				const citation = citationForLine(document, lineNumber);
 				const matchingRequirement = requirements.find((requirement) =>
 					requirement.citations.some((item) => item.id === citation.id),
 				);
-				if (
-					matchingRequirement ||
-					(headingIsCheck(heading) && factIsTaskRelevant(document, heading, line, relevantTaskTokens))
-				) {
-					const check = mergeCheck(requiredChecks, {
-						id: stableDocumentId("check", document.reference.id, command),
-						label: `Run ${command}`,
-						commands: [command],
-						citations: [citation],
-					});
-					if (matchingRequirement && !matchingRequirement.requiredCheckIds.includes(check.id)) {
-						matchingRequirement.requiredCheckIds.push(check.id);
-					}
-				}
+				if (matchingRequirement?.polarity === "negative" || matchingRequirement) continue;
+				mergeCommand(allowedCommands, {
+					id: stableDocumentId("command", document.reference.id, command),
+					command,
+					kind: headingIsCheck(heading) ? "recommended" : "allowed",
+					citations: [citation],
+				});
 			}
 		}
 	}
@@ -512,6 +529,19 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 		});
 	}
 
+	const referencedCheckIds = new Set([
+		...requirements.flatMap((requirement) => requirement.requiredCheckIds),
+		...completionCriteria.flatMap((criterion) => criterion.requiredCheckIds),
+	]);
+	const linkedChecks = requiredChecks.filter((check) => referencedCheckIds.has(check.id));
+	const linkedCheckIds = new Set(linkedChecks.map((check) => check.id));
+	for (const requirement of requirements) {
+		requirement.requiredCheckIds = requirement.requiredCheckIds.filter((id) => linkedCheckIds.has(id));
+	}
+	for (const criterion of completionCriteria) {
+		criterion.requiredCheckIds = criterion.requiredCheckIds.filter((id) => linkedCheckIds.has(id));
+	}
+
 	const positiveByCore = new Map<string, Requirement>();
 	const negativeByCore = new Map<string, Requirement>();
 	for (const requirement of requirements) {
@@ -529,19 +559,27 @@ function extractFacts(documents: readonly IndexedDocument[], task: string): Extr
 		}
 		(requirement.polarity === "positive" ? positiveByCore : negativeByCore).set(core, requirement);
 	}
-	return { requirements, allowedCommands, requiredChecks, stopConditions, completionCriteria, diagnostics };
+	return {
+		requirements,
+		allowedCommands,
+		requiredChecks: linkedChecks,
+		stopConditions,
+		completionCriteria,
+		diagnostics,
+	};
 }
-
 function documentMatchesTask(document: IndexedDocument, task: string): boolean {
 	const normalizedTask = normalizeText(task);
 	const tokens = taskTokens(task);
 	const headingText = normalizeText(document.headings.map((heading) => heading.path.join(" ")).join(" "));
 	const bodyText = normalizeText(document.content);
 	const metadataText = normalizeText(`${basename(document.reference.path)} ${document.reference.kind}`);
-	return (
-		(normalizedTask.length > 0 && bodyText.includes(normalizedTask)) ||
-		tokens.some((token) => headingText.includes(token) || bodyText.includes(token) || metadataText.includes(token))
+	if (normalizedTask.length > 0 && bodyText.includes(normalizedTask)) return true;
+	const matches = tokens.filter(
+		(token) => headingText.includes(token) || bodyText.includes(token) || metadataText.includes(token),
 	);
+	const minimumMatches = tokens.length >= 4 ? 2 : 1;
+	return matches.length >= minimumMatches;
 }
 
 function selectDocuments(
@@ -559,9 +597,9 @@ function selectDocuments(
 		({ document }) =>
 			isPolicyDocument(document) ||
 			document.reference.kind === "package-json" ||
-			document.reference.source === "global" ||
-			document.reference.source === "ancestor" ||
-			document.reference.source === "explicit",
+			document.reference.sources.some(
+				(source) => source === "global" || source === "ancestor" || source === "explicit",
+			),
 	);
 	const selected: IndexedDocument[] = [];
 	const add = (document: IndexedDocument): void => {

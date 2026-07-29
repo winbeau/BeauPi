@@ -108,11 +108,15 @@ export interface TaskRequirementState extends Requirement {
 }
 
 export interface TaskRequiredCheckState extends RequiredCheck {
+	/** Policy checks remain documented but do not project as current-task Todos. */
+	projection: "task" | "policy";
 	status: TaskDocumentItemStatus;
 	evidenceCommandIds: string[];
 }
 
 export interface TaskCompletionCriterionState extends CompletionCriterion {
+	/** Policy completion guidance remains documented but does not project as current-task Todos. */
+	projection: "task" | "policy";
 	status: TaskDocumentItemStatus;
 }
 
@@ -976,13 +980,34 @@ export class TaskLedger {
 		const contract = this.documentContract;
 		if (!contract) return undefined;
 		const stale = contract.status === "stale";
+		const projectionForCitations = (citations: readonly DocumentCitation[]): "task" | "policy" => {
+			const citedDocuments = contract.documents.filter((document) =>
+				citations.some((citation) => citation.documentId === document.id),
+			);
+			return citedDocuments.length > 0 &&
+				citedDocuments.every((document) => POLICY_DOCUMENT_KINDS.has(document.kind))
+				? "policy"
+				: "task";
+		};
+		const requirementProjection = new Map(
+			contract.requirements.map((requirement) => [requirement.id, projectionForCitations(requirement.citations)]),
+		);
+		const criterionProjection = new Map(
+			contract.completionCriteria.map((criterion) => [criterion.id, projectionForCitations(criterion.citations)]),
+		);
+		const taskCheckIds = new Set([
+			...contract.requirements
+				.filter((requirement) => requirementProjection.get(requirement.id) === "task")
+				.flatMap((requirement) => requirement.requiredCheckIds),
+			...contract.completionCriteria
+				.filter((criterion) => criterionProjection.get(criterion.id) === "task")
+				.flatMap((criterion) => criterion.requiredCheckIds),
+		]);
 		const commandForCheck = (check: RequiredCheck): CommandRecord[] =>
-			commands.filter((command) =>
-				check.commands.some(
-					(expected) =>
-						(command.signature !== undefined && command.signature === createCommandSignature(expected)) ||
-						(command.command !== undefined && command.command.trim() === expected.trim()),
-				),
+			commands.filter(
+				(command) =>
+					command.signature !== undefined &&
+					check.commands.some((expected) => command.signature === createCommandSignature(expected)),
 			);
 		const checkStates: TaskRequiredCheckState[] = contract.requiredChecks.map((check) => {
 			const evidence = commandForCheck(check);
@@ -998,35 +1023,44 @@ export class TaskLedger {
 							: latest.status === "cancelled"
 								? "cancelled"
 								: "failed";
-			return { ...check, status, evidenceCommandIds: evidence.map((item) => item.id) };
+			const finalEvidence = evidence.filter(
+				(command) => command.status === "success" || command.status === "failed" || command.status === "cancelled",
+			);
+			return {
+				...check,
+				projection: taskCheckIds.has(check.id) ? "task" : "policy",
+				status,
+				evidenceCommandIds: finalEvidence.map((item) => item.id),
+			};
 		});
 		const statusForRequirement = (requirement: Requirement): TaskDocumentItemStatus => {
 			if (stale) return "stale";
 			if (requirement.requiredCheckIds.length === 0) return "pending";
-			const checks = checkStates.filter((check) => requirement.requiredCheckIds.includes(check.id));
+			const checks = checkStates.filter(
+				(check) => check.projection === "task" && requirement.requiredCheckIds.includes(check.id),
+			);
 			if (checks.some((check) => check.status === "failed" || check.status === "cancelled")) return "blocked";
 			if (checks.length > 0 && checks.every((check) => check.status === "completed")) return "completed";
 			if (checks.some((check) => check.status === "active")) return "active";
 			return "pending";
 		};
 		const requirementStates: TaskRequirementState[] = contract.requirements.map((requirement) => {
-			const citedDocuments = contract.documents.filter((document) =>
-				requirement.citations.some((citation) => citation.documentId === document.id),
-			);
-			const projection =
-				citedDocuments.length > 0 &&
-				citedDocuments.every(
-					(document) => POLICY_DOCUMENT_KINDS.has(document.kind) && !document.sources.includes("explicit"),
-				)
-					? "policy"
-					: "task";
+			const projection = requirementProjection.get(requirement.id) ?? "task";
 			const evidenceCommandIds = checkStates
-				.filter((check) => requirement.requiredCheckIds.includes(check.id))
+				.filter((check) => check.projection === "task" && requirement.requiredCheckIds.includes(check.id))
 				.flatMap((check) => check.evidenceCommandIds);
-			return { ...requirement, projection, status: statusForRequirement(requirement), evidenceCommandIds };
+			return {
+				...requirement,
+				projection,
+				status: statusForRequirement(requirement),
+				evidenceCommandIds,
+			};
 		});
 		const completionCriteria: TaskCompletionCriterionState[] = contract.completionCriteria.map((criterion) => {
-			const checks = checkStates.filter((check) => criterion.requiredCheckIds.includes(check.id));
+			const projection = criterionProjection.get(criterion.id) ?? "task";
+			const checks = checkStates.filter(
+				(check) => check.projection === "task" && criterion.requiredCheckIds.includes(check.id),
+			);
 			const status: TaskDocumentItemStatus = stale
 				? "stale"
 				: checks.length > 0 && checks.every((check) => check.status === "completed")
@@ -1036,7 +1070,7 @@ export class TaskLedger {
 						: checks.some((check) => check.status === "active")
 							? "active"
 							: "pending";
-			return { ...criterion, status };
+			return { ...criterion, projection, status };
 		});
 		return {
 			contract: structuredClone(contract),
@@ -1114,6 +1148,7 @@ export class TaskLedger {
 				});
 			}
 			for (const check of documentSnapshot.requiredChecks) {
+				if (check.projection === "policy") continue;
 				const status: TaskTodoStatus =
 					check.status === "completed"
 						? "completed"
@@ -1137,6 +1172,7 @@ export class TaskLedger {
 				});
 			}
 			for (const criterion of documentSnapshot.completionCriteria) {
+				if (criterion.projection === "policy") continue;
 				const status: TaskTodoStatus =
 					criterion.status === "completed"
 						? "completed"

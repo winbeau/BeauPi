@@ -4,7 +4,12 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DocumentRuntime } from "../src/core/documents/document-runtime.ts";
 import { indexMarkdownDocument } from "../src/core/documents/markdown.ts";
-import { type DocumentReference, hashDocumentContent, stableDocumentId } from "../src/core/documents/types.ts";
+import {
+	type DocumentReference,
+	hashDocumentContent,
+	parseExecutionContract,
+	stableDocumentId,
+} from "../src/core/documents/types.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
 import { loadProjectContextFiles } from "../src/core/resource-loader.ts";
 import { createTestResourceLoader } from "./utilities.ts";
@@ -178,12 +183,19 @@ describe("Execution Contract", () => {
 				"- All documented checks must pass.",
 			].join("\n"),
 		);
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(
+			join(root, "docs", "task.md"),
+			"# Documented Check Verification\n- Must run `npm run check`.\n- Must run `./test.sh`.\n",
+		);
 		writeFileSync(
 			join(root, "package.json"),
 			JSON.stringify({ scripts: { check: "npm run lint", lint: "eslint ." } }, null, 2),
 		);
 		const runtime = runtimeFor(cwd, agentDir);
-		const result = await runtime.resolveTask({ task: "Implement document runtime and verify it" });
+		const result = await runtime.resolveTask({
+			task: "Implement document runtime and run the documented check",
+		});
 		expect(result.contract.id).toMatch(/^contract_/);
 		expect(result.contract.requirements.map((item) => item.text)).toEqual(
 			expect.arrayContaining(["Must not use sudo.", "Keep descriptions concise.", "Must run `npm run check`."]),
@@ -194,15 +206,34 @@ describe("Execution Contract", () => {
 		expect(result.contract.requiredChecks.flatMap((item) => item.commands)).toEqual(
 			expect.arrayContaining(["npm run check", "./test.sh"]),
 		);
+		expect(
+			result.contract.requiredChecks.flatMap((item) => item.citations.map((citation) => citation.displayPath)),
+		).not.toContain("AGENTS.md");
 		expect(result.contract.requiredChecks.flatMap((item) => item.commands)).not.toContain("npm run lint");
 		expect(result.contract.completionCriteria.some((item) => item.text.includes("checks must pass"))).toBe(true);
 		expect(result.contract.stopConditions.some((item) => item.text === "Must not use sudo.")).toBe(true);
 		for (const requirement of result.contract.requirements)
 			expect(requirement.citations[0]?.documentHash).toHaveLength(64);
 
-		const stable = await runtime.resolveTask({ task: "Implement document runtime and verify it" });
+		const stable = await runtime.resolveTask({
+			task: "Implement document runtime and run the documented check",
+		});
 		expect(stable.contract.id).toBe(result.contract.id);
 		expect(stable.contract.createdAt).toBe(result.contract.createdAt);
+		expect(parseExecutionContract(result.contract)?.id).toBe(result.contract.id);
+
+		const orphanedCheck = structuredClone(result.contract);
+		orphanedCheck.requiredChecks.push({
+			id: "orphan-check",
+			label: "Run orphan check",
+			commands: ["npm run orphan"],
+			citations: [orphanedCheck.requirements[0]!.citations[0]!],
+		});
+		expect(parseExecutionContract(orphanedCheck)).toBeUndefined();
+
+		const invalidCitation = structuredClone(result.contract);
+		invalidCitation.requirements[0]!.citations[0]!.documentHash = "0".repeat(64);
+		expect(parseExecutionContract(invalidCitation)).toBeUndefined();
 	});
 
 	it("keeps generic README guidance and package scripts out of task requirements and required checks", async () => {
@@ -271,6 +302,39 @@ describe("Execution Contract", () => {
 		);
 		for (const genericCheck of ["npm run build", "npm run check", "npm run clean --workspaces", "npm run lint"]) {
 			expect(checks).not.toContain(genericCheck);
+		}
+	});
+
+	it("does not promote policy examples, forbidden commands, or conditional commands to required checks", async () => {
+		const { root, cwd, agentDir } = tempProject();
+		writeFileSync(
+			join(root, "AGENTS.md"),
+			[
+				"# Commands",
+				"- After code changes (not docs): `npm run check`.",
+				"- Never run `npm run build` or `npm test` unless requested by the user.",
+				"- For all non-e2e tests, run `./test.sh`; otherwise run `node ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts`.",
+				"# Testing pi Interactive Mode",
+				"```bash",
+				"sleep 3 && tmux capture-pane -t pi-test -p",
+				"tmux send-keys -t pi-test Escape",
+				"```",
+			].join("\n"),
+		);
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(join(root, "docs", "task.md"), "# Task Check Verification\n- Must run `npm run check`.\n");
+
+		const result = await runtimeFor(cwd, agentDir).resolveTask({ task: "run the task check", explicitPaths: [] });
+		const checks = result.contract.requiredChecks.flatMap((item) => item.commands);
+		expect(checks).toEqual(["npm run check"]);
+		for (const command of [
+			"sleep 3 && tmux capture-pane -t pi-test -p",
+			"npm run build",
+			"npm test",
+			"./test.sh",
+			"node ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts",
+		]) {
+			expect(checks).not.toContain(command);
 		}
 	});
 
