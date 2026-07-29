@@ -173,20 +173,18 @@ BeauPi 不提供独立 Plan 模式，但保留基于文档和任务账本的 Tod
 
 ```text
 Tasks
-  ● Read authentication documentation    completed（绿色）
-  ● Inspect refresh implementation       completed（绿色）
-  ● Update token rotation                active（accent）
-  ○ Run documented checks
-  ○ Review diff
+  ■ Read authentication documentation    completed（绿色）
+  ■ Inspect refresh implementation       completed（绿色）
+  □ Update token rotation                active（accent）
+  □ Run documented checks
+  □ Review diff
 ```
 
 状态：
 
-- `□` pending（实际字符使用终端 figures 的 small square）
-- `■` active（使用 accent/claude 色）
-- 绿色 `●` completed
-- 红色 `●` failed（BeauPi 新增状态）
-- `!` blocked / waiting for user
+- `□` pending、active、failed、blocked（颜色分别表达状态）
+- `■` completed（success 色）
+- blocked 项仍通过 `▸ blocked by ...` 显示阻塞原因
 
 规则：
 
@@ -449,7 +447,7 @@ M2 已接入：
 - phase：discover、execute、verify、commit
 - Todo：pending、active、completed、failed、blocked
 - 最近完成保留、owner 窄屏隐藏、blocked 摘要和 3–10 项动态截断
-- 使用 M1 状态符号的 Tool Timeline
+- 使用空方框/实心方框的单一 Tasks Widget
 - Footer 当前 phase、修改文件数和验证状态
 - 40/80/120/160 列及暗色/亮色主题下无横向溢出
 
@@ -459,7 +457,7 @@ M2 已接入：
 2. 普通 Tool 不再显示大面积背景卡片。
 3. Read/Bash/Edit/Write 的视觉层级与 Claude Code 接近。
 4. Edit diff 支持行号、增删色、上下文折叠和窄终端。
-5. Todo、Sub-agent 和 Workflow 使用统一状态符号。
+5. Todo 使用空方框/实心方框；Sub-agent 和 Workflow 保留各自的运行状态符号。
 6. TPS 不再弹通知，整合到 Footer。
 7. Footer 显示当前上下文 token、窗口上限和占用百分比。
 8. Compact 使用实际流式输出驱动渐近进度条。

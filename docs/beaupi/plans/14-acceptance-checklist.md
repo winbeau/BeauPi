@@ -60,7 +60,7 @@
 - [x] Edit 异步 Preview 正确。
 - [x] 旧 Preview Promise 不覆盖新参数。
 - [x] 执行后不重复相同 Diff。
-- [x] Diff 有上下 dashed 边界。
+- [x] Diff 有上下实线边界。
 - [x] Added/Removed 使用整行背景。
 - [x] 低变化行有词级强调。
 - [x] 高变化行不过度强调。
@@ -105,7 +105,7 @@
 - [x] `npm run check` 无错误、警告或 info。
 - [x] tmux 视觉场景已记录。
 - [x] `docs/beaupi/ui-style.md` 与实现一致。
-- [x] Roadmap、Milestone 和 Changelog 已更新。
+- [x] Roadmap、Milestone 和 Changelog 已更新；M3 Document Runtime 已接入现有生命周期，下一里程碑为 M4 Skill Registry。
 
 ## 里程碑判定
 

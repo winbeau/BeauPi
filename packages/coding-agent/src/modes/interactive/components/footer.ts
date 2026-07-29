@@ -197,6 +197,11 @@ export class FooterComponent implements Component {
 				? `${taskLedger.filesModified.length} file${taskLedger.filesModified.length === 1 ? "" : "s"}`
 				: "";
 		const verification = taskLedger.verification.status === "none" ? "" : `verify ${taskLedger.verification.status}`;
+		const documentContract = taskLedger.documentContract
+			? taskLedger.documentContract.stale
+				? "docs stale"
+				: "contract active"
+			: "";
 		const extensionStatuses = Array.from(this.footerData.getExtensionStatuses().entries())
 			.sort(([left], [right]) => left.localeCompare(right))
 			.map(([, text]) => sanitizeStatusText(text));
@@ -212,6 +217,13 @@ export class FooterComponent implements Component {
 				{ text: modifiedFiles ? theme.fg("dim", modifiedFiles) : "", separator: " · ", priority: 3 },
 				{ text: sessionName ? theme.fg("dim", sessionName) : "", separator: " · ", priority: 2 },
 				{ text: verification ? theme.fg("dim", verification) : "", separator: " · ", priority: 0 },
+				{
+					text: documentContract
+						? theme.fg(taskLedger.documentContract?.stale ? "warning" : "dim", documentContract)
+						: "",
+					separator: " · ",
+					priority: 1,
+				},
 				...extensionStatuses.map((text, index) => ({
 					text,
 					separator: " · ",

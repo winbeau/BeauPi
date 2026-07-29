@@ -48,6 +48,8 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.ts";
+// Document Runtime and Execution Contract
+export * from "./core/documents/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
 export type {
@@ -282,10 +284,14 @@ export {
 	TASK_LEDGER_DUPLICATE_WINDOW_MS,
 	TASK_LEDGER_RECENT_COMPLETION_MS,
 	type TaskCommandStatus,
-	TaskLedger,
+	type TaskCompletionCriterionState,
+	type TaskDocumentContractSnapshot,
+	type TaskDocumentItemStatus,
 	type TaskLedgerSnapshot,
 	type TaskLedgerToolDetails,
 	type TaskPhase,
+	type TaskRequiredCheckState,
+	type TaskRequirementState,
 	type TaskTodo,
 	type TaskTodoStatus,
 	type TaskVerificationStatus,
@@ -302,6 +308,9 @@ export {
 	type BashToolInput,
 	type BashToolOptions,
 	createBashToolDefinition,
+	createDocsReadToolDefinition,
+	createDocsResolveTaskToolDefinition,
+	createDocsSearchToolDefinition,
 	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,
@@ -311,6 +320,12 @@ export {
 	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
+	type DocsReadInput,
+	type DocsReadToolDetails,
+	type DocsResolveTaskInput,
+	type DocsResolveTaskToolDetails,
+	type DocsSearchInput,
+	type DocsSearchToolDetails,
 	type EditOperations,
 	type EditToolDetails,
 	type EditToolInput,

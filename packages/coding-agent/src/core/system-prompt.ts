@@ -8,7 +8,7 @@ import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
-	/** Tools to include in prompt. Default: [read, bash, edit, write] */
+	/** Tools to include in prompt. The caller supplies the active coding/document tools. */
 	selectedTools?: string[];
 	/** Optional one-line tool snippets keyed by tool name. */
 	toolSnippets?: Record<string, string>;
@@ -22,6 +22,8 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** Compact current Document Runtime Execution Contract; stale contracts must be omitted by the caller. */
+	executionContract?: string;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -35,6 +37,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
+		executionContract,
 	} = options;
 	const promptCwd = cwd.replace(/\\/g, "/");
 
@@ -64,6 +67,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		const customPromptHasRead = !selectedTools || selectedTools.includes("read");
 		if (customPromptHasRead && skills.length > 0) {
 			prompt += formatSkillsForPrompt(skills);
+		}
+
+		if (executionContract) {
+			prompt += `\n\n<execution_contract>\n${executionContract}\n</execution_contract>`;
 		}
 
 		prompt += `\nCurrent working directory: ${promptCwd}`;
@@ -154,6 +161,10 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 	// Append skills section (only if read tool is available)
 	if (hasRead && skills.length > 0) {
 		prompt += formatSkillsForPrompt(skills);
+	}
+
+	if (executionContract) {
+		prompt += `\n\n<execution_contract>\n${executionContract}\n</execution_contract>`;
 	}
 
 	prompt += `\nCurrent working directory: ${promptCwd}`;

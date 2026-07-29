@@ -40,6 +40,9 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
 	delegate_task: "Agent",
 	workflow_run: "Workflow",
 	background_start: "Background",
+	docs_search: "Docs Search",
+	docs_read: "Docs Read",
+	docs_resolve_task: "Docs Resolve",
 });
 
 const GROUPABLE_TOOL_NAMES = new Set(["read", "grep", "find", "ls", "bash"]);

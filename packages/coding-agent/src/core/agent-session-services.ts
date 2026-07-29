@@ -3,6 +3,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
+import { DocumentRuntime } from "./documents/document-runtime.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import {
@@ -75,6 +76,7 @@ export interface AgentSessionServices {
 	modelRuntime: ModelRuntime;
 	settingsManager: SettingsManager;
 	resourceLoader: ResourceLoader;
+	documentRuntime: DocumentRuntime;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
 
@@ -151,6 +153,7 @@ export async function createAgentSessionServices(
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
 
+	const documentRuntime = new DocumentRuntime({ cwd, agentDir, resourceLoader });
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
@@ -186,6 +189,7 @@ export async function createAgentSessionServices(
 		modelRuntime,
 		settingsManager,
 		resourceLoader,
+		documentRuntime,
 		diagnostics,
 	};
 }
@@ -206,6 +210,7 @@ export async function createAgentSessionFromServices(
 		modelRuntime: options.services.modelRuntime,
 		settingsManager: options.services.settingsManager,
 		resourceLoader: options.services.resourceLoader,
+		documentRuntime: options.services.documentRuntime,
 		sessionManager: options.sessionManager,
 		model: options.model,
 		thinkingLevel: options.thinkingLevel,

@@ -35,8 +35,8 @@ BeauPi CLI / TUI
 └── Observability
     ├── Task Status
     ├── Workflow DAG
-    ├── Claude-style Tool/Diff/Todo Renderers
-    ├── Tool Timeline
+    ├── Claude-style Tool/Diff Renderers
+    ├── Tasks Widget
     ├── Usage Footer
     ├── Failures
     └── Background Progress
@@ -117,20 +117,30 @@ interface WorkflowNode {
 
 ## Document Runtime
 
-Document Resolver 按任务选择相关文档，生成：
+M3 Document Runtime 位于 `core/documents/`，由现有 `AgentSessionServices` 按 cwd 唯一持有。它复用 `ResourceLoader.getAgentsFiles()` 的 AGENTS/CLAUDE 祖先发现行为，再在项目范围内发现 README、CONTRIBUTING、`docs/**/*.md`、附近 Markdown 和最近 package.json scripts。
+
+Runtime 提供 Markdown heading/行范围索引、内容 hash、有限缓存、相关性排序、结构化 citation 和 Contract stale/rebuild。它使用稳定 canonical path/id，不把所有 docs 注入 System Prompt。只有当前 active Contract 的精简摘要进入现有 `buildSystemPrompt()`；stale Contract 会被移除。
 
 ```typescript
 interface ExecutionContract {
+  version: number;
+  id: string;
+  task: string;
   documents: DocumentReference[];
   requirements: Requirement[];
   allowedCommands: DocumentedCommand[];
-  requiredChecks: Check[];
+  requiredChecks: RequiredCheck[];
   stopConditions: StopCondition[];
   completionCriteria: CompletionCriterion[];
+  documentHashes: Record<string, string>;
+  status: "active" | "stale";
+  diagnostics: DocumentDiagnostic[];
 }
 ```
 
-Execution Contract 约束 Agent 执行，但不引入独立 Plan 模式。
+`docs_search`、`docs_read` 和 `docs_resolve_task` 是现有 Tool registry 中的内置 Tool，使用 M1 minimal shell 和结构化 `details`。`docs_resolve_task` 不启动 Agent 或 Provider。Contract details 使用版本化 `documentRuntime` key；自动解析和 Tool Result 都存入当前 Session branch，Task Ledger 只从当前 branch 重建。
+
+Execution Contract 约束 Agent 执行，但不引入独立 Plan Mode。Document Runtime 负责文档内容、索引、引用和 Contract；Task Ledger 负责 requirement/check/completion 的证据状态和 Todo 投影。关键文档 hash 变化后旧 Contract 不再作为有效约束。详见 [Document Runtime 设计](./document-runtime.md)。
 
 ## Policy Engine
 
@@ -175,13 +185,13 @@ interface TaskLedger {
 
 分支敏感状态存入 Tool Result `details`，在 `session_start` 时从当前 Branch 重建。
 
-M2 已实现该最小状态层：
+M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract、文档、requirement、required check、completion criterion、诊断和来源 citation：
 
 - `AgentSession.taskLedger` 是唯一任务状态源。
 - Tool 以稳定 `toolCallId` 去重，用户 Bash 以 Session entry id 重建。
 - 只记录当前 Session 可确定的 Tool、Shell、文件和验证事实。
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
-- Todo、Tool Timeline 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
+- Tasks Widget 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
 
 ## 后台任务与唤醒
 

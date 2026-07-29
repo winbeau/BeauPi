@@ -6,7 +6,8 @@
 
 - Added current context token usage to the footer and streamed progress for context compaction.
 - Added built-in `beaupi-dark` and `beaupi-light` themes plus shared ANSI-aware BeauPi visual helpers.
-- Added a Session-restorable Task Ledger with phase, Tool/Shell/file/verification facts, repeated `git status` detection, a responsive Todo and Tool Timeline widget, and Footer task status.
+- Added a Session-restorable Task Ledger with phase, Tool/Shell/file/verification facts, repeated `git status` detection, a responsive Tasks widget, and Footer task status.
+- Added the M3 Document Runtime with bounded local Markdown discovery/indexing, structured citations, content-hash invalidation, `docs_search`, `docs_read`, `docs_resolve_task`, and versioned Execution Contract details projected into the existing Task Ledger.
 
 ### Changed
 
@@ -15,6 +16,7 @@
 - Reworked the interactive TUI with a minimal Tool shell, grouped read operations, streaming Write previews, structured Diff rendering, recent-run Footer statistics, responsive three-line status, and unified Compact/Retry states.
 - Changed the streaming working row to show the latest model Thinking summary while preserving explicit extension messages and Tool-associated summaries/results.
 - Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
+- Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
 
 ### Fixed
 

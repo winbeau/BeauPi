@@ -220,7 +220,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_TITLE)} - AI coding assistant with read, bash, edit, write tools
+	console.log(`${chalk.bold(APP_TITLE)} - AI coding assistant with coding and local document tools
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
@@ -256,7 +256,7 @@ ${chalk.bold("Options:")}
   --no-tools, -nt                Disable all tools by default (built-in and extension)
   --no-builtin-tools, -nbt       Disable built-in tools by default but keep extension/custom tools enabled
   --tools, -t <tools>            Comma-separated allowlist of tool names to enable
-                                 Applies to built-in, extension, and custom tools
+                                 Applies to built-in, document, extension, and custom tools
   --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
                                  Applies to built-in, extension, and custom tools
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
@@ -389,12 +389,15 @@ ${chalk.bold("Environment Variables:")}
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
 ${chalk.bold("Built-in Tool Names:")}
-  read   - Read file contents
-  bash   - Execute bash commands
-  edit   - Edit files with find/replace
-  write  - Write files (creates/overwrites)
-  grep   - Search file contents (read-only, off by default)
-  find   - Find files by glob pattern (read-only, off by default)
-  ls     - List directory contents (read-only, off by default)
+  read             - Read file contents
+  bash             - Execute bash commands
+  edit             - Edit files with find/replace
+  write            - Write files (creates/overwrites)
+  docs_search      - Search relevant local project documents
+  docs_read        - Read a local document by heading or line range
+  docs_resolve_task - Resolve local documents into an execution contract
+  grep             - Search file contents (read-only, off by default)
+  find             - Find files by glob pattern (read-only, off by default)
+  ls               - List directory contents (read-only, off by default)
 `);
 }

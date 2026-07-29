@@ -46,6 +46,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -64,6 +65,14 @@ import {
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import {
+	attachDocumentRuntimeToolDetails,
+	DOCUMENT_CONTRACT_ENTRY_TYPE,
+	DocumentRuntime,
+	type DocumentRuntimeToolDetails,
+	type ExecutionContract,
+	getDocumentRuntimeToolDetails,
+} from "./documents/index.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
@@ -211,6 +220,8 @@ export interface AgentSessionConfig {
 	modelRuntime: ModelRuntime;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
+	/** Disable the default document tools while retaining the existing built-in registry. */
+	disableDocumentTools?: boolean;
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];
 	/** Optional denylist of tool names. When provided, these tool names are not exposed. */
@@ -226,6 +237,8 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Unique cwd-bound Document Runtime. Created by AgentSessionServices in normal application flows. */
+	documentRuntime?: DocumentRuntime;
 }
 
 export interface ExtensionBindings {
@@ -308,6 +321,7 @@ export class AgentSession {
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
 	readonly taskLedger: TaskLedger;
+	readonly documentRuntime: DocumentRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -315,6 +329,8 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
+	private _promptPreflightCount = 0;
+	private _pendingPromptPreflights = new Set<Promise<void>>();
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -343,6 +359,7 @@ export class AgentSession {
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
+	private _extensionCommandExecutionDepth = 0;
 	private _turnIndex = 0;
 
 	private _resourceLoader: ResourceLoader;
@@ -351,6 +368,7 @@ export class AgentSession {
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
+	private _disableDocumentTools = false;
 	private _allowedToolNames?: Set<string>;
 	private _excludedToolNames?: Set<string>;
 	private _baseToolsOverride?: Record<string, AgentTool>;
@@ -385,6 +403,14 @@ export class AgentSession {
 			cwd: config.sessionManager.getCwd(),
 			entries: config.sessionManager.getBranch(),
 		});
+		this.documentRuntime =
+			config.documentRuntime ??
+			new DocumentRuntime({
+				cwd: config.cwd,
+				agentDir: getAgentDir(),
+				resourceLoader: config.resourceLoader,
+			});
+		this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -392,6 +418,7 @@ export class AgentSession {
 		this._modelRuntime = config.modelRuntime;
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
+		this._disableDocumentTools = config.disableDocumentTools ?? false;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
@@ -411,6 +438,13 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/** Validate the branch-restored contract before the first provider request. */
+	async initializeDocumentRuntime(): Promise<void> {
+		const contract = await this.documentRuntime.initialize();
+		this.taskLedger.setDocumentRuntimeContract(contract);
+		this._refreshDocumentRuntimePrompt();
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -501,6 +535,7 @@ export class AgentSession {
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 			const runner = this._extensionRunner;
+			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			if (!runner.hasHandlers("tool_result")) {
 				return undefined;
 			}
@@ -522,7 +557,9 @@ export class AgentSession {
 
 			return {
 				content: hookResult.content,
-				details: hookResult.details,
+				details: documentDetails
+					? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
+					: hookResult.details,
 				isError: hookResult.isError ?? isError,
 				usage: hookResult.usage,
 			};
@@ -611,6 +648,11 @@ export class AgentSession {
 		if (event.type === "tool_execution_end" && taskLedgerDetails) {
 			const result = event.result as { details?: unknown };
 			result.details = attachTaskLedgerToolDetails(result.details, taskLedgerDetails);
+			const documentDetails = getDocumentRuntimeToolDetails(result.details);
+			if (documentDetails?.contract) this.documentRuntime.restoreContract(documentDetails.contract);
+			const contract = await this.documentRuntime.noteFilesModified(taskLedgerDetails.filesModified ?? []);
+			this.taskLedger.setDocumentRuntimeContract(contract);
+			this._refreshDocumentRuntimePrompt();
 		}
 
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
@@ -644,6 +686,10 @@ export class AgentSession {
 			const details = this.taskLedger.getToolDetails(event.message.toolCallId);
 			if (details) {
 				event.message.details = attachTaskLedgerToolDetails(event.message.details, details);
+			}
+			const documentDetails = this.taskLedger.getDocumentRuntimeDetails(event.message.toolCallId);
+			if (documentDetails) {
+				event.message.details = attachDocumentRuntimeToolDetails(event.message.details, documentDetails);
 			}
 		}
 
@@ -903,7 +949,7 @@ export class AgentSession {
 
 	/** Whether the session is currently processing an agent run or post-run continuation. */
 	get isStreaming(): boolean {
-		return this._isAgentRunActive;
+		return this._isAgentRunActive || this._promptPreflightCount > 0;
 	}
 
 	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
@@ -1079,8 +1125,62 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			executionContract: this.documentRuntime.getPromptContract(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
+	}
+
+	private _refreshDocumentRuntimePrompt(): void {
+		if (this._toolRegistry.size === 0) return;
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		if (this._systemPromptOverride === undefined) this.agent.state.systemPrompt = this._baseSystemPrompt;
+	}
+
+	private _explicitDocumentInputs(task: string): string[] {
+		return [
+			...new Set(
+				task
+					.split(/\s+/)
+					.map((part) => part.replace(/^[`'"(<]+|[`'">),.;:]+$/g, ""))
+					.filter((part) => /^(?:[a-z][a-z\d+.-]*:\/\/|.*\.(?:md|markdown))$/i.test(part)),
+			),
+		];
+	}
+
+	private _documentDetailsForContract(contract: ExecutionContract): DocumentRuntimeToolDetails {
+		const citations = [
+			...contract.requirements.flatMap((item) => item.citations),
+			...contract.requiredChecks.flatMap((item) => item.citations),
+			...contract.completionCriteria.flatMap((item) => item.citations),
+		].filter((citation, index, all) => all.findIndex((item) => item.id === citation.id) === index);
+		return {
+			version: 1,
+			kind: "resolve_task",
+			citations,
+			diagnostics: contract.diagnostics,
+			contract,
+		};
+	}
+
+	private async _resolveDocumentContractForTask(task: string): Promise<void> {
+		const result = await this.documentRuntime.resolveTask({
+			task,
+			explicitPaths: this._explicitDocumentInputs(task),
+		});
+		const contract = result.contract;
+		const previousContractId = this.taskLedger.getSnapshot().documentContract?.contract.id;
+		this.taskLedger.setDocumentRuntimeContract(contract);
+		if (contract.documents.length > 0) {
+			if (previousContractId !== contract.id) {
+				this.sessionManager.appendCustomEntry(
+					DOCUMENT_CONTRACT_ENTRY_TYPE,
+					attachDocumentRuntimeToolDetails(undefined, this._documentDetailsForContract(contract)),
+				);
+				this.taskLedger.rebuild(this.sessionManager.getBranch());
+				this.taskLedger.setDocumentRuntimeContract(contract);
+			}
+		}
+		this._refreshDocumentRuntimePrompt();
 	}
 
 	// =========================================================================
@@ -1143,15 +1243,46 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
+		const wasBusyAtPromptStart =
+			this._isAgentRunActive || (this._promptPreflightCount > 0 && this._extensionCommandExecutionDepth === 0);
+		const tracksPreflight = !this._isAgentRunActive;
+		let resolvePreflightStart = (): void => {};
+		const preflightStart = tracksPreflight
+			? new Promise<void>((resolve) => {
+					resolvePreflightStart = resolve;
+				})
+			: undefined;
+		if (tracksPreflight) {
+			this._promptPreflightCount += 1;
+			if (preflightStart) {
+				this._pendingPromptPreflights.add(preflightStart);
+			}
+		}
+		const releasePreflight = (): void => {
+			if (!tracksPreflight) return;
+			this._promptPreflightCount -= 1;
+			resolvePreflightStart();
+			if (preflightStart) {
+				this._pendingPromptPreflights.delete(preflightStart);
+			}
+			this._resolveIdleWaitIfIdle();
+		};
 		let messages: AgentMessage[] | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
 			if (expandPromptTemplates && text.startsWith("/")) {
-				const handled = await this._tryExecuteExtensionCommand(text);
+				this._extensionCommandExecutionDepth += 1;
+				let handled: boolean;
+				try {
+					handled = await this._tryExecuteExtensionCommand(text);
+				} finally {
+					this._extensionCommandExecutionDepth -= 1;
+				}
 				if (handled) {
 					// Extension command executed, no prompt to send
+					releasePreflight();
 					preflightResult?.(true);
 					return;
 				}
@@ -1165,9 +1296,10 @@ export class AgentSession {
 					currentText,
 					currentImages,
 					options?.source ?? "interactive",
-					this.isStreaming ? options?.streamingBehavior : undefined,
+					this._isAgentRunActive ? options?.streamingBehavior : undefined,
 				);
 				if (inputResult.action === "handled") {
+					releasePreflight();
 					preflightResult?.(true);
 					return;
 				}
@@ -1184,8 +1316,8 @@ export class AgentSession {
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 			}
 
-			// If streaming, queue via steer() or followUp() based on option
-			if (this.isStreaming) {
+			// If another prompt is already running or preparing, queue via steer() or followUp() based on option.
+			if (this._isAgentRunActive || (tracksPreflight && wasBusyAtPromptStart)) {
 				if (!options?.streamingBehavior) {
 					throw new Error(
 						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -1196,6 +1328,7 @@ export class AgentSession {
 				} else {
 					await this._queueSteer(expandedText, currentImages);
 				}
+				releasePreflight();
 				preflightResult?.(true);
 				return;
 			}
@@ -1228,6 +1361,14 @@ export class AgentSession {
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
 				await this._checkCompaction(lastAssistant, false);
+			}
+
+			// Resolve local document constraints before the provider request. Discovery diagnostics are
+			// surfaced through the ledger/contract; a filesystem race must not block the coding turn.
+			try {
+				await this._resolveDocumentContractForTask(expandedText);
+			} catch {
+				// docs_resolve_task remains available for an explicit retry when discovery races with a file change.
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -1281,14 +1422,17 @@ export class AgentSession {
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 			}
 		} catch (error) {
+			releasePreflight();
 			preflightResult?.(false);
 			throw error;
 		}
 
 		if (!messages) {
+			releasePreflight();
 			return;
 		}
 
+		releasePreflight();
 		preflightResult?.(true);
 		await this._runAgentPrompt(messages);
 	}
@@ -1571,6 +1715,10 @@ export class AgentSession {
 	async abort(): Promise<void> {
 		this.abortRetry();
 		this.agent.abort();
+		if (this._pendingPromptPreflights.size > 0 && this._extensionCommandExecutionDepth === 0) {
+			await Promise.all(this._pendingPromptPreflights);
+			this.agent.abort();
+		}
 		await this.waitForIdle();
 	}
 
@@ -2279,6 +2427,9 @@ export class AgentSession {
 
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
+		if (this._pendingPromptPreflights.size > 0) {
+			await Promise.all(this._pendingPromptPreflights);
+		}
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
 
@@ -2584,7 +2735,7 @@ export class AgentSession {
 		const autoResizeImages = this.settingsManager.getImageAutoResize();
 		const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
 		const shellPath = this.settingsManager.getShellPath();
-		const baseToolDefinitions = this._baseToolsOverride
+		const baseToolDefinitions: Record<string, ToolDefinition> = this._baseToolsOverride
 			? Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
 						name,
@@ -2594,7 +2745,13 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					documentRuntime: this.documentRuntime,
 				});
+		if (this._disableDocumentTools) {
+			delete baseToolDefinitions.docs_search;
+			delete baseToolDefinitions.docs_read;
+			delete baseToolDefinitions.docs_resolve_task;
+		}
 
 		this._baseToolDefinitions = new Map(
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
@@ -2622,7 +2779,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "docs_search", "docs_read", "docs_resolve_task"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -2637,11 +2794,14 @@ export class AgentSession {
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
+		await this.documentRuntime.reload();
+		this.taskLedger.setDocumentRuntimeContract(this.documentRuntime.getContract());
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
 			includeAllExtensionTools: true,
 		});
+		this._refreshDocumentRuntimePrompt();
 
 		const hasBindings =
 			this._extensionUIContext ||
@@ -3117,6 +3277,10 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
+			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
+			const documentContract = await this.documentRuntime.validateCurrentContract();
+			this.taskLedger.setDocumentRuntimeContract(documentContract);
+			this._refreshDocumentRuntimePrompt();
 
 			// Emit session_tree event
 			await this._extensionRunner.emit({

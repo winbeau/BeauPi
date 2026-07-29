@@ -98,7 +98,7 @@
 - Tool 标题、queued/running/permission/success/error 状态
 - Read/Search/List/Bash 聚合与当前操作提示
 - Read/Edit/Write/Bash/Search renderer
-- Edit/Write 结构化 Diff：整行增删背景、词级高亮、行号 gutter、上下 dashed 边界
+- Edit/Write 结构化 Diff：整行增删背景、词级高亮、行号 gutter、上下实线边界
 - 三行 Footer：最近运行统计、cwd/branch、Session/上下文/模型状态
 - Footer 的 80、120、160 列降级策略
 - Compact 实际流式输出驱动的渐近进度条
@@ -148,7 +148,7 @@
 - 简单的重复命令签名与 `git status` 重复检测
 - 基于 Task Ledger 的 Todo Widget
 - 当前阶段、修改文件和验证状态接入 M1 的 Footer 与列表组件
-- Tool Timeline 使用 M1 的 Tool 状态语言
+- 命令事实保留在 Task Ledger，Tasks Widget 只展示任务清单
 
 ### 实现边界
 
@@ -189,13 +189,15 @@ interface TaskLedger {
 - phase、文件读取/修改、Tool/Shell 成功/失败/取消、验证和 commit 事实均有单元或 faux provider harness 测试。
 - 等价 `git status` 使用规范化签名、30 秒窗口和账本观察到的 workspace revision 检测；文件修改后不判为重复。
 - Todo 支持 pending、active、completed、failed、blocked，按最近完成、失败、进行中、pending、blocked 和较早完成动态选择 3–10 项，并提供 owner 窄屏隐藏和 blocked/隐藏项摘要。
-- Tool Timeline 复用 M1 状态符号；Footer 保持最多三行并接入 phase、修改文件数和验证状态。
+- Tasks Widget 使用空方框/实心方框表达未完成/完成；Footer 保持最多三行并接入 phase、修改文件数和验证状态。
 - tmux 固定 faux provider 场景覆盖暗色/亮色的 40、80、120、160 列；8 个 `/debug` 记录均为 `visibleWidth <= width`，无横向溢出。
 - 定向测试、`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
 ---
 
 ## M3：Document Runtime
+
+状态：已完成（2026-07-29）。
 
 ### 目标
 
@@ -225,6 +227,17 @@ interface TaskLedger {
 ### 验收标准
 
 给定包含 `AGENTS.md` 和项目文档的测试仓库，Agent 能选择相关文档、说明关键约束来源，并在结束前检查文档要求是否满足。
+
+### 验收记录（2026-07-29）
+
+- `AgentSessionServices` 持有唯一 cwd-bound Document Runtime；`/new`、`/resume`、`/fork`、reload 和 tree branch 重建复用现有 Runtime/Session/ResourceLoader 生命周期。
+- Document Runtime 发现并按来源保留 global、ancestor、project、nearby、explicit、package 元数据；复用 `loadProjectContextFiles()` 的 AGENTS/CLAUDE 祖先行为，跳过 `.git`、`node_modules`、构建/缓存/生成目录，处理符号链接 canonical path 去重和有界预算。
+- Markdown 索引支持 ATX、Setext、fenced code block、heading path、1-based 行范围、heading/offset 读取和结构化 citation；文档事实使用内容 hash。
+- `docs_search`、`docs_read`、`docs_resolve_task` 已接入默认 Tool registry、prompt snippet、minimal renderer 和普通编码任务默认激活策略；URL 返回结构化 unsupported 诊断，不执行网络 fallback。
+- Execution Contract details 使用版本化 `documentRuntime` key；自动解析和 Tool Result 存入当前 Session branch，Task Ledger 从当前 branch 去重重建，Extension 替换 Tool details 后仍重新附加 metadata。
+- Requirement、required check、completion criterion 只使用结构化文档与 Tool/Shell 证据；冲突保留双方引用，无法判断的状态保持 pending/blocked，关键文档变化会 stale，恢复原 hash 后确定性恢复 active。
+- 精简 active Contract 通过现有 System Prompt 重建链注入，stale Contract 不会继续发送；Todo、Footer 和 Task Ledger 展示文档、requirement、check、completion、来源和 stale/blocked 状态。
+- 定向 Runtime、Tool、Ledger、Session、Widget/Footer 测试覆盖 hash 失效、branch 恢复、Extension metadata、预算、引用、宽度和 faux provider 场景。
 
 ---
 

@@ -10,6 +10,18 @@ export {
 	createLocalBashOperations,
 } from "./bash.ts";
 export {
+	createDocsReadToolDefinition,
+	createDocsResolveTaskToolDefinition,
+	createDocsSearchToolDefinition,
+	createDocumentTools,
+	type DocsReadInput,
+	type DocsReadToolDetails,
+	type DocsResolveTaskInput,
+	type DocsResolveTaskToolDetails,
+	type DocsSearchInput,
+	type DocsSearchToolDetails,
+} from "./documents.ts";
+export {
 	createEditTool,
 	createEditToolDefinition,
 	type EditOperations,
@@ -70,19 +82,47 @@ export {
 } from "./write.ts";
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { DocumentRuntime } from "../documents/document-runtime.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
+import {
+	createDocsReadToolDefinition,
+	createDocsResolveTaskToolDefinition,
+	createDocsSearchToolDefinition,
+} from "./documents.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+export type ToolName =
+	| "read"
+	| "bash"
+	| "edit"
+	| "write"
+	| "grep"
+	| "find"
+	| "ls"
+	| "docs_search"
+	| "docs_read"
+	| "docs_resolve_task";
+export const allToolNames: Set<ToolName> = new Set([
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"docs_search",
+	"docs_read",
+	"docs_resolve_task",
+]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -92,6 +132,7 @@ export interface ToolsOptions {
 	grep?: GrepToolOptions;
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
+	documentRuntime?: DocumentRuntime;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -110,6 +151,12 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createFindToolDefinition(cwd, options?.find);
 		case "ls":
 			return createLsToolDefinition(cwd, options?.ls);
+		case "docs_search":
+			return createDocsSearchToolDefinition(options?.documentRuntime);
+		case "docs_read":
+			return createDocsReadToolDefinition(options?.documentRuntime);
+		case "docs_resolve_task":
+			return createDocsResolveTaskToolDefinition(options?.documentRuntime);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -131,6 +178,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createFindTool(cwd, options?.find);
 		case "ls":
 			return createLsTool(cwd, options?.ls);
+		case "docs_search":
+		case "docs_read":
+		case "docs_resolve_task":
+			return wrapToolDefinition(createToolDefinition(toolName, cwd, options));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -142,6 +193,9 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 		createBashToolDefinition(cwd, options?.bash),
 		createEditToolDefinition(cwd, options?.edit),
 		createWriteToolDefinition(cwd, options?.write),
+		createDocsSearchToolDefinition(options?.documentRuntime),
+		createDocsReadToolDefinition(options?.documentRuntime),
+		createDocsResolveTaskToolDefinition(options?.documentRuntime),
 	];
 }
 
@@ -151,6 +205,9 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 		createGrepToolDefinition(cwd, options?.grep),
 		createFindToolDefinition(cwd, options?.find),
 		createLsToolDefinition(cwd, options?.ls),
+		createDocsSearchToolDefinition(options?.documentRuntime),
+		createDocsReadToolDefinition(options?.documentRuntime),
+		createDocsResolveTaskToolDefinition(options?.documentRuntime),
 	];
 }
 
@@ -163,6 +220,9 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
+		docs_search: createDocsSearchToolDefinition(options?.documentRuntime),
+		docs_read: createDocsReadToolDefinition(options?.documentRuntime),
+		docs_resolve_task: createDocsResolveTaskToolDefinition(options?.documentRuntime),
 	};
 }
 
@@ -193,5 +253,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
+		docs_search: wrapToolDefinition(createDocsSearchToolDefinition(options?.documentRuntime)),
+		docs_read: wrapToolDefinition(createDocsReadToolDefinition(options?.documentRuntime)),
+		docs_resolve_task: wrapToolDefinition(createDocsResolveTaskToolDefinition(options?.documentRuntime)),
 	};
 }

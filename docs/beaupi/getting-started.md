@@ -81,6 +81,20 @@ BEAUPI_CODING_AGENT_DIR
 BEAUPI_CODING_AGENT_SESSION_DIR
 ```
 
+## 文档驱动任务
+
+M3 Document Runtime 会在普通编码任务开始前使用现有 ResourceLoader 的 AGENTS/CLAUDE 上下文，并自动发现当前项目的 README、CONTRIBUTING、`docs/**/*.md`、附近 Markdown 和最近 package.json scripts。当前任务会生成带内容 hash 和行号引用的精简 Execution Contract，不会把全部 docs 注入模型上下文。
+
+可直接调用三个内置 Tool：
+
+```text
+docs_search(query, scope?)
+docs_read(document, heading?, startLine?, endLine?, offset?, limit?)
+docs_resolve_task(task, explicitDocuments?, refresh?)
+```
+
+Requirement、required check、completion criterion 和 stale/blocked 状态显示在现有 Task Ledger/Todo/Footer 中。`docs_read` 的大输出会沿用 Tool 截断并保留完整临时文件路径；URL 在 M3 返回 unsupported 诊断，不执行网络 fallback。详见 [Document Runtime 设计](./document-runtime.md)。
+
 ## 开发检查
 
 代码修改后：
@@ -97,9 +111,9 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi 开发基线、Claude Code 风格 TUI、Task Ledger 和任务可视化已完成。后续按顺序推进：
+BeauPi 开发基线、Claude Code 风格 TUI、Task Ledger、任务可视化和 Document Runtime 已完成。后续按顺序推进：
 
-1. 整合默认 System Prompt、文档发现与 Execution Contract。
-2. 实现 Skill Registry。
-3. 实现进程内子 Agent 和多 Agent Workflow。
+1. 实现 Skill Registry。
+2. 实现进程内子 Agent 和多 Agent Workflow。
+3. 在策略系统稳定后实现搜索、远程执行和受控权限能力。
 4. 功能稳定后再决定独立 npm 发行物和二进制方案。

@@ -1,6 +1,16 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { BashResult } from "../bash-executor.ts";
+import {
+	type CompletionCriterion,
+	DOCUMENT_CONTRACT_ENTRY_TYPE,
+	type DocumentCitation,
+	type DocumentRuntimeToolDetails,
+	type ExecutionContract,
+	getDocumentRuntimeToolDetails,
+	type RequiredCheck,
+	type Requirement,
+} from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
 import type { SessionEntry } from "../session-manager.ts";
 
@@ -85,6 +95,35 @@ export interface TaskTodo {
 	owner?: string;
 	blockedBy?: string[];
 	activity?: string;
+	source?: string;
+}
+
+export type TaskDocumentItemStatus = "pending" | "active" | "completed" | "failed" | "cancelled" | "blocked" | "stale";
+
+export interface TaskRequirementState extends Requirement {
+	status: TaskDocumentItemStatus;
+	evidenceCommandIds: string[];
+}
+
+export interface TaskRequiredCheckState extends RequiredCheck {
+	status: TaskDocumentItemStatus;
+	evidenceCommandIds: string[];
+}
+
+export interface TaskCompletionCriterionState extends CompletionCriterion {
+	status: TaskDocumentItemStatus;
+}
+
+export interface TaskDocumentContractSnapshot {
+	contract: ExecutionContract;
+	documents: ExecutionContract["documents"];
+	requirements: TaskRequirementState[];
+	requiredChecks: TaskRequiredCheckState[];
+	completionCriteria: TaskCompletionCriterionState[];
+	diagnostics: ExecutionContract["diagnostics"];
+	stale: boolean;
+	staleReasons: string[];
+	sourceCitations: DocumentCitation[];
 }
 
 export interface TaskLedgerSnapshot {
@@ -101,6 +140,7 @@ export interface TaskLedgerSnapshot {
 	failures: readonly FailureRecord[];
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
+	documentContract?: TaskDocumentContractSnapshot;
 }
 
 interface MutableCommandRecord extends CommandRecord {
@@ -134,11 +174,14 @@ const TOOL_LABELS = Object.freeze({
 	delegate_task: "Agent",
 	workflow_run: "Workflow",
 	background_start: "Background",
+	docs_search: "Docs Search",
+	docs_read: "Docs Read",
+	docs_resolve_task: "Docs Resolve",
 } as const satisfies Readonly<Record<string, string>>);
 
 const SHELL_OPERATORS = new Set([";", "&&", "||", "|", "&", "\n"]);
 const VERIFICATION_TOOL_NAMES = new Set(["test", "tests", "check", "verify", "lint", "typecheck", "build"]);
-const READ_TOOL_NAMES = new Set(["read"]);
+const READ_TOOL_NAMES = new Set(["read", "docs_read"]);
 const MODIFY_TOOL_NAMES = new Set(["edit", "write"]);
 const DEFAULT_TASK_OWNER = "main";
 
@@ -427,6 +470,8 @@ export class TaskLedger {
 	private readonly fileReads = new Map<string, FileReadRecord>();
 	private readonly fileModifications = new Map<string, FileModificationRecord>();
 	private readonly failures = new Map<string, FailureRecord>();
+	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
+	private documentContract: ExecutionContract | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -444,9 +489,16 @@ export class TaskLedger {
 		this.fileReads.clear();
 		this.fileModifications.clear();
 		this.failures.clear();
+		this.documentRuntimeDetails.clear();
+		this.documentContract = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
+			if (entry.type === "custom" && entry.customType === DOCUMENT_CONTRACT_ENTRY_TYPE) {
+				const details = getDocumentRuntimeToolDetails(entry.data);
+				if (details) this.ingestDocumentRuntimeDetails(`entry:${entry.id}`, details);
+				continue;
+			}
 			if (entry.type !== "message") continue;
 			const timestamp = messageTimestamp(entry);
 			const message = entry.message;
@@ -584,6 +636,20 @@ export class TaskLedger {
 		});
 	}
 
+	getDocumentRuntimeDetails(toolCallId: string): DocumentRuntimeToolDetails | undefined {
+		return this.documentRuntimeDetails.get(`tool:${toolCallId}`);
+	}
+
+	setDocumentRuntimeContract(contract: ExecutionContract | undefined): void {
+		this.documentContract = contract ? structuredClone(contract) : undefined;
+		this.revision++;
+	}
+
+	recordDocumentRuntimeDetails(eventId: string, details: DocumentRuntimeToolDetails): void {
+		this.ingestDocumentRuntimeDetails(eventId, details);
+		this.revision++;
+	}
+
 	getToolDetails(toolCallId: string): TaskLedgerToolDetails | undefined {
 		const record = this.commands.get(`tool:${toolCallId}`);
 		if (!record || record.status === "queued" || record.status === "running") return undefined;
@@ -606,6 +672,7 @@ export class TaskLedger {
 		const failures = [...this.failures.values()].map((record) => ({ ...record }));
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
+		const documentContract = this.buildDocumentContractSnapshot(commands);
 		return {
 			taskId: this.taskId,
 			phase: this.phase,
@@ -620,6 +687,7 @@ export class TaskLedger {
 			failures,
 			verification,
 			todos: this.buildTodos(commands, filesModified, verification, now),
+			documentContract,
 		};
 	}
 
@@ -716,6 +784,8 @@ export class TaskLedger {
 			this.startTool(toolCallId, toolName, undefined, metadata?.startedAt ?? endedAt);
 			record = this.commands.get(id)!;
 		}
+		const documentDetails = getDocumentRuntimeToolDetails(details);
+		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
 		const suppliedFilesRead =
 			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, fallbackStatus);
 		const suppliedFilesModified =
@@ -741,7 +811,9 @@ export class TaskLedger {
 		const supplied = asStringArray(taskDetails?.filesRead);
 		if (supplied.length > 0) return supplied;
 		const detailsPath = asRecord(details)?.path;
-		const path = typeof detailsPath === "string" ? detailsPath : getPathFromArgs(args);
+		const documentDetails = getDocumentRuntimeToolDetails(details);
+		const documentPath = documentDetails?.filesRead?.[0];
+		const path = typeof detailsPath === "string" ? detailsPath : (documentPath ?? getPathFromArgs(args));
 		return READ_TOOL_NAMES.has(toolName) && path ? [normalizeFilePath(path, this.cwd)] : [];
 	}
 
@@ -758,6 +830,14 @@ export class TaskLedger {
 		const detailsPath = asRecord(details)?.path;
 		const path = typeof detailsPath === "string" ? detailsPath : getPathFromArgs(args);
 		return MODIFY_TOOL_NAMES.has(toolName) && path ? [normalizeFilePath(path, this.cwd)] : [];
+	}
+
+	private ingestDocumentRuntimeDetails(eventId: string, details: DocumentRuntimeToolDetails): void {
+		const normalizedEventId =
+			eventId.startsWith("tool:") || eventId.startsWith("entry:") ? eventId : `tool:${eventId}`;
+		this.documentRuntimeDetails.set(normalizedEventId, details);
+		if (details.kind === "resolve_task" && details.contract)
+			this.documentContract = structuredClone(details.contract);
 	}
 
 	private applyFinalFacts(record: MutableCommandRecord, facts: FinalCommandFacts): TaskLedgerToolDetails {
@@ -885,13 +965,86 @@ export class TaskLedger {
 		};
 	}
 
+	private buildDocumentContractSnapshot(commands: readonly CommandRecord[]): TaskDocumentContractSnapshot | undefined {
+		const contract = this.documentContract;
+		if (!contract) return undefined;
+		const stale = contract.status === "stale";
+		const commandForCheck = (check: RequiredCheck): CommandRecord[] =>
+			commands.filter((command) =>
+				check.commands.some(
+					(expected) =>
+						(command.signature !== undefined && command.signature === createCommandSignature(expected)) ||
+						(command.command !== undefined && command.command.trim() === expected.trim()),
+				),
+			);
+		const checkStates: TaskRequiredCheckState[] = contract.requiredChecks.map((check) => {
+			const evidence = commandForCheck(check);
+			const latest = evidence[evidence.length - 1];
+			const status: TaskDocumentItemStatus = stale
+				? "stale"
+				: latest === undefined || latest.status === "queued"
+					? "pending"
+					: latest.status === "running"
+						? "active"
+						: latest.status === "success"
+							? "completed"
+							: latest.status === "cancelled"
+								? "cancelled"
+								: "failed";
+			return { ...check, status, evidenceCommandIds: evidence.map((item) => item.id) };
+		});
+		const statusForRequirement = (requirement: Requirement): TaskDocumentItemStatus => {
+			if (stale) return "stale";
+			if (requirement.requiredCheckIds.length === 0) return "pending";
+			const checks = checkStates.filter((check) => requirement.requiredCheckIds.includes(check.id));
+			if (checks.some((check) => check.status === "failed" || check.status === "cancelled")) return "blocked";
+			if (checks.length > 0 && checks.every((check) => check.status === "completed")) return "completed";
+			if (checks.some((check) => check.status === "active")) return "active";
+			return "pending";
+		};
+		const requirementStates: TaskRequirementState[] = contract.requirements.map((requirement) => {
+			const evidenceCommandIds = checkStates
+				.filter((check) => requirement.requiredCheckIds.includes(check.id))
+				.flatMap((check) => check.evidenceCommandIds);
+			return { ...requirement, status: statusForRequirement(requirement), evidenceCommandIds };
+		});
+		const completionCriteria: TaskCompletionCriterionState[] = contract.completionCriteria.map((criterion) => {
+			const checks = checkStates.filter((check) => criterion.requiredCheckIds.includes(check.id));
+			const status: TaskDocumentItemStatus = stale
+				? "stale"
+				: checks.length > 0 && checks.every((check) => check.status === "completed")
+					? "completed"
+					: checks.some((check) => check.status === "failed" || check.status === "cancelled")
+						? "blocked"
+						: checks.some((check) => check.status === "active")
+							? "active"
+							: "pending";
+			return { ...criterion, status };
+		});
+		return {
+			contract: structuredClone(contract),
+			documents: structuredClone(contract.documents),
+			requirements: requirementStates,
+			requiredChecks: checkStates,
+			completionCriteria,
+			diagnostics: structuredClone(contract.diagnostics),
+			stale,
+			staleReasons: [...contract.staleReasons],
+			sourceCitations: [
+				...contract.requirements.flatMap((item) => item.citations),
+				...contract.requiredChecks.flatMap((item) => item.citations),
+				...contract.completionCriteria.flatMap((item) => item.citations),
+			].filter((citation, index, all) => all.findIndex((item) => item.id === citation.id) === index),
+		};
+	}
+
 	private buildTodos(
 		commands: readonly CommandRecord[],
 		filesModified: readonly string[],
 		verification: VerificationState,
 		now: number,
 	): TaskTodo[] {
-		if (this.startedAt === undefined && commands.length === 0) return [];
+		if (this.startedAt === undefined && commands.length === 0 && !this.documentContract) return [];
 		const firstCommand = commands[0];
 		const latestCommand = commands[commands.length - 1];
 		const mutationCommands = commands.filter((command) => MODIFY_TOOL_NAMES.has(command.toolName));
@@ -903,6 +1056,89 @@ export class TaskLedger {
 				now - command.startedAt <= TASK_LEDGER_DUPLICATE_WINDOW_MS,
 		);
 		const todos: TaskTodo[] = [];
+		const documentSnapshot = this.buildDocumentContractSnapshot(commands);
+		if (documentSnapshot) {
+			const contractSource = documentSnapshot.sourceCitations[0];
+			const contractTime = Date.parse(documentSnapshot.contract.updatedAt) || now;
+			todos.push({
+				id: "document-contract",
+				label: documentSnapshot.stale ? "Refresh document Execution Contract" : "Resolve task documents",
+				status: documentSnapshot.stale ? "blocked" : "completed",
+				sequence: -100,
+				updatedAt: contractTime,
+				owner: DEFAULT_TASK_OWNER,
+				blockedBy: documentSnapshot.stale ? documentSnapshot.staleReasons : undefined,
+				source: contractSource ? `${contractSource.displayPath}:${contractSource.startLine}` : undefined,
+			});
+			for (const requirement of documentSnapshot.requirements) {
+				const status: TaskTodoStatus =
+					requirement.status === "completed"
+						? "completed"
+						: requirement.status === "failed"
+							? "failed"
+							: requirement.status === "stale"
+								? "blocked"
+								: requirement.status === "active"
+									? "active"
+									: requirement.status === "blocked"
+										? "blocked"
+										: "pending";
+				const source = requirement.citations[0];
+				todos.push({
+					id: `requirement:${requirement.id}`,
+					label: `Requirement: ${requirement.text}`,
+					status,
+					sequence: -90 + todos.length,
+					updatedAt: contractTime,
+					owner: DEFAULT_TASK_OWNER,
+					blockedBy: status === "blocked" ? requirement.requiredCheckIds : undefined,
+					source: source ? `${source.displayPath}:${source.startLine}` : undefined,
+				});
+			}
+			for (const check of documentSnapshot.requiredChecks) {
+				const status: TaskTodoStatus =
+					check.status === "completed"
+						? "completed"
+						: check.status === "failed" || check.status === "cancelled"
+							? "failed"
+							: check.status === "stale"
+								? "blocked"
+								: check.status === "active"
+									? "active"
+									: "pending";
+				const source = check.citations[0];
+				todos.push({
+					id: `required-check:${check.id}`,
+					label: `Required check: ${check.label}`,
+					status,
+					sequence: -50 + todos.length,
+					updatedAt: contractTime,
+					owner: DEFAULT_TASK_OWNER,
+					blockedBy: status === "blocked" ? [check.status] : undefined,
+					source: source ? `${source.displayPath}:${source.startLine}` : undefined,
+				});
+			}
+			for (const criterion of documentSnapshot.completionCriteria) {
+				const status: TaskTodoStatus =
+					criterion.status === "completed"
+						? "completed"
+						: criterion.status === "stale" || criterion.status === "blocked"
+							? "blocked"
+							: criterion.status === "active"
+								? "active"
+								: "pending";
+				const source = criterion.citations[0];
+				todos.push({
+					id: `completion:${criterion.id}`,
+					label: `Completion: ${criterion.text}`,
+					status,
+					sequence: -10 + todos.length,
+					updatedAt: contractTime,
+					owner: DEFAULT_TASK_OWNER,
+					source: source ? `${source.displayPath}:${source.startLine}` : undefined,
+				});
+			}
+		}
 
 		const discoveryCompletedAt =
 			firstCommand?.endedAt ?? (firstCommand?.status === "running" ? undefined : firstCommand?.startedAt);

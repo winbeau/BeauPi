@@ -27,6 +27,7 @@ export {
 } from "./agent-session-services.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
+export * from "./documents/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 export { areExperimentalFeaturesEnabled } from "./experimental.ts";
 // Extensions system
@@ -95,10 +96,15 @@ export {
 	TASK_LEDGER_DUPLICATE_WINDOW_MS,
 	TASK_LEDGER_RECENT_COMPLETION_MS,
 	type TaskCommandStatus,
+	type TaskCompletionCriterionState,
+	type TaskDocumentContractSnapshot,
+	type TaskDocumentItemStatus,
 	TaskLedger,
 	type TaskLedgerSnapshot,
 	type TaskLedgerToolDetails,
 	type TaskPhase,
+	type TaskRequiredCheckState,
+	type TaskRequirementState,
 	type TaskTodo,
 	type TaskTodoStatus,
 	type TaskVerificationStatus,

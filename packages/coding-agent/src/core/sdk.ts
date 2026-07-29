@@ -6,6 +6,7 @@ import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { DocumentRuntime } from "./documents/document-runtime.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
@@ -55,14 +56,14 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (read, bash, edit, write)
+	 * - "builtin": disable the default built-in tools (coding and document tools)
 	 *   but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, pi enables the default built-in tools (read, bash, edit, write)
+	 * When omitted, pi enables the default coding and document tools
 	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
 	 */
@@ -82,6 +83,8 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Optional cwd-bound Document Runtime, normally supplied by AgentSessionServices. */
+	documentRuntime?: DocumentRuntime;
 }
 
 /** Result from createAgentSession */
@@ -242,7 +245,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
+	const defaultActiveToolNames: ToolName[] = [
+		"read",
+		"bash",
+		"edit",
+		"write",
+		"docs_search",
+		"docs_read",
+		"docs_resolve_task",
+	];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
 	const excludedToolNameSet = excludedToolNames ? new Set(excludedToolNames) : undefined;
@@ -373,6 +384,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
 	}
 
+	const documentRuntime =
+		options.documentRuntime ??
+		new DocumentRuntime({
+			cwd,
+			agentDir,
+			resourceLoader,
+		});
 	const session = new AgentSession({
 		agent,
 		sessionManager,
@@ -383,11 +401,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		customTools: options.customTools,
 		modelRuntime,
 		initialActiveToolNames,
+		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		documentRuntime,
 	});
+	await session.initializeDocumentRuntime();
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

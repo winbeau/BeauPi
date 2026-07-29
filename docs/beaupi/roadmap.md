@@ -29,7 +29,7 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 - 对照 `AssistantToolUseMessage` 重做 Tool 标题和 queued/running/permission/success/error 状态
 - 对照 `CollapsedReadSearchContent` 实现 Read/Search/List/Bash 聚合与当前操作提示
 - 重做现有 Read、Write、Edit、Bash 和 Search renderer
-- 对照 `StructuredDiff` 实现整行增删背景、词级高亮、行号 gutter、上下 dashed 边界和缓存
+- 对照 `StructuredDiff` 实现整行增删背景、词级高亮、行号 gutter、上下实线边界和缓存
 - 将 TPS 从通知改为 Footer 状态
 - Footer 显示 cwd、branch、模型、Session 累计用量、当前上下文 token、窗口上限和占用百分比
 - Compact 使用实际流式总结输出驱动 Claude Code 风格渐近进度条
@@ -55,7 +55,7 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 - 实现 Task Ledger
 - 记录 phase、Tool、Shell、失败、文件读取和文件修改事件
-- 实现 Tool Timeline
+- 将命令事实保留在 Task Ledger，Tasks Widget 只展示任务清单
 - 加入重复 `git status` 检测
 - 基于 Ledger 实现 Todo Widget
 - 对照 `TaskListV2` 实现 Todo 排序、动态截断、owner、blocked 和最近完成保留
@@ -63,9 +63,11 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 验收：普通编辑任务能够展示当前阶段、已修改文件、待验证事项和 Tool 状态；工作区未变化时能够识别短时间内重复的 `git status`。
 
-状态：已完成（2026-07-29）。Task Ledger 由当前 Session branch 的稳定 Tool call id、Tool Result `details` 和 Bash Session entry 重建；Todo、Tool Timeline 与 Footer 已接入 M1 视觉基础，重复 `git status` 按 30 秒窗口和账本观察到的工作区 revision 识别。
+状态：已完成（2026-07-29）。Task Ledger 由当前 Session branch 的稳定 Tool call id、Tool Result `details` 和 Bash Session entry 重建；Tasks Widget 与 Footer 已接入 M1 视觉基础，命令事实仍保留在 Ledger 中但不单独渲染，重复 `git status` 按 30 秒窗口和账本观察到的工作区 revision 识别。
 
 ## 阶段 4：文档驱动执行
+
+状态：已完成（2026-07-29）。
 
 - 实现文档发现
 - 实现 `docs_search`
@@ -76,6 +78,8 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 - 在 Todo Widget 展示文档要求和验证状态
 
 验收：Agent 能按 `AGENTS.md` 和相关文档执行任务，并说明关键操作来源。
+
+M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execution Contract、三个内置 document Tool、Task Ledger/Todo/Footer 投影、Session branch 恢复和 faux provider 测试均已接入现有 Agent 生命周期。下一阶段为 Skill Registry，不在 M3 提前实现 Skill 导入或注册。
 
 ## 阶段 5：Skill Registry
 
@@ -223,7 +227,7 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 - 回归测试模拟“首次拒绝可选参数、第二次成功”，并断言第二次 payload 已移除该字段。
 - 另测无关 HTTP 400 只请求一次并原样报错。
 - 发布前分别验证标准 OpenAI Responses 与 OpenAI Codex 的手动压缩和自动压缩。
-- Tool Timeline/诊断信息应记录发生过兼容降级，但不得输出 API key、Authorization header 或完整敏感请求体。
+- 运行记录和诊断信息应记录发生过兼容降级，但不得输出 API key、Authorization header 或完整敏感请求体。
 
 验收：Provider 可选参数与实际端点不一致时，自动压缩能够安全降级完成；非兼容性请求错误仍立即失败并保留原始原因。
 

@@ -3,20 +3,12 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import {
 	type CommandRecord,
 	selectTaskTodos,
-	type TaskCommandStatus,
 	type TaskLedgerSnapshot,
 	type TaskTodo,
 	type TaskTodoStatus,
 } from "../../../core/state/task-ledger.ts";
 import { theme } from "../theme/theme.ts";
-import {
-	activityStateToolState,
-	type BeauPiActivityState,
-	type BeauPiToolState,
-	fitSingleLine,
-	toolStateSymbol,
-	toolTitle,
-} from "./beaupi-style.ts";
+import { fitSingleLine } from "./beaupi-style.ts";
 
 function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
@@ -32,28 +24,25 @@ export function taskTodoLimit(rows: number): number {
 	return Math.max(3, Math.min(10, Math.floor((availableRows - 8) / 6) + 1));
 }
 
-function taskTodoActivityState(status: TaskTodoStatus): BeauPiActivityState {
-	return status;
-}
-
-function commandToolState(status: TaskCommandStatus): BeauPiToolState {
+function taskTodoSymbol(status: TaskTodoStatus): string {
 	switch (status) {
-		case "queued":
-			return "queued";
-		case "running":
-			return "running";
-		case "success":
-			return "success";
+		case "completed":
+			return theme.fg("success", "■");
+		case "active":
+			return theme.fg("accent", "□");
 		case "failed":
-			return "error";
-		case "cancelled":
-			return "cancelled";
+			return theme.fg("error", "□");
+		case "blocked":
+			return theme.fg("warning", "□");
+		case "pending":
+			return theme.fg("dim", "□");
 	}
 }
 
 function taskLabel(todo: TaskTodo, width: number): string {
 	const showOwner = width >= 60 && todo.owner;
 	const owner = showOwner ? theme.fg("dim", `(@${todo.owner})`) : "";
+	const source = width >= 80 && todo.source ? theme.fg("dim", todo.source) : "";
 	const blocked =
 		todo.status === "blocked" && todo.blockedBy && todo.blockedBy.length > 0
 			? theme.fg("dim", `▸ blocked by ${todo.blockedBy.join(", ")}`)
@@ -66,7 +55,8 @@ function taskLabel(todo: TaskTodo, width: number): string {
 	return fitSingleLine(
 		[
 			{ text: label, required: true, truncate: true },
-			{ text: owner, separator: " ", priority: 1 },
+			{ text: owner, separator: " ", priority: 2 },
+			{ text: source, separator: " · ", priority: 1 },
 			{ text: blocked, separator: " ", priority: 0 },
 		],
 		width,
@@ -76,7 +66,7 @@ function taskLabel(todo: TaskTodo, width: number): string {
 function renderTodo(todo: TaskTodo, width: number): string {
 	const availableWidth = safeWidth(width);
 	if (availableWidth === 0) return "";
-	const symbol = toolStateSymbol(activityStateToolState(taskTodoActivityState(todo.status)), theme);
+	const symbol = taskTodoSymbol(todo.status);
 	const prefix = `  ${symbol} `;
 	if (visibleWidth(prefix) >= availableWidth) return truncateToWidth(prefix, availableWidth, "");
 	return `${prefix}${taskLabel(todo, availableWidth - visibleWidth(prefix))}`;
@@ -126,16 +116,6 @@ export function selectTimelineCommands(commands: readonly CommandRecord[], maxVi
 		.map(({ command }) => command);
 }
 
-function timelineArgument(command: CommandRecord): string {
-	const value = command.command ?? command.summary ?? "";
-	const firstLine = value.split(/\r\n|\r|\n/, 1)[0] ?? "";
-	return command.duplicateOf ? `${firstLine}${firstLine ? " · " : ""}repeated` : firstLine;
-}
-
-function renderTimelineCommand(command: CommandRecord, width: number): string {
-	return `  ${toolTitle(command.label, timelineArgument(command), commandToolState(command.status), theme, Math.max(0, width - 2))}`;
-}
-
 function verificationLabel(snapshot: TaskLedgerSnapshot): string {
 	return snapshot.verification.status === "none" ? "" : `verify ${snapshot.verification.status}`;
 }
@@ -159,7 +139,7 @@ export class TaskLedgerWidget implements Component {
 		const availableWidth = safeWidth(width);
 		if (availableWidth === 0) return [];
 		const snapshot = this.session.taskLedger.getSnapshot();
-		if (snapshot.todos.length === 0 && snapshot.commands.length === 0) return [];
+		if (snapshot.todos.length === 0) return [];
 		const rows = terminalRows(this.tui);
 		const todoLimit = taskTodoLimit(rows);
 		const selection = selectTaskTodos(snapshot.todos, todoLimit);
@@ -179,6 +159,16 @@ export class TaskLedgerWidget implements Component {
 					priority: 1,
 				},
 				{ text: theme.fg("dim", verificationLabel(snapshot)), separator: " · ", priority: 0 },
+				{
+					text: snapshot.documentContract
+						? theme.fg(
+								snapshot.documentContract.stale ? "warning" : "dim",
+								snapshot.documentContract.stale ? "docs stale" : "contract active",
+							)
+						: "",
+					separator: " · ",
+					priority: -1,
+				},
 			],
 			availableWidth,
 		);
@@ -186,14 +176,6 @@ export class TaskLedgerWidget implements Component {
 		const hiddenSummary = hiddenTodoSummary(selection.hidden, availableWidth);
 		if (hiddenSummary) lines.push(hiddenSummary);
 
-		const timelineLimit = rows < 36 ? 2 : 3;
-		const timeline = selectTimelineCommands(snapshot.commands, timelineLimit);
-		if (timeline.length > 0) {
-			lines.push(fitSingleLine([{ text: theme.bold("Tools"), required: true }], availableWidth));
-			for (const command of timeline) {
-				lines.push(truncateToWidth(renderTimelineCommand(command, availableWidth), availableWidth, "…"));
-			}
-		}
 		return lines;
 	}
 }

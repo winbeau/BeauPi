@@ -74,13 +74,13 @@ describe("TaskLedgerWidget", () => {
 		const styledWide = widget.render(120).join("\n");
 		const wide = stripAnsi(styledWide);
 		expect(wide).toContain("Tasks · execute · 2 files · verify pending");
-		expect(wide).toContain("○ Pending item (@main)");
-		expect(wide).toContain("● Active item (@main)");
-		expect(wide).toContain("● Completed item (@main)");
-		expect(wide).toContain("● Failed item (@main)");
+		expect(wide).toContain("□ Pending item (@main)");
+		expect(wide).toContain("□ Active item (@main)");
+		expect(wide).toContain("■ Completed item (@main)");
+		expect(wide).toContain("□ Failed item (@main)");
 		expect(styledWide).toContain(theme.getFgAnsi("success"));
 		expect(styledWide).toContain(theme.getFgAnsi("error"));
-		expect(wide).toContain("! Blocked item (@main) ▸ blocked by #1, #2");
+		expect(wide).toContain("□ Blocked item (@main) ▸ blocked by #1, #2");
 
 		const narrow = renderPlain(widget, 40);
 		expect(narrow).not.toContain("(@main)");
@@ -98,12 +98,12 @@ describe("TaskLedgerWidget", () => {
 		const widget = createWidget(createSnapshot({ todos }), 24);
 		const lines = widget.render(80).map(stripAnsi);
 		expect(taskTodoLimit(24)).toBe(3);
-		expect(lines.filter((line) => /^[ ]{2}[○●!]/.test(line))).toHaveLength(3);
+		expect(lines.filter((line) => /^[ ]{2}[□■]/.test(line))).toHaveLength(3);
 		expect(lines.some((line) => line.includes("pending") && line.includes("completed"))).toBe(true);
 		expect(taskTodoLimit(120)).toBe(10);
 	});
 
-	it("renders a Tool Timeline with the M1 lifecycle symbols and repeated-command summary", () => {
+	it("keeps tool command history out of the Tasks widget", () => {
 		const commands: TaskLedgerSnapshot["commands"] = [
 			{
 				id: "one",
@@ -148,12 +148,18 @@ describe("TaskLedgerWidget", () => {
 				commit: false,
 			},
 		];
-		const widget = createWidget(createSnapshot({ commands, todos: [] }));
+		const widget = createWidget(
+			createSnapshot({
+				commands,
+				todos: [{ id: "task", label: "Run checks", status: "pending", sequence: 0, updatedAt: 1 }],
+			}),
+		);
 		const rendered = renderPlain(widget, 100);
-		expect(rendered).toContain("Tools");
-		expect(rendered).toContain("● Read(src/a.ts)");
-		expect(rendered).toContain("● Bash(npm run check)");
-		expect(rendered).toContain("● Bash(git status --short · repeated)");
+		expect(rendered).toContain("Tasks");
+		expect(rendered).not.toContain("Tools");
+		expect(rendered).not.toContain("Read(src/a.ts)");
+		expect(rendered).not.toContain("Bash(npm run check)");
+		expect(rendered).not.toContain("Bash(git status --short · repeated)");
 		expect(selectTimelineCommands(commands, 2).map((command) => command.id)).toEqual(["two", "three"]);
 	});
 

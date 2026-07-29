@@ -166,7 +166,7 @@ npm run check
 
 - 使用固定 faux provider 会话执行 Read、Write、`git diff --check` 和两次等价 `git status`。
 - 暗色与亮色分别检查 40×45、80×45、120×45、160×45。
-- Todo 展示 phase、修改文件、验证完成和重复命令 blocked 状态；Tool Timeline 复用 M1 的 success/running/error/cancelled 语言。
+- Tasks Widget 展示 phase、修改文件、验证完成和重复命令 blocked 状态；任务使用空方框/实心方框，命令事实不单独渲染。
 - 40 列隐藏 owner、blocked 详情和低优先 Footer 字段；80/120/160 列逐步恢复完整摘要。
 - `/debug` 的 8 个场景最大可见宽度分别等于终端宽度，overflow 数均为 0。
 - 捕获文件：`/tmp/beaupi-m2-visual-{dark,light}-{40,80,120,160}.{txt,ansi.txt}`。
