@@ -426,9 +426,19 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - Monitor 状态与远程会话生命周期一致
 - 不保存认证秘密，不把完整历史日志注入上下文
 
+### 真实环境启动预检
+
+M7 不只使用 fake adapter 验证；启动远程实现前必须使用当前用户已有的 OpenSSH 配置执行真实连通性测试：
+
+```bash
+ssh h100-server 'hostname && curl -fsSL --max-time 20 -o /dev/null -w "http_code=%{http_code}\nremote_ip=%{remote_ip}\ntime_total=%{time_total}s\nurl=%{url_effective}\n" https://www.google.com'
+```
+
+当前预检已通过：远端主机 `zhengchen-ubuntu-8xh100-05` 返回 Google HTTP `200`。该测试只证明 SSH、DNS、TLS 和 HTTPS 出网，不代表 M7 远程命令或 tmux 功能已经验收。真实 E2E 必须继续使用 `h100-server`，通过无害命令验证 `target_select`、`remote_exec`、tmux 创建/发送/capture/关闭、Monitor 状态和断线恢复；输出不得包含认证秘密。
+
 ### 验收标准
 
-Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；断线、超时和会话丢失状态可见；长日志默认增量展示。
+Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；断线、超时和会话丢失状态可见；长日志默认增量展示。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ---
 

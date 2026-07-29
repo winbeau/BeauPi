@@ -159,8 +159,10 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
 - 第一版只允许普通用户执行，不实现 sudo 或任意 root shell
+- 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
+- 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 
-验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；断线、超时和会话丢失状态可见；长日志不会整体污染上下文。
+验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；断线、超时和会话丢失状态可见；长日志不会整体污染上下文；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ## 阶段 9：联网搜索
 
