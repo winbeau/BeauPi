@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { ResourceLoader } from "../resource-loader.ts";
-import { isVerificationCommand } from "../state/task-ledger.ts";
 import { type TruncationResult, truncateHead } from "../tools/truncate.ts";
 import { DEFAULT_DOCUMENT_RUNTIME_BUDGETS, type DocumentDiscoveryFile, discoverDocuments } from "./discovery.ts";
 import {
@@ -26,6 +25,7 @@ import {
 	type DocumentSearchResult,
 	type DocumentSearchScope,
 	type DocumentSource,
+	EXECUTION_CONTRACT_VERSION,
 	type ExecutionContract,
 	hashDocumentContent,
 	type IndexedDocument,
@@ -45,7 +45,7 @@ const COMMAND_PREFIX_PATTERN =
 	/^(?:\$\s*)?(?:npm|pnpm|yarn|bun|node|npx|git|cargo|go|python(?:3)?|pytest|vitest|jest|tsc|eslint|prettier|make|\.\/|docker|deno|ruby|java|mvn)\b/i;
 const NEGATIVE_PATTERN =
 	/\b(?:must not|do not|don't|never|forbid|forbidden|prohibited|不得|禁止|不允许|不要|不可|不能)\b/i;
-const POSITIVE_MODAL_PATTERN = /\b(?:must|required|shall|should|need to|run|check|ensure|遵循|必须|需要|应当|应该)\b/i;
+const POSITIVE_MODAL_PATTERN = /\b(?:must|required|shall|should|need to|ensure|遵循|必须|需要|应当|应该)\b/i;
 const LIST_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/;
 const INLINE_CODE_PATTERN = /`([^`\n]+)`/g;
 
@@ -119,20 +119,46 @@ function isCommandLike(command: string): boolean {
 	);
 }
 
-function headingIsRelevant(title: string | undefined): boolean {
-	return title !== undefined && REQUIRED_HEADING_PATTERN.test(title);
+type DocumentHeading = ReturnType<typeof headingForLine>;
+
+function headingMatches(heading: DocumentHeading, pattern: RegExp): boolean {
+	return heading?.path.some((title) => pattern.test(title)) ?? false;
 }
 
-function headingIsCheck(title: string | undefined): boolean {
-	return title !== undefined && CHECK_HEADING_PATTERN.test(title);
+function headingIsRelevant(heading: DocumentHeading): boolean {
+	return headingMatches(heading, REQUIRED_HEADING_PATTERN);
 }
 
-function headingIsCompletion(title: string | undefined): boolean {
-	return title !== undefined && COMPLETION_HEADING_PATTERN.test(title);
+function headingIsCheck(heading: DocumentHeading): boolean {
+	return headingMatches(heading, CHECK_HEADING_PATTERN);
 }
 
-function headingIsStop(title: string | undefined): boolean {
-	return title !== undefined && STOP_HEADING_PATTERN.test(title);
+function headingIsCompletion(heading: DocumentHeading): boolean {
+	return headingMatches(heading, COMPLETION_HEADING_PATTERN);
+}
+
+function headingIsStop(heading: DocumentHeading): boolean {
+	return headingMatches(heading, STOP_HEADING_PATTERN);
+}
+
+function isPolicyDocument(document: IndexedDocument): boolean {
+	return (
+		document.reference.kind === "agents" ||
+		document.reference.kind === "claude" ||
+		document.reference.kind === "contributing"
+	);
+}
+
+function factIsTaskRelevant(
+	document: IndexedDocument,
+	heading: DocumentHeading,
+	text: string,
+	relevantTaskTokens: readonly string[],
+): boolean {
+	if (isPolicyDocument(document) || document.reference.sources.includes("explicit")) return true;
+	if (relevantTaskTokens.length === 0) return false;
+	const context = normalizeText(`${heading?.path.join(" ") ?? ""} ${text}`);
+	return relevantTaskTokens.some((token) => context.includes(token));
 }
 
 function cleanFactText(value: string): string {
@@ -316,13 +342,14 @@ function mergeStopCondition(conditions: StopCondition[], candidate: StopConditio
 	conditions.push(candidate);
 }
 
-function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
+function extractFacts(documents: readonly IndexedDocument[], task: string): ExtractedFacts {
 	const requirements: Requirement[] = [];
 	const allowedCommands: DocumentedCommand[] = [];
 	const requiredChecks: RequiredCheck[] = [];
 	const stopConditions: StopCondition[] = [];
 	const completionCriteria: CompletionCriterion[] = [];
 	const diagnostics: DocumentDiagnostic[] = [];
+	const relevantTaskTokens = taskTokens(task);
 
 	for (const document of documents) {
 		for (const script of document.packageScripts) {
@@ -335,23 +362,13 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 				citations: [citation],
 			};
 			mergeCommand(allowedCommands, command);
-			if (
-				/^(check|test|lint|typecheck|verify|build)(:|$)/i.test(script.name) ||
-				isVerificationCommand(script.command)
-			) {
-				mergeCheck(requiredChecks, {
-					id: stableDocumentId("check", document.reference.id, script.name, script.command),
-					label: `Run ${script.name}`,
-					commands: [script.command],
-					citations: [citation],
-				});
-			}
 		}
+		if (document.reference.kind === "package-json") continue;
 
 		const headingByLine = (line: number) => headingForLine(document, line);
 		for (const block of document.codeBlocks) {
 			const heading = headingByLine(block.startLine);
-			if (!CODE_LANGUAGE_PATTERN.test(block.language ?? "") && !headingIsRelevant(heading?.title)) continue;
+			if (!CODE_LANGUAGE_PATTERN.test(block.language ?? "") && !headingIsRelevant(heading)) continue;
 			for (let offset = 0; offset < block.lines.length; offset++) {
 				const commandText = block.lines[offset]!.trim();
 				if (!commandText || commandText.startsWith("#") || commandText.startsWith("//")) continue;
@@ -362,10 +379,10 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 				mergeCommand(allowedCommands, {
 					id: stableDocumentId("command", document.reference.id, command),
 					command,
-					kind: headingIsCheck(heading?.title) ? "recommended" : "allowed",
+					kind: headingIsCheck(heading) ? "recommended" : "allowed",
 					citations: [citation],
 				});
-				if (headingIsCheck(heading?.title) || isVerificationCommand(command)) {
+				if (headingIsCheck(heading) && factIsTaskRelevant(document, heading, command, relevantTaskTokens)) {
 					const check = mergeCheck(requiredChecks, {
 						id: stableDocumentId("check", document.reference.id, command),
 						label: `Run ${command}`,
@@ -398,8 +415,8 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 			const text = cleanFactText(listMatch?.[1] ?? line);
 			if (!text || text.length > 500) continue;
 			const explicit = POSITIVE_MODAL_PATTERN.test(text) || NEGATIVE_PATTERN.test(text);
-			const eligibleList = listMatch !== null && headingIsRelevant(heading?.title);
-			if (!explicit && !eligibleList) continue;
+			const eligibleList = listMatch !== null && (isPolicyDocument(document) || headingIsRelevant(heading));
+			if ((!explicit && !eligibleList) || !factIsTaskRelevant(document, heading, text, relevantTaskTokens)) continue;
 			const citation = citationForLine(document, lineNumber);
 			const polarity = factPolarity(text);
 			const requirement: Requirement = {
@@ -411,14 +428,14 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 				requiredCheckIds: [],
 			};
 			mergeRequirement(requirements, requirement);
-			if (polarity === "negative" && (headingIsStop(heading?.title) || explicit)) {
+			if (polarity === "negative" && (headingIsStop(heading) || explicit)) {
 				mergeStopCondition(stopConditions, {
 					id: stableDocumentId("stop", normalizeText(text)),
 					text,
 					citations: [citation],
 				});
 			}
-			if (headingIsCompletion(heading?.title) || /\b(?:done|complete|completion|acceptance)\b/i.test(text)) {
+			if (headingIsCompletion(heading) || /\b(?:done|complete|completion|acceptance)\b/i.test(text)) {
 				mergeCompletion(completionCriteria, {
 					id: stableDocumentId("completion", normalizeText(text)),
 					text,
@@ -426,7 +443,7 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 					citations: [citation],
 				});
 			}
-			if (headingIsCheck(heading?.title) && isCommandLike(text)) {
+			if (headingIsCheck(heading) && isCommandLike(text)) {
 				const check = mergeCheck(requiredChecks, {
 					id: stableDocumentId("check", document.reference.id, text),
 					label: text,
@@ -448,23 +465,24 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 				mergeCommand(allowedCommands, {
 					id: stableDocumentId("command", document.reference.id, command),
 					command,
-					kind: headingIsCheck(heading?.title) ? "recommended" : "allowed",
+					kind: headingIsCheck(heading) ? "recommended" : "allowed",
 					citations: [citation],
 				});
-				if (headingIsCheck(heading?.title) || isVerificationCommand(command)) {
+				const matchingRequirement = requirements.find((requirement) =>
+					requirement.citations.some((item) => item.id === citation.id),
+				);
+				if (
+					matchingRequirement ||
+					(headingIsCheck(heading) && factIsTaskRelevant(document, heading, line, relevantTaskTokens))
+				) {
 					const check = mergeCheck(requiredChecks, {
 						id: stableDocumentId("check", document.reference.id, command),
 						label: `Run ${command}`,
 						commands: [command],
 						citations: [citation],
 					});
-					for (const requirement of requirements) {
-						if (
-							requirement.citations.some((item) => item.id === citation.id) &&
-							!requirement.requiredCheckIds.includes(check.id)
-						) {
-							requirement.requiredCheckIds.push(check.id);
-						}
+					if (matchingRequirement && !matchingRequirement.requiredCheckIds.includes(check.id)) {
+						matchingRequirement.requiredCheckIds.push(check.id);
 					}
 				}
 			}
@@ -514,17 +532,33 @@ function extractFacts(documents: readonly IndexedDocument[]): ExtractedFacts {
 	return { requirements, allowedCommands, requiredChecks, stopConditions, completionCriteria, diagnostics };
 }
 
+function documentMatchesTask(document: IndexedDocument, task: string): boolean {
+	const normalizedTask = normalizeText(task);
+	const tokens = taskTokens(task);
+	const headingText = normalizeText(document.headings.map((heading) => heading.path.join(" ")).join(" "));
+	const bodyText = normalizeText(document.content);
+	const metadataText = normalizeText(`${basename(document.reference.path)} ${document.reference.kind}`);
+	return (
+		(normalizedTask.length > 0 && bodyText.includes(normalizedTask)) ||
+		tokens.some((token) => headingText.includes(token) || bodyText.includes(token) || metadataText.includes(token))
+	);
+}
+
 function selectDocuments(
 	documents: readonly IndexedDocument[],
 	task: string,
 	cwd: string,
 	maxDocuments: number,
 ): IndexedDocument[] {
-	const scored = documents.map((document) => ({ document, score: scoreDocument(document, task, cwd).score }));
+	const scored = documents.map((document) => ({
+		document,
+		score: scoreDocument(document, task, cwd).score,
+		taskMatched: documentMatchesTask(document, task),
+	}));
 	const mandatory = scored.filter(
 		({ document }) =>
-			document.reference.kind === "agents" ||
-			document.reference.kind === "claude" ||
+			isPolicyDocument(document) ||
+			document.reference.kind === "package-json" ||
 			document.reference.source === "global" ||
 			document.reference.source === "ancestor" ||
 			document.reference.source === "explicit",
@@ -543,7 +577,7 @@ function selectDocuments(
 		(left, right) =>
 			right.score - left.score || left.document.reference.path.localeCompare(right.document.reference.path),
 	)) {
-		if (item.score <= 0 && selected.length > 0) continue;
+		if (!item.taskMatched) continue;
 		add(item.document);
 	}
 	return selected;
@@ -782,7 +816,7 @@ export class DocumentRuntime {
 			...document,
 			reference: { ...document.reference, critical: true },
 		}));
-		const facts = extractFacts(criticalDocuments);
+		const facts = extractFacts(criticalDocuments, options.task);
 		const diagnostics = [...discovered.diagnostics, ...facts.diagnostics];
 		const documentHashes = Object.fromEntries(
 			criticalDocuments.map((document) => [document.reference.id, document.reference.hash]),
@@ -790,13 +824,14 @@ export class DocumentRuntime {
 		const taskSignature = stableDocumentId("task", normalizeText(options.task));
 		const contractId = stableDocumentId(
 			"contract",
+			String(EXECUTION_CONTRACT_VERSION),
 			taskSignature,
 			...criticalDocuments.flatMap((document) => [document.reference.id, document.reference.hash]),
 		);
 		const existing = this.currentContract?.id === contractId ? this.currentContract : undefined;
 		const timestamp = new Date(this.now()).toISOString();
 		const contract: ExecutionContract = {
-			version: 1,
+			version: EXECUTION_CONTRACT_VERSION,
 			id: contractId,
 			task: options.task,
 			taskSignature,

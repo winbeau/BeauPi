@@ -192,8 +192,9 @@ describe("Execution Contract", () => {
 			expect.arrayContaining(["npm run check", "./test.sh", "npm run lint", "eslint ."]),
 		);
 		expect(result.contract.requiredChecks.flatMap((item) => item.commands)).toEqual(
-			expect.arrayContaining(["npm run check", "./test.sh", "npm run lint"]),
+			expect.arrayContaining(["npm run check", "./test.sh"]),
 		);
+		expect(result.contract.requiredChecks.flatMap((item) => item.commands)).not.toContain("npm run lint");
 		expect(result.contract.completionCriteria.some((item) => item.text.includes("checks must pass"))).toBe(true);
 		expect(result.contract.stopConditions.some((item) => item.text === "Must not use sudo.")).toBe(true);
 		for (const requirement of result.contract.requirements)
@@ -202,6 +203,75 @@ describe("Execution Contract", () => {
 		const stable = await runtime.resolveTask({ task: "Implement document runtime and verify it" });
 		expect(stable.contract.id).toBe(result.contract.id);
 		expect(stable.contract.createdAt).toBe(result.contract.createdAt);
+	});
+
+	it("keeps generic README guidance and package scripts out of task requirements and required checks", async () => {
+		const { root, cwd, agentDir } = tempProject();
+		const readmePath = join(root, "README.md");
+		const packagePath = join(root, "package.json");
+		writeFileSync(join(root, "AGENTS.md"), "# Rules\n- Must preserve task-specific requirements.\n");
+		writeFileSync(
+			readmePath,
+			[
+				"# Project",
+				"## Permissions & Containerization",
+				"- Plain Docker: run the whole process in a local container for simple isolation.",
+				"- OpenShell: run the whole process in a policy-controlled sandbox.",
+				"## Development",
+				"```bash",
+				"npm run build",
+				"npm run check",
+				"```",
+				"## Building standalone binaries from release source",
+				"GitHub releases include a source archive. Extract it and run the release build script.",
+				"## Supply-chain hardening",
+				"- Release smoke tests use `npm run release:local` to build isolated installs before tagging.",
+			].join("\n"),
+		);
+		writeFileSync(
+			packagePath,
+			JSON.stringify(
+				{
+					scripts: {
+						clean: "npm run clean --workspaces",
+						build: "npm run build --workspaces",
+						check: "npm run lint",
+					},
+				},
+				null,
+				2,
+			),
+		);
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(
+			join(root, "docs", "task.md"),
+			"# Task Requirements\n- Must keep the task-specific requirement visible.\n",
+		);
+
+		const result = await runtimeFor(cwd, agentDir).resolveTask({
+			task: "Keep the task-specific requirement visible.",
+			explicitPaths: [readmePath, packagePath],
+		});
+		const requirements = result.contract.requirements.map((item) => item.text);
+		const checks = result.contract.requiredChecks.flatMap((item) => item.commands);
+		const commands = result.contract.allowedCommands.map((item) => item.command);
+
+		expect(requirements).toContain("Must keep the task-specific requirement visible.");
+		for (const genericRequirement of [
+			"Plain Docker: run the whole process in a local container for simple isolation.",
+			"OpenShell: run the whole process in a policy-controlled sandbox.",
+			"GitHub releases include a source archive. Extract it and run the release build script.",
+			"Release smoke tests use `npm run release:local` to build isolated installs before tagging.",
+		]) {
+			expect(requirements).not.toContain(genericRequirement);
+		}
+		expect(requirements.some((item) => item.includes('"clean"') || item.includes('"build"'))).toBe(false);
+		expect(commands).toEqual(
+			expect.arrayContaining(["npm run build", "npm run check", "npm run clean --workspaces", "npm run lint"]),
+		);
+		for (const genericCheck of ["npm run build", "npm run check", "npm run clean --workspaces", "npm run lint"]) {
+			expect(checks).not.toContain(genericCheck);
+		}
 	});
 
 	it("preserves conflicting requirements and both source citations", async () => {

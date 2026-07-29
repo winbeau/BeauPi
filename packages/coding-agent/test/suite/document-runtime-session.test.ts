@@ -28,6 +28,28 @@ function setupNoisyRules(harness: Harness): void {
 		`${harness.tempDir}/docs/task.md`,
 		"# Task Requirements\n- Must keep the task-specific requirement visible in the Tasks panel.\n",
 	);
+	writeFileSync(
+		`${harness.tempDir}/README.md`,
+		[
+			"# Project",
+			"## Permissions & Containerization",
+			"- Plain Docker: run the whole process in a local container for simple isolation.",
+			"- OpenShell: run the whole process in a policy-controlled sandbox.",
+			"## Development",
+			"```bash",
+			"npm run build",
+			"npm run check",
+			"```",
+			"## Supply-chain hardening",
+			"- Release smoke tests use `npm run release:local` before tagging.",
+		].join("\n"),
+	);
+	writeFileSync(
+		`${harness.tempDir}/package.json`,
+		JSON.stringify({
+			scripts: { clean: "npm run clean --workspaces", build: "npm run build", check: "npm run lint" },
+		}),
+	);
 }
 
 describe("AgentSession Document Runtime integration", () => {
@@ -84,6 +106,18 @@ describe("AgentSession Document Runtime integration", () => {
 			requirements.find((requirement) => requirement.text.startsWith("Must keep the task-specific"))?.projection,
 		).toBe("task");
 		for (const rule of genericRules) expect(todos).not.toContain(`Requirement: ${rule}`);
+		for (const genericRequirement of [
+			"Plain Docker: run the whole process in a local container for simple isolation.",
+			"OpenShell: run the whole process in a policy-controlled sandbox.",
+			"Release smoke tests use `npm run release:local` before tagging.",
+		]) {
+			expect(requirements.map((requirement) => requirement.text)).not.toContain(genericRequirement);
+			expect(todos).not.toContain(`Requirement: ${genericRequirement}`);
+		}
+		const requiredCheckCommands = snapshot.documentContract?.requiredChecks.flatMap((check) => check.commands) ?? [];
+		for (const genericCheck of ["npm run clean --workspaces", "npm run build", "npm run lint"]) {
+			expect(requiredCheckCommands).not.toContain(genericCheck);
+		}
 		expect(todos).toContain("Requirement: Must keep the task-specific requirement visible in the Tasks panel.");
 
 		const restored = new TaskLedger({

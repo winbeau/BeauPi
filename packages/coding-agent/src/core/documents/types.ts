@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { TruncationResult } from "../tools/truncate.ts";
 
-export const EXECUTION_CONTRACT_VERSION = 1;
+export const EXECUTION_CONTRACT_VERSION = 2;
 export const DOCUMENT_RUNTIME_DETAILS_KEY = "documentRuntime";
 export const DOCUMENT_RUNTIME_DETAILS_VERSION = 1;
 export const DOCUMENT_CONTRACT_ENTRY_TYPE = "beaupi.document-contract";
