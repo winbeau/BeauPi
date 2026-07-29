@@ -270,7 +270,14 @@ describe("AgentSessionRuntime characterization", () => {
 		const replacement = await runtime.newSession();
 		expect(replacement.cancelled).toBe(false);
 		await runtime.session.bindExtensions({});
-		await runtime.session.prompt("Implement an unrelated second-session widget.");
+		await runtime.session.prompt(
+			[
+				"Tasks · discover ·  · contract active",
+				"  □ Requirement: Must preserve first-session behavior.",
+				"  … +1 pending, 1 completed",
+				"Implement an unrelated second-session widget.",
+			].join("\n"),
+		);
 
 		expect(runtime.session.taskLedger.getSnapshot().todos.map((todo) => todo.label)).not.toContain(
 			"Requirement: Must preserve first-session behavior.",

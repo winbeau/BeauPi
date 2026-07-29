@@ -144,6 +144,29 @@ function taskTokens(value: string): string[] {
 	return uniqueStrings(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []);
 }
 
+function stripTaskLedgerTranscript(value: string): string {
+	const lines = value.split(/\r?\n/);
+	const taskLedgerItemPattern = /^\s*[□■✓✔✗☐☑]\s+/;
+	const taskLedgerSummaryPattern = /^\s*(?:…|\.\.\.)\s+\+\d+\s+pending\b/i;
+	const result: string[] = [];
+	let inTaskLedger = false;
+
+	for (const line of lines) {
+		if (/^\s*Tasks\s*[·|]/i.test(line)) {
+			inTaskLedger = true;
+			continue;
+		}
+		if (taskLedgerItemPattern.test(line) || taskLedgerSummaryPattern.test(line)) continue;
+		if (inTaskLedger) {
+			if (line.trim() === "") continue;
+			inTaskLedger = false;
+		}
+		result.push(line);
+	}
+
+	return result.join("\n").trim();
+}
+
 function taskRelevanceTokens(value: string): string[] {
 	const withoutPathReferences = value
 		.replace(/(?:^|[\s(`'"])(?:~?\/|\.\.?\/)[^\s)`'"]+/g, " ")
@@ -898,18 +921,19 @@ export class DocumentRuntime {
 	}
 
 	async resolveTask(options: ResolveTaskOptions): Promise<ResolveTaskResult> {
+		const task = stripTaskLedgerTranscript(options.task) || "Tasks";
 		const discovered = await this.discover(options.explicitPaths);
-		const selected = selectDocuments(discovered.documents, options.task, this.cwd, this.budgets.maxContractDocuments);
+		const selected = selectDocuments(discovered.documents, task, this.cwd, this.budgets.maxContractDocuments);
 		const criticalDocuments = selected.map((document) => ({
 			...document,
 			reference: { ...document.reference, critical: true },
 		}));
-		const facts = extractFacts(criticalDocuments, options.task);
+		const facts = extractFacts(criticalDocuments, task);
 		const diagnostics = [...discovered.diagnostics, ...facts.diagnostics];
 		const documentHashes = Object.fromEntries(
 			criticalDocuments.map((document) => [document.reference.id, document.reference.hash]),
 		);
-		const taskSignature = stableDocumentId("task", normalizeText(options.task));
+		const taskSignature = stableDocumentId("task", normalizeText(task));
 		const contractId = stableDocumentId(
 			"contract",
 			String(EXECUTION_CONTRACT_VERSION),
@@ -921,7 +945,7 @@ export class DocumentRuntime {
 		const contract: ExecutionContract = {
 			version: EXECUTION_CONTRACT_VERSION,
 			id: contractId,
-			task: options.task,
+			task,
 			taskSignature,
 			documents: criticalDocuments.map((document) => document.reference),
 			requirements: facts.requirements,

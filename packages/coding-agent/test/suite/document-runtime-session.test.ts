@@ -157,7 +157,12 @@ describe("AgentSession Document Runtime integration", () => {
 		harness.setResponses([fauxAssistantMessage("done")]);
 
 		await harness.session.prompt(
-			"Implement M4-R3 Skill allowlist projection with allow and deny policy. Read docs/beaupi/requirements.md and docs/beaupi/skills.md.",
+			[
+				"Implement M4-R3 Skill allowlist projection with allow and deny policy. Read docs/beaupi/requirements.md and docs/beaupi/skills.md.",
+				"Tasks · discover ·  · contract active",
+				"  □ Requirement: Original commands and complete output must be collapsed by default and expandable on demand.",
+				"  … +21 pending, 1 completed",
+			].join("\n"),
 		);
 
 		const snapshot = harness.session.taskLedger.getSnapshot();

@@ -329,10 +329,20 @@ describe("Execution Contract", () => {
 			].join("\n"),
 		);
 
-		const result = await runtimeFor(cwd, agentDir).resolveTask({
-			task: "Implement M4-R3 Skill allowlist projection with allow and deny policy.",
+		const runtime = runtimeFor(cwd, agentDir);
+		const result = await runtime.resolveTask({
+			task: [
+				"Implement M4-R3 Skill allowlist projection with allow and deny policy.",
+				"Tasks · discover ·  · contract active",
+				"  □ Requirement: Original commands and complete output must be collapsed by default and expandable on demand.",
+				"  □ Requirement: Skill guidance remains workflow knowledge; deterministic structured or permissioned behavior must be a Tool.",
+				"  … +21 pending, 1 completed",
+				"The previous contract must not persist.",
+			].join("\n"),
 			explicitPaths: [requirementsPath, skillsPath],
 		});
+		expect(result.contract.task).toContain("Implement M4-R3 Skill allowlist projection");
+		expect(result.contract.task).not.toContain("Requirement: Original commands");
 		const requirements = result.contract.requirements.map((requirement) => requirement.text);
 
 		expect(requirements).toContain("Skill allowlist policy must match Skill names and keep deny after allow.");
@@ -343,6 +353,18 @@ describe("Execution Contract", () => {
 			"Agent Pool creation must wait for the next milestone.",
 		]) {
 			expect(requirements).not.toContain(genericRequirement);
+		}
+
+		for (const standaloneTranscriptLine of [
+			"Tasks · discover ·  · contract active",
+			"  □ Requirement: Original commands and complete output must be collapsed by default.",
+		]) {
+			const standalone = await runtime.resolveTask({
+				task: standaloneTranscriptLine,
+				explicitPaths: [requirementsPath],
+			});
+			expect(standalone.contract.task).toBe("Tasks");
+			expect(standalone.contract.requirements).toEqual([]);
 		}
 	});
 
