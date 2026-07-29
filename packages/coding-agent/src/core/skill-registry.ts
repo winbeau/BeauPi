@@ -16,8 +16,9 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import type { ResourceDiagnostic } from "./diagnostics.ts";
 import type { PathMetadata } from "./package-manager.ts";
-import { validateSkillDescription, validateSkillName } from "./skills.ts";
+import { type Skill, validateSkillDescription, validateSkillName } from "./skills.ts";
 
 export const SKILL_REGISTRY_VERSION = 1;
 export const SKILL_REGISTRY_FILENAME = "skills-registry.json";
@@ -43,9 +44,17 @@ const DIAGNOSTIC_CODES = [
 	"relative_reference_outside_skill",
 	"source_invalid",
 	"source_missing",
+	"source_fetch_failed",
+	"source_subdirectory_invalid",
+	"source_symlink_unsupported",
+	"source_too_large",
+	"skill_candidate_missing",
+	"skill_candidate_ambiguous",
 	"source_update_unavailable",
 	"sha256_invalid",
+	"sha256_mismatch",
 	"name_conflict",
+	"security_risk",
 	"script_inventory",
 	"executable_inventory",
 	"inventory_truncated",
@@ -58,7 +67,7 @@ export type SkillDiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
 export type SkillSource =
 	| { type: "local"; path: string }
 	| { type: "git"; repository: string; ref?: string; subdirectory?: string }
-	| { type: "npm"; package: string; version?: string }
+	| { type: "npm"; package: string; version?: string; subdirectory?: string }
 	| { type: "url"; url: string; sha256?: string }
 	| { type: "external-directory"; path: string; harness?: "claude" | "codex" | "other" };
 
@@ -115,6 +124,45 @@ export interface SkillInventory {
 	scripts: string[];
 	executables: string[];
 	truncated: boolean;
+}
+
+export interface SkillAllowlist {
+	/** When provided, only these Skill names are available. An empty list disables all Skills. */
+	allow?: readonly string[];
+	/** These Skill names are always excluded, including when also present in allow. */
+	deny?: readonly string[];
+}
+
+export interface SkillResourceSet {
+	skills: Skill[];
+	diagnostics: ResourceDiagnostic[];
+}
+
+/**
+ * Create a ResourceLoader skillsOverride for a controlled Agent profile.
+ * Explicit allow entries that are not discovered remain unavailable and produce diagnostics.
+ */
+export function createSkillAllowlistOverride(policy: SkillAllowlist): (base: SkillResourceSet) => SkillResourceSet {
+	const allowNames =
+		policy.allow === undefined
+			? undefined
+			: Array.from(new Set(policy.allow.map((name) => name.trim()).filter((name) => name.length > 0)));
+	const allow = allowNames ? new Set(allowNames) : undefined;
+	const deny = new Set(policy.deny?.map((name) => name.trim()).filter((name) => name.length > 0) ?? []);
+
+	return (base) => {
+		const discoveredNames = new Set(base.skills.map((skill) => skill.name));
+		const missingDiagnostics: ResourceDiagnostic[] = (allowNames ?? [])
+			.filter((name) => !discoveredNames.has(name))
+			.map((name) => ({
+				type: "error",
+				message: `Skill allowlist entry ${JSON.stringify(name)} was not discovered`,
+			}));
+		return {
+			skills: base.skills.filter((skill) => (allow ? allow.has(skill.name) : true) && !deny.has(skill.name)),
+			diagnostics: [...base.diagnostics, ...missingDiagnostics],
+		};
+	};
 }
 
 export interface SkillValidationResult {
@@ -218,10 +266,12 @@ function parseSource(value: unknown, context: string): SkillSource {
 		}
 		case "npm": {
 			const version = parseOptionalString(value, "version", context);
+			const subdirectory = parseOptionalString(value, "subdirectory", context);
 			return {
 				type,
 				package: parseRequiredString(value, "package", context),
 				...(version ? { version } : {}),
+				...(subdirectory ? { subdirectory } : {}),
 			};
 		}
 		case "url": {
@@ -400,7 +450,12 @@ function canonicalSource(source: SkillSource): SkillSource {
 				...(source.subdirectory ? { subdirectory: source.subdirectory } : {}),
 			};
 		case "npm":
-			return { type: source.type, package: source.package, ...(source.version ? { version: source.version } : {}) };
+			return {
+				type: source.type,
+				package: source.package,
+				...(source.version ? { version: source.version } : {}),
+				...(source.subdirectory ? { subdirectory: source.subdirectory } : {}),
+			};
 		case "url":
 			return { type: source.type, url: source.url, ...(source.sha256 ? { sha256: source.sha256 } : {}) };
 		case "external-directory":
@@ -622,6 +677,14 @@ function collectInventory(skillDir: string): SkillInventory {
 	};
 }
 
+function isSafeSourceSubdirectory(value: string): boolean {
+	return (
+		!isAbsolute(value) &&
+		!value.includes("\\") &&
+		!value.split("/").some((segment) => segment === ".." || segment === "")
+	);
+}
+
 function validateSource(entry: SkillRegistryEntry, baseDir: string, registryPath: string): SkillRegistryDiagnostic[] {
 	const diagnostics: SkillRegistryDiagnostic[] = [];
 	const common = {
@@ -658,14 +721,28 @@ function validateSource(entry: SkillRegistryEntry, baseDir: string, registryPath
 			break;
 		}
 		case "git":
-			diagnostics.push(
-				diagnostic("source_update_unavailable", "info", "Git skill updates are not implemented in Stage 1", common),
-			);
+			if (entry.source.subdirectory && !isSafeSourceSubdirectory(entry.source.subdirectory)) {
+				diagnostics.push(
+					diagnostic(
+						"source_subdirectory_invalid",
+						"error",
+						`Git Skill subdirectory is unsafe: ${entry.source.subdirectory}`,
+						common,
+					),
+				);
+			}
 			break;
 		case "npm":
-			diagnostics.push(
-				diagnostic("source_update_unavailable", "info", "npm skill updates are not implemented in Stage 1", common),
-			);
+			if (entry.source.subdirectory && !isSafeSourceSubdirectory(entry.source.subdirectory)) {
+				diagnostics.push(
+					diagnostic(
+						"source_subdirectory_invalid",
+						"error",
+						`npm Skill subdirectory is unsafe: ${entry.source.subdirectory}`,
+						common,
+					),
+				);
+			}
 			break;
 		case "url": {
 			let url: URL | undefined;
@@ -685,9 +762,11 @@ function validateSource(entry: SkillRegistryEntry, baseDir: string, registryPath
 					),
 				);
 			}
-			diagnostics.push(
-				diagnostic("source_update_unavailable", "info", "URL skill updates are not implemented in Stage 1", common),
-			);
+			if (entry.sha256 && entry.source.sha256 && entry.sha256.toLowerCase() !== entry.source.sha256.toLowerCase()) {
+				diagnostics.push(
+					diagnostic("sha256_mismatch", "error", "Registry and URL source SHA-256 pins do not match", common),
+				);
+			}
 			break;
 		}
 	}
@@ -951,6 +1030,36 @@ export function validateSkillRegistryEntry(options: {
 		);
 	}
 
+	const securityInputs = [rawContent];
+	for (const script of inventory.scripts) {
+		const scriptPath = join(skillDir, script);
+		try {
+			const stats = lstatSync(scriptPath);
+			if (stats.isFile() && stats.size <= 256 * 1024) securityInputs.push(readFileSync(scriptPath, "utf-8"));
+		} catch {}
+	}
+	const securityText = securityInputs.join("\n");
+	const risks = [
+		{ label: "sudo usage", pattern: /\bsudo\b/i },
+		{ label: "curl or wget piped to a shell", pattern: /\b(?:curl|wget)\b[^\n|]*\|\s*(?:ba|z|k)?sh\b/i },
+		{
+			label: "credential or secret access",
+			pattern:
+				/\b(?:credentials?|api[ _-]?keys?|access[ _-]?tokens?|secrets?|AWS_SECRET_ACCESS_KEY)\b|(?:^|[/\\])\.env\b/im,
+		},
+		{ label: "remote execution instructions", pattern: /\b(?:ssh|scp|kubectl\s+exec|remote execution)\b/i },
+	]
+		.filter((risk) => risk.pattern.test(securityText))
+		.map((risk) => risk.label);
+	if (risks.length > 0) {
+		diagnostics.push(
+			diagnostic("security_risk", "warning", `Skill security review flagged: ${risks.join(", ")}`, {
+				...common,
+				path: skillFilePath,
+			}),
+		);
+	}
+
 	return {
 		entry,
 		resolvedPath,
@@ -971,7 +1080,7 @@ export function formatSkillSource(source: SkillSource): string {
 		case "git":
 			return `git:${source.repository}${source.ref ? `@${source.ref}` : ""}${source.subdirectory ? `#${source.subdirectory}` : ""}`;
 		case "npm":
-			return `npm:${source.package}${source.version ? `@${source.version}` : ""}`;
+			return `npm:${source.package}${source.version ? `@${source.version}` : ""}${source.subdirectory ? `#${source.subdirectory}` : ""}`;
 		case "url":
 			return `url:${source.url}`;
 		case "external-directory":

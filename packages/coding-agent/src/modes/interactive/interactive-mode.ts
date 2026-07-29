@@ -86,9 +86,13 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
-import type { SkillRegistryRecord } from "../../core/skill-registry.ts";
+import { formatSkillSource, type SkillRegistryRecord } from "../../core/skill-registry.ts";
 import { parseSkillRegistryCommand, type SkillRegistryCommand } from "../../core/skill-registry-commands.ts";
-import { SkillRegistryService, SkillRegistryServiceError } from "../../core/skill-registry-service.ts";
+import {
+	SkillRegistryService,
+	SkillRegistryServiceError,
+	type SkillSecurityReview,
+} from "../../core/skill-registry-service.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -5403,6 +5407,7 @@ export class InteractiveMode {
 		return new SkillRegistryService({
 			cwd: this.sessionManager.getCwd(),
 			agentDir: this.runtimeHost.services.agentDir,
+			settingsManager: this.settingsManager,
 			projectTrusted: () => this.settingsManager.isProjectTrusted(),
 			getCurrentSkillNames: () => new Set(this.session.resourceLoader.getSkills().skills.map((skill) => skill.name)),
 			getCurrentSkillPaths: () =>
@@ -5433,6 +5438,9 @@ export class InteractiveMode {
 				break;
 			case "validate":
 				await this.handleSkillValidateCommand(command.name);
+				break;
+			case "update":
+				await this.handleSkillUpdateCommand(command.name);
 				break;
 			case "remove":
 				await this.handleSkillRemoveCommand(command.name);
@@ -5489,21 +5497,75 @@ export class InteractiveMode {
 			case "validate":
 				await this.handleSkillValidateCommand(record.entry.name);
 				break;
+			case "update":
+				await this.handleSkillUpdateCommand(record.entry.name);
+				break;
 			case "remove":
 				await this.handleSkillRemoveCommand(record.entry.name);
 				break;
 		}
 	}
 
+	private async confirmSkillSecurityReview(review: SkillSecurityReview): Promise<boolean> {
+		const inventory = review.validation.inventory;
+		const diagnostics = review.validation.diagnostics.filter((diagnostic) => diagnostic.severity !== "info");
+		const risks = diagnostics.map((diagnostic) => `${diagnostic.severity}: ${diagnostic.message}`);
+		const scripts = inventory.scripts.length > 0 ? inventory.scripts.join(", ") : "none";
+		const executables = inventory.executables.length > 0 ? inventory.executables.join(", ") : "none";
+		const pin = [
+			review.pinnedRef ? `pinned ref: ${review.pinnedRef}` : undefined,
+			review.sha256 ? `sha256: ${review.sha256}` : undefined,
+		]
+			.filter((value): value is string => value !== undefined)
+			.join(" · ");
+		const preview = `${review.preview}${review.previewTruncated ? "\n… (preview truncated)" : ""}`;
+		const message = [
+			`Action: ${review.action}`,
+			`Skill: ${review.name}`,
+			`Scope: ${review.scope}${review.scope === "project" ? " (project trust granted)" : ""}`,
+			`Source: ${formatSkillSource(review.source)}${pin ? `\n${pin}` : ""}`,
+			`Target: ${this.formatDisplayPath(review.targetPath)}`,
+			`Scripts: ${scripts}`,
+			`Executables: ${executables}`,
+			`Risks: ${risks.length > 0 ? risks.join(" | ") : "none detected"}`,
+			"Content preview:",
+			preview,
+			"The validated Skill directory will be copied without package caches or Git metadata. No Skill script or executable will be run.",
+		].join("\n");
+		const confirmed = await this.showExtensionConfirm(
+			review.scope === "project" ? "Confirm project Skill security review" : "Confirm Skill security review",
+			message,
+		);
+		if (!confirmed) this.showStatus(`${review.action === "update" ? "Update" : "Import"} cancelled`);
+		return confirmed;
+	}
+
 	private async handleSkillImportCommand(source: string, scope: "user" | "project"): Promise<void> {
 		if (!(await this.ensureSkillRegistryCommandIdle())) return;
 		try {
-			const result = await this.createSkillRegistryService().importLocal(source, scope);
+			const result = await this.createSkillRegistryService().importSource(source, scope, (review) =>
+				this.confirmSkillSecurityReview(review),
+			);
+			if (!result) return;
 			if (!(await this.handleReloadCommand())) return;
 			const status = result.validation.valid
-				? `Imported skill ${result.entry.name} (${scope})`
-				: `Imported skill ${result.entry.name} with validation diagnostics; it is not loaded`;
+				? `Imported Skill ${result.entry.name} (${scope})`
+				: `Imported Skill ${result.entry.name} with validation diagnostics; it is not loaded`;
 			this.showStatus(status);
+		} catch (error) {
+			this.showSkillRegistryError(error);
+		}
+	}
+
+	private async handleSkillUpdateCommand(name: string): Promise<void> {
+		if (!(await this.ensureSkillRegistryCommandIdle())) return;
+		try {
+			const result = await this.createSkillRegistryService().update(name, (review) =>
+				this.confirmSkillSecurityReview(review),
+			);
+			if (!result) return;
+			if (!(await this.handleReloadCommand())) return;
+			this.showStatus(`Updated Skill ${result.entry.name}`);
 		} catch (error) {
 			this.showSkillRegistryError(error);
 		}

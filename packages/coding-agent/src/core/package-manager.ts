@@ -98,9 +98,16 @@ export interface ConfiguredPackage {
 	installedPath?: string;
 }
 
+export interface StagedPackageSource {
+	type: "npm" | "git";
+	path: string;
+	pinnedRef?: string;
+}
+
 export interface PackageManager {
 	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
 	install(source: string, options?: { local?: boolean }): Promise<void>;
+	stagePackageSource(source: string, stagingRoot: string): Promise<StagedPackageSource>;
 	installAndPersist(source: string, options?: { local?: boolean }): Promise<void>;
 	remove(source: string, options?: { local?: boolean }): Promise<void>;
 	removeAndPersist(source: string, options?: { local?: boolean }): Promise<boolean>;
@@ -1015,6 +1022,52 @@ export class DefaultPackageManager implements PackageManager {
 		});
 	}
 
+	async stagePackageSource(source: string, stagingRoot: string): Promise<StagedPackageSource> {
+		const parsed = this.parseSource(source);
+		if (parsed.type === "local") {
+			throw new Error(`Package staging only supports npm and Git sources: ${source}`);
+		}
+
+		const resolvedStagingRoot = resolve(stagingRoot);
+		mkdirSync(resolvedStagingRoot, { recursive: true, mode: 0o700 });
+		if (parsed.type === "npm") {
+			const installRoot = join(resolvedStagingRoot, "npm");
+			this.ensureNpmProject(installRoot);
+			await this.runNpmCommand(this.getNpmInstallArgs([parsed.spec], installRoot, { ignoreScripts: true }));
+			const packagePath = join(installRoot, "node_modules", parsed.name);
+			if (!existsSync(packagePath)) {
+				throw new Error(`npm package was not installed into staging: ${parsed.name}`);
+			}
+			const installedVersion = this.getInstalledNpmVersion(packagePath);
+			return {
+				type: "npm",
+				path: packagePath,
+				...(installedVersion ? { pinnedRef: installedVersion } : {}),
+			};
+		}
+
+		const checkoutPath = join(resolvedStagingRoot, "git");
+		await this.runCommand("git", ["clone", "--no-checkout", "--no-recurse-submodules", parsed.repo, checkoutPath]);
+		const requestedRef = parsed.ref ?? "HEAD";
+		let commit: string;
+		try {
+			commit = await this.runCommandCapture("git", ["rev-parse", "--verify", `${requestedRef}^{commit}`], {
+				cwd: checkoutPath,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+		} catch (error) {
+			if (!parsed.ref) throw error;
+			commit = await this.runCommandCapture("git", ["rev-parse", "--verify", `origin/${parsed.ref}^{commit}`], {
+				cwd: checkoutPath,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+		}
+		await this.runCommand("git", ["-c", "core.hooksPath=/dev/null", "checkout", "--detach", commit], {
+			cwd: checkoutPath,
+		});
+		return { type: "git", path: checkoutPath, pinnedRef: commit.trim() };
+	}
+
 	async installAndPersist(source: string, options?: { local?: boolean }): Promise<void> {
 		await this.install(source, options);
 		this.addSourceToSettings(source, options);
@@ -1771,14 +1824,19 @@ export class DefaultPackageManager implements PackageManager {
 		return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
 	}
 
-	private getNpmInstallArgs(specs: string[], installRoot: string): string[] {
+	private getNpmInstallArgs(
+		specs: string[],
+		installRoot: string,
+		options: { ignoreScripts?: boolean } = {},
+	): string[] {
 		const packageManagerName = this.getPackageManagerName();
+		const ignoreScripts = options.ignoreScripts ? ["--ignore-scripts"] : [];
 		// Extension packages run inside pi and resolve pi APIs through loader aliases/virtual modules.
 		// Disable peer dependency resolution for managed installs (npm's --legacy-peer-deps, and
 		// equivalent bun/pnpm settings) so package managers do not install or solve host-provided
 		// @earendil-works/pi-* peers. Stale auto-installed pi peers can otherwise block updates.
 		if (packageManagerName === "bun") {
-			return ["install", ...specs, "--cwd", installRoot, "--omit=peer"];
+			return ["install", ...specs, "--cwd", installRoot, "--omit=peer", ...ignoreScripts];
 		}
 		if (packageManagerName === "pnpm") {
 			return [
@@ -1789,9 +1847,10 @@ export class DefaultPackageManager implements PackageManager {
 				"--config.auto-install-peers=false",
 				"--config.strict-peer-dependencies=false",
 				"--config.strict-dep-builds=false",
+				...ignoreScripts,
 			];
 		}
-		return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
+		return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps", ...ignoreScripts];
 	}
 
 	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {

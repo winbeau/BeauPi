@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { SKILL_REGISTRY_VERSION, writeSkillRegistry } from "../src/core/skill-registry.ts";
 import { SkillRegistryService } from "../src/core/skill-registry-service.ts";
 import { SkillRegistrySelectorComponent } from "../src/modes/interactive/components/skill-registry-selector.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -92,6 +93,47 @@ describe("SkillRegistrySelectorComponent", () => {
 		component.handleInput("\n");
 		component.handleInput("\n");
 		expect(actions).toEqual(["disable"]);
+	});
+
+	it("offers and dispatches update for remote Skill sources", () => {
+		createSkill(join(agentDir, "skills", "remote"), "remote");
+		writeSkillRegistry({
+			scope: "user",
+			cwd,
+			agentDir,
+			registry: {
+				version: SKILL_REGISTRY_VERSION,
+				entries: [
+					{
+						id: "remote-entry",
+						name: "remote",
+						source: { type: "git", repository: "https://example.com/team/skills", ref: "main" },
+						scope: "user",
+						path: "skills/remote",
+						enabled: true,
+						pinnedRef: "abc123",
+						importedAt: 100,
+						updatedAt: 100,
+						diagnostics: [],
+					},
+				],
+			},
+		});
+		const service = new SkillRegistryService({ cwd, agentDir, projectTrusted: true });
+		const snapshot = service.getSnapshot();
+		const actions: string[] = [];
+		const component = new SkillRegistrySelectorComponent({
+			snapshot,
+			onAction: (_record, action) => {
+				actions.push(action);
+			},
+			onCancel: () => {},
+		});
+		component.handleInput("\n");
+		component.handleInput("\x1b[B");
+		component.handleInput("\x1b[B");
+		component.handleInput("\n");
+		expect(actions).toEqual(["update"]);
 	});
 
 	it("uses the current ResourceLoader projection as its source of list records", async () => {

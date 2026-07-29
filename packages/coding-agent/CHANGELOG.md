@@ -10,6 +10,7 @@
 - Added the M3 Document Runtime with bounded local Markdown discovery/indexing, structured citations, content-hash invalidation, `docs_search`, `docs_read`, `docs_resolve_task`, and versioned Execution Contract details projected into the existing Task Ledger.
 - Added the BeauPi Skill Registry core with deterministic user/project persistence, validation and inventory diagnostics, project-trust gating, conflict-aware precedence, and ResourceLoader reload projection.
 - Added local BeauPi Skill Registry management with a searchable `/skills` UI, local/Claude/Codex directory import, enable/disable, validation, safe removal confirmation, trust gating, collision checks, and hot reload.
+- Added remote BeauPi Skill imports and updates from Git, npm, and HTTPS sources with lifecycle-free staging, SHA-256 pins, validation/security review, explicit confirmation, symlink/cache filtering, atomic replacement, structured diagnostics, `/skill-update`, and controlled ResourceLoader Skill allowlists.
 
 ### Changed
 

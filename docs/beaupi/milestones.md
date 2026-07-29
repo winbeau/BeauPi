@@ -243,6 +243,8 @@ interface TaskLedger {
 
 ## M4：Skill Registry
 
+状态：已完成（2026-07-29）。
+
 ### 目标
 
 在现有 Pi Skill discovery 之上完成导入、注册、启停、诊断和热重载闭环。
@@ -268,6 +270,15 @@ interface TaskLedger {
 - 已实现 `SKILL.md`、frontmatter、相对引用、脚本/可执行文件清单、来源/更新能力和 project trust 校验；不会执行 Skill 脚本或 npm lifecycle。
 - 已覆盖 persistence、validation、precedence、disabled、conflict、malformed、trust 和 reload rebuild 测试。
 - 导入/获取、命令/UI、更新、删除和子 Agent allowlist 留给后续 M4 Stage。
+
+### Stage 2 验收记录（2026-07-29）
+
+- `/skill-import` 已接入本地、`file://`、Git、npm 和 HTTPS 来源；远程 Git/npm 先安全 staging，HTTPS 使用无重定向、2 MiB 上限和 SHA-256 pin。
+- 远程 staging 禁止子模块、checkout hooks、npm lifecycle、符号链接，并过滤 `.git`/`node_modules`；Skill 脚本只建立清单，不执行。
+- 所有交互式导入和远程更新均显示来源、ref/hash、内容预览、脚本/可执行清单及安全风险后要求确认；project scope 继续受 trust gate 保护。
+- `/skill-update` 对 Git/npm/HTTPS 执行 fetch、校验、确认和原子目录替换；失败或取消不会改变旧 Skill 或 Registry entry。`/skill-remove` 保留现有二次删除确认。
+- `/skills` UI、命令分发和 `ctx.reload()` 已接入 InteractiveMode；新增 allow/deny `createSkillAllowlistOverride()` 作为 M5 AgentProfile 的 ResourceLoader 过滤接口。
+- 定向 Registry、remote staging、allowlist、selector、InteractiveMode 测试覆盖正常、取消、失败、冲突、信任、重载和安全边界路径。
 
 ### 安全要求
 

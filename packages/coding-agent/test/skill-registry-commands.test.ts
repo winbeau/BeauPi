@@ -21,6 +21,10 @@ describe("skill registry command parsing", () => {
 			type: "validate",
 			name: "review-pr",
 		});
+		expect(parseSkillRegistryCommand("/skill-update review-pr")).toEqual({
+			type: "update",
+			name: "review-pr",
+		});
 		expect(parseSkillRegistryCommand("/skill-remove review-pr")).toEqual({
 			type: "remove",
 			name: "review-pr",
@@ -37,19 +41,26 @@ describe("skill registry command parsing", () => {
 		});
 	});
 
-	it("defaults imports to user scope and rejects remote sources", () => {
+	it("defaults imports to user scope and accepts documented remote source forms", () => {
 		expect(parseSkillRegistryCommand("/skill-import ~/.claude/skills/review")).toEqual({
 			type: "import",
 			source: "~/.claude/skills/review",
 			scope: "user",
 		});
-		expect(parseSkillRegistryCommand("/skill-import https://example.com/SKILL.md")).toEqual({
-			type: "error",
-			message: "Stage 2a only supports existing local or Claude/Codex directories",
+		expect(parseSkillRegistryCommand("/skill-import git:github.com/user/repo@v1#skills/review project")).toEqual({
+			type: "import",
+			source: "git:github.com/user/repo@v1#skills/review",
+			scope: "project",
 		});
-		expect(parseSkillRegistryCommand("/skill-import ssh://example.com/skills/review")).toEqual({
-			type: "error",
-			message: "Stage 2a only supports existing local or Claude/Codex directories",
+		expect(parseSkillRegistryCommand("/skill-import npm:@team/beaupi-skills@1.2.0#review")).toEqual({
+			type: "import",
+			source: "npm:@team/beaupi-skills@1.2.0#review",
+			scope: "user",
+		});
+		expect(parseSkillRegistryCommand("/skill-import https://example.com/SKILL.md")).toEqual({
+			type: "import",
+			source: "https://example.com/SKILL.md",
+			scope: "user",
 		});
 	});
 
@@ -65,6 +76,10 @@ describe("skill registry command parsing", () => {
 		expect(parseSkillRegistryCommand("/skill-import ./review nope")).toEqual({
 			type: "error",
 			message: "Skill import scope must be user or project",
+		});
+		expect(parseSkillRegistryCommand("/skill-update")).toEqual({
+			type: "error",
+			message: "Usage: /skill-update <name>",
 		});
 		expect(parseSkillRegistryCommand("/skill:review-pr")).toBeUndefined();
 		expect(parseSkillRegistryCommand("/model")).toBeUndefined();

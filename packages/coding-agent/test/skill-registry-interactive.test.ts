@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SkillRegistryEntry } from "../src/core/skill-registry.ts";
-import type { SkillRegistryRemoveResult } from "../src/core/skill-registry-service.ts";
+import type { SkillRegistryRemoveResult, SkillSecurityReview } from "../src/core/skill-registry-service.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 const entry: SkillRegistryEntry = {
@@ -35,6 +35,71 @@ describe("InteractiveMode skill registry command integration", () => {
 
 		expect(handleSkillRegistryCommand).toHaveBeenCalledWith({ type: "enable", name: "review" });
 		expect(editor.setText).toHaveBeenCalledWith("");
+	});
+
+	it("shows source, target, content preview, scripts, and risks through the confirmation lifecycle", async () => {
+		const review: SkillSecurityReview = {
+			action: "import",
+			source: { type: "url", url: "https://example.com/SKILL.md", sha256: "a".repeat(64) },
+			scope: "project",
+			name: "review",
+			targetPath: "/tmp/project/.beaupi/skills/review",
+			preview: "---\nname: review\ndescription: reviewed\n---\nBody",
+			previewTruncated: false,
+			sha256: "a".repeat(64),
+			validation: {
+				entry: { ...entry, source: { type: "url", url: "https://example.com/SKILL.md" } },
+				resolvedPath: "/tmp/staging/review",
+				skillFilePath: "/tmp/staging/review/SKILL.md",
+				name: "review",
+				description: "reviewed",
+				references: [],
+				inventory: { scripts: ["scripts/check.sh"], executables: ["scripts/check.sh"], truncated: false },
+				diagnostics: [{ code: "security_risk", severity: "warning", message: "sudo usage" }],
+				valid: true,
+			},
+		};
+		const showExtensionConfirm = vi.fn(async (_title: string, _message: string) => true);
+		const showStatus = vi.fn();
+		const fakeThis = {
+			showExtensionConfirm,
+			showStatus,
+			formatDisplayPath: (value: string) => value,
+		};
+		const confirm = (
+			InteractiveMode as unknown as {
+				prototype: {
+					confirmSkillSecurityReview(this: typeof fakeThis, input: SkillSecurityReview): Promise<boolean>;
+				};
+			}
+		).prototype.confirmSkillSecurityReview;
+		expect(await confirm.call(fakeThis, review)).toBe(true);
+		const [title, message] = showExtensionConfirm.mock.calls[0] ?? [];
+		expect(title).toContain("project Skill");
+		expect(message).toContain("https://example.com/SKILL.md");
+		expect(message).toContain("/tmp/project/.beaupi/skills/review");
+		expect(message).toContain("scripts/check.sh");
+		expect(message).toContain("sudo usage");
+		expect(message).toContain("name: review");
+	});
+
+	it("dispatches the remote Skill update command through InteractiveMode", async () => {
+		const handleSkillRegistryCommand = vi.fn(async () => undefined);
+		const editor = { setText: vi.fn() };
+		const defaultEditor: { onSubmit?: (text: string) => Promise<void> } = {};
+		const fakeThis = {
+			defaultEditor,
+			editor,
+			handleSkillRegistryCommand,
+		};
+		const setup = (
+			InteractiveMode as unknown as {
+				prototype: { setupEditorSubmitHandler(this: typeof fakeThis): void };
+			}
+		).prototype.setupEditorSubmitHandler;
+		setup.call(fakeThis);
+		await defaultEditor.onSubmit?.("/skill-update review");
+		expect(handleSkillRegistryCommand).toHaveBeenCalledWith({ type: "update", name: "review" });
 	});
 
 	it("keeps managed files after the first remove and deletes them only after explicit confirmation", async () => {

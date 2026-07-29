@@ -42,7 +42,7 @@
 | 未来组件契约 | 已定义接口 | 主题基础 |
 | 测试与视觉回归 | 已完成（Batch 10） | 所有批次 |
 
-M1 于 2026-07-28 完成验收。M2 Task Ledger 于 2026-07-29 完成并复用本计划定义的视觉接口；M3 Document Runtime 于 2026-07-29 完成，下一里程碑为 M4 Skill Registry。
+M1 于 2026-07-28 完成验收。M2 Task Ledger、M3 Document Runtime 和 M4 Skill Registry 于 2026-07-29 完成并复用本计划定义的视觉接口；下一里程碑为 M5 进程内子 Agent。
 
 ## 第一轮完成边界
 

@@ -17,7 +17,7 @@ import {
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 
-export type SkillRegistryAction = "enable" | "disable" | "validate" | "remove";
+export type SkillRegistryAction = "enable" | "disable" | "validate" | "update" | "remove";
 
 export interface SkillRegistrySelectorOptions {
 	snapshot: SkillRegistryProjection;
@@ -29,7 +29,7 @@ export interface SkillRegistrySelectorOptions {
 }
 
 function isSkillRegistryAction(value: string): value is SkillRegistryAction {
-	return value === "enable" || value === "disable" || value === "validate" || value === "remove";
+	return value === "enable" || value === "disable" || value === "validate" || value === "update" || value === "remove";
 }
 
 function uniqueDiagnostics(record: SkillRegistryRecord): SkillRegistryDiagnostic[] {
@@ -111,6 +111,17 @@ class SkillRegistryDetailsComponent extends Container {
 			label: "Validate",
 			description: "Refresh persisted frontmatter and collision diagnostics",
 		});
+		if (
+			record.entry.source.type === "git" ||
+			record.entry.source.type === "npm" ||
+			record.entry.source.type === "url"
+		) {
+			actions.push({
+				value: "update",
+				label: "Update",
+				description: "Fetch, review, confirm, and atomically replace this remote Skill",
+			});
+		}
 		actions.push({ value: "remove", label: "Remove", description: "Remove only the Registry reference by default" });
 
 		this.addChild(new DynamicBorder());

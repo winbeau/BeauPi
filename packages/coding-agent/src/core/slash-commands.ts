@@ -41,12 +41,13 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "skills", description: "List and manage registered skills", argumentHint: "[search]" },
 	{
 		name: "skill-import",
-		description: "Import a local, Claude, or Codex skill directory",
-		argumentHint: "<path> [user|project]",
+		description: "Import a local, Git, npm, or HTTPS Skill source",
+		argumentHint: "<source> [user|project]",
 	},
 	{ name: "skill-enable", description: "Enable a registered skill", argumentHint: "<name>" },
 	{ name: "skill-disable", description: "Disable a registered skill", argumentHint: "<name>" },
-	{ name: "skill-validate", description: "Validate registered skill diagnostics", argumentHint: "[name]" },
-	{ name: "skill-remove", description: "Remove a skill Registry reference", argumentHint: "<name>" },
+	{ name: "skill-validate", description: "Validate registered Skill diagnostics", argumentHint: "[name]" },
+	{ name: "skill-update", description: "Update a registered remote Skill", argumentHint: "<name>" },
+	{ name: "skill-remove", description: "Remove a Skill Registry reference", argumentHint: "<name>" },
 	{ name: "quit", description: `Quit ${APP_NAME}` },
 ];

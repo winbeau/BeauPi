@@ -1,4 +1,3 @@
-import { isLocalPath } from "../utils/paths.ts";
 import type { SkillRegistryScope } from "./skill-registry.ts";
 
 export type SkillRegistryCommand =
@@ -7,6 +6,7 @@ export type SkillRegistryCommand =
 	| { type: "enable"; name: string }
 	| { type: "disable"; name: string }
 	| { type: "validate"; name?: string }
+	| { type: "update"; name: string }
 	| { type: "remove"; name: string }
 	| { type: "error"; message: string };
 
@@ -16,6 +16,7 @@ const COMMAND_NAMES = new Set([
 	"skill-enable",
 	"skill-disable",
 	"skill-validate",
+	"skill-update",
 	"skill-remove",
 ]);
 
@@ -66,7 +67,7 @@ function requireName(command: string, args: string[]): SkillRegistryCommand {
 	if (args.length !== 1 || !args[0]?.trim()) {
 		return { type: "error", message: `Usage: /${command} <name>` };
 	}
-	const type = command.slice("skill-".length) as "enable" | "disable" | "remove";
+	const type = command.slice("skill-".length) as "enable" | "disable" | "update" | "remove";
 	return { type, name: args[0] };
 }
 
@@ -86,21 +87,19 @@ export function parseSkillRegistryCommand(input: string): SkillRegistryCommand |
 		}
 		case "skill-import": {
 			if (args.length < 1 || args.length > 2) {
-				return { type: "error", message: "Usage: /skill-import <local-path> [user|project]" };
+				return { type: "error", message: "Usage: /skill-import <source> [user|project]" };
 			}
 			const source = args[0];
-			if (!source) return { type: "error", message: "Usage: /skill-import <local-path> [user|project]" };
+			if (!source) return { type: "error", message: "Usage: /skill-import <source> [user|project]" };
 			const scope = args[1] ?? "user";
 			if (scope !== "user" && scope !== "project") {
 				return { type: "error", message: "Skill import scope must be user or project" };
-			}
-			if (!isLocalPath(source)) {
-				return { type: "error", message: "Stage 2a only supports existing local or Claude/Codex directories" };
 			}
 			return { type: "import", source, scope };
 		}
 		case "skill-enable":
 		case "skill-disable":
+		case "skill-update":
 		case "skill-remove":
 			return requireName(commandName, args);
 		case "skill-validate":

@@ -79,12 +79,14 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export {
+	createSkillAllowlistOverride,
 	formatSkillSource,
 	getSkillRegistryScopePaths,
 	loadSkillRegistry,
 	resolveSkillRegistryProjection,
 	SKILL_REGISTRY_FILENAME,
 	SKILL_REGISTRY_VERSION,
+	type SkillAllowlist,
 	type SkillDiagnosticCode,
 	type SkillDiagnosticSeverity,
 	type SkillInventory,
@@ -97,6 +99,7 @@ export {
 	type SkillRegistryScope,
 	type SkillRegistryScopePaths,
 	type SkillRegistrySnapshot,
+	type SkillResourceSet,
 	type SkillSource,
 	type SkillValidationResult,
 	validateSkillRegistryEntry,
@@ -104,12 +107,17 @@ export {
 } from "./skill-registry.ts";
 export { parseSkillRegistryCommand, type SkillRegistryCommand } from "./skill-registry-commands.ts";
 export {
+	parseRemoteSkillSource,
 	type SkillRegistryImportResult,
 	type SkillRegistryMutationResult,
 	type SkillRegistryRemoveResult,
 	SkillRegistryService,
 	SkillRegistryServiceError,
 	type SkillRegistryServiceOptions,
+	type SkillRemoteFetcher,
+	type SkillRemoteFetchResult,
+	type SkillSecurityReview,
+	type SkillSecurityReviewConfirmation,
 } from "./skill-registry-service.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";
 export {

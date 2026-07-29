@@ -61,7 +61,7 @@ Registry 只记录元数据和启停状态，不把完整 Skill 内容塞进 set
 type SkillSource =
   | { type: "local"; path: string }
   | { type: "git"; repository: string; ref?: string; subdirectory?: string }
-  | { type: "npm"; package: string; version?: string }
+  | { type: "npm"; package: string; version?: string; subdirectory?: string }
   | { type: "url"; url: string; sha256?: string }
   | { type: "external-directory"; path: string; harness?: "claude" | "codex" | "other" };
 ```
@@ -106,6 +106,18 @@ interface SkillRegistryEntry {
 
 本阶段不包含导入/获取、`/skills` 命令与 UI、更新、删除或子 Agent allowlist。
 
+## Stage 2 导入、更新与受控 Skill
+
+状态：已完成（2026-07-29）。
+
+- `/skill-import` 接受本地路径、`file://`、`git:`、`npm:` 和 HTTPS 单文件来源；Git/npm 支持 `#subdirectory`，远程来源先进入权限为 0700 的临时 staging 目录。
+- Git 使用无递归子模块、禁用 checkout hooks 的 staging；npm 使用 `--ignore-scripts`，不会执行包或 Skill 生命周期脚本。远程 Skill 不允许符号链接，并且不会复制 `.git` 或 `node_modules`。
+- HTTPS 只允许无重定向的 HTTPS 响应，限制 2 MiB，计算并保存 SHA-256；所有交互式导入和更新都显示来源、固定 ref/hash、内容预览、脚本/可执行清单和安全风险后再确认。
+- 导入通过原子复制和版本化 Registry 写入完成；同名、无 Skill、多个候选、frontmatter、引用、信任和 staging 路径错误都返回结构化诊断。
+- `/skill-update` 只允许 Git/npm/HTTPS 来源，获取、校验、确认和目录替换均在 Registry 变更前完成；失败或取消保留旧 Skill 和旧 Registry entry。
+- `/skills` UI、命令和 `ctx.reload()` 已接入真实 InteractiveMode 生命周期；用户和项目本地导入统一走安全审查，`file://` 仍按本地来源处理。
+- `createSkillAllowlistOverride()` 提供受控 ResourceLoader 的 allow/deny 过滤接口：设置 `allow: []` 时默认不加载 Skill，deny 优先于 allow，未知 allow 名称产生错误诊断，供 M5 Agent Profile 直接复用。
+
 ## 命令
 
 ### `/skills`
@@ -140,12 +152,12 @@ Skills
 /skill-import https://example.com/SKILL.md
 ```
 
-交互选择：
+交互行为：
 
-- user/project scope
-- 是否复制到托管目录或引用原路径
-- 是否立即启用
-- 冲突处理
+- 通过命令参数选择 `user` 或 `project` scope；项目 scope 必须已经获得 project trust。
+- 所有 `/skill-import` 来源复制到对应托管目录并立即启用；不支持静默引用外部目录或静默覆盖同名 Skill。
+- 远程和本地交互式导入都必须先完成安全审查确认；取消时不写入文件或 Registry。
+- 同名冲突直接停止并展示双方 Registry/discovery 来源。
 
 ### `/skill-enable <name>`
 
@@ -158,6 +170,10 @@ Skills
 ### `/skill-remove <name>`
 
 默认只移除 Registry 引用；删除托管文件需要二次确认。
+
+### `/skill-update <name>`
+
+重新获取并原子替换一个 Git、npm 或 HTTPS Skill。更新前必须完成安全审查确认；本地、Claude Code 和 Codex 外部目录会返回不可更新诊断。
 
 ### `/skill-validate [name]`
 
@@ -239,6 +255,8 @@ skills:
 - Implementer 加载项目开发 Skill
 - 高权限或部署 Skill 默认只允许 Coordinator
 
+M4 提供 `createSkillAllowlistOverride({ allow, deny })` 作为受控 `ResourceLoader` 的稳定过滤接口。`allow` 存在时只加载列出的名称，`allow: []` 表示不加载 Skill，`deny` 始终优先；未发现的 allow 名称会产生结构化错误诊断。M5 的 `AgentProfile` 负责把 profile 配置映射到这个接口。
+
 这样可以降低上下文体积并避免子 Agent 获得不必要能力。
 
 ## 安全
@@ -303,5 +321,5 @@ pi.getSkills()
 4. 导入后无需重启进程，通过 reload 生效。
 5. `/skills` 展示来源、scope、状态和诊断。
 6. 同名 Skill 不静默覆盖。
-7. 子 Agent 可配置独立 Skill allowlist。
-8. URL 和项目 Skill 在加载前经过安全确认。
+7. 子 Agent 可配置独立 Skill allowlist；M4 已提供 ResourceLoader allow/deny 接口，M5 负责接入 AgentProfile。
+8. URL 和项目 Skill 在加载前经过安全确认；交互式本地 Skill 导入也经过同一安全审查。
