@@ -261,6 +261,7 @@ export {
 export {
 	createSkillAllowlistOverride,
 	formatSkillSource,
+	formatSkillSourceDetails,
 	getSkillRegistryScopePaths,
 	loadSkillRegistry,
 	resolveSkillRegistryProjection,
@@ -288,6 +289,7 @@ export {
 export { parseSkillRegistryCommand, type SkillRegistryCommand } from "./core/skill-registry-commands.ts";
 export {
 	parseRemoteSkillSource,
+	type SkillFileReadResult,
 	type SkillRegistryImportResult,
 	type SkillRegistryMutationResult,
 	type SkillRegistryRemoveResult,

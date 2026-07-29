@@ -11,6 +11,8 @@ export interface SettingItem {
 	label: string;
 	/** Optional description shown when selected */
 	description?: string;
+	/** Optional text used for fuzzy search instead of the visible label */
+	searchText?: string;
 	/** Current value to display (right side) */
 	currentValue: string;
 	/** If provided, Enter/Space cycles through these values */
@@ -64,6 +66,10 @@ export class SettingsList implements Component {
 		if (this.searchEnabled) {
 			this.searchInput = new Input();
 		}
+	}
+
+	getSearchQuery(): string {
+		return this.searchInput?.getValue() ?? "";
 	}
 
 	/** Update an item's currentValue */
@@ -230,7 +236,7 @@ export class SettingsList implements Component {
 	}
 
 	private applyFilter(query: string): void {
-		this.filteredItems = fuzzyFilter(this.items, query, (item) => item.label);
+		this.filteredItems = fuzzyFilter(this.items, query, (item) => item.searchText ?? item.label);
 		this.selectedIndex = 0;
 	}
 

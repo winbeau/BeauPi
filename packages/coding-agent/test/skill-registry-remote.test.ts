@@ -325,6 +325,26 @@ describe("remote Skill Registry sources", () => {
 		const oldContent = readFileSync(join(agentDir, "skills", "review", "SKILL.md"), "utf8");
 		const oldEntry = loadSkillRegistry({ scope: "user", cwd, agentDir }).registry.entries[0]!;
 
+		const reloadPhases: string[] = [];
+		let projectedContent = oldContent;
+		await expect(
+			service.update(
+				"review",
+				async () => true,
+				async (phase) => {
+					reloadPhases.push(phase);
+					projectedContent = readFileSync(join(agentDir, "skills", "review", "SKILL.md"), "utf8");
+					return phase === "rollback";
+				},
+			),
+		).rejects.toMatchObject({
+			diagnostics: [expect.objectContaining({ code: "reload_failed" })],
+		});
+		expect(reloadPhases).toEqual(["update", "rollback"]);
+		expect(projectedContent).toBe(oldContent);
+		expect(readFileSync(join(agentDir, "skills", "review", "SKILL.md"), "utf8")).toBe(oldContent);
+		expect(loadSkillRegistry({ scope: "user", cwd, agentDir }).registry.entries[0]).toEqual(oldEntry);
+
 		fetcher.failure = new Error("simulated download failure");
 		await expect(service.update("review", async () => true)).rejects.toMatchObject({
 			diagnostics: [expect.objectContaining({ code: "source_fetch_failed" })],

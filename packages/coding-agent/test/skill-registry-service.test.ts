@@ -1,11 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONFIG_DIR_NAME } from "../src/config.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { getSkillRegistryScopePaths, loadSkillRegistry } from "../src/core/skill-registry.ts";
+import {
+	getSkillRegistryScopePaths,
+	loadSkillRegistry,
+	SKILL_REGISTRY_VERSION,
+	writeSkillRegistry,
+} from "../src/core/skill-registry.ts";
 import { SkillRegistryService, SkillRegistryServiceError } from "../src/core/skill-registry-service.ts";
 
 function createSkill(root: string, name: string, description = "A test skill."): string {
@@ -84,6 +89,78 @@ describe("SkillRegistryService", () => {
 		} finally {
 			if (originalHome === undefined) delete process.env.HOME;
 			else process.env.HOME = originalHome;
+		}
+	});
+
+	it("opens SKILL.md without mutating Registry state and reports structured file errors", async () => {
+		const sourceDir = join(tempDir, "source", "review");
+		createSkill(sourceDir, "review");
+		const service = createService(true);
+		await service.importLocal(sourceDir);
+		const before = loadSkillRegistry({ scope: "user", cwd, agentDir }).registry;
+		const opened = service.readSkillFile("review");
+		expect(opened.path).toBe(join(agentDir, "skills", "review", "SKILL.md"));
+		expect(opened.content).toContain("name: review");
+		expect(loadSkillRegistry({ scope: "user", cwd, agentDir }).registry).toEqual(before);
+		writeSkillRegistry({
+			scope: "project",
+			cwd,
+			agentDir,
+			projectTrusted: true,
+			registry: { version: SKILL_REGISTRY_VERSION, entries: [] },
+		});
+		expect(createService(false).readSkillFile("review").content).toContain("name: review");
+
+		rmSync(opened.path);
+		expect(() => service.readSkillFile("review")).toThrowError(SkillRegistryServiceError);
+		try {
+			service.readSkillFile("review");
+		} catch (error) {
+			expect(error).toMatchObject({ diagnostics: [expect.objectContaining({ code: "skill_file_missing" })] });
+		}
+
+		const escapedDir = join(agentDir, "skills", "escaped");
+		const outsideSkill = join(tempDir, "outside-SKILL.md");
+		mkdirSync(escapedDir, { recursive: true });
+		writeFileSync(outsideSkill, "---\nname: escaped\ndescription: escaped\n---\n");
+		symlinkSync(outsideSkill, join(escapedDir, "SKILL.md"));
+		const brokenRegistry = loadSkillRegistry({ scope: "user", cwd, agentDir }).registry;
+		brokenRegistry.entries.push({
+			id: "escaped-entry",
+			name: "escaped",
+			source: { type: "local", path: escapedDir },
+			scope: "user",
+			path: "skills/escaped",
+			enabled: true,
+			importedAt: 100,
+			diagnostics: [],
+		});
+		writeSkillRegistry({ scope: "user", cwd, agentDir, registry: brokenRegistry });
+		expect(() => service.readSkillFile("escaped")).toThrowError(SkillRegistryServiceError);
+		try {
+			service.readSkillFile("escaped");
+		} catch (error) {
+			expect(error).toMatchObject({ diagnostics: [expect.objectContaining({ code: "skill_path_invalid" })] });
+		}
+
+		const brokenDir = join(agentDir, "skills", "broken");
+		mkdirSync(join(brokenDir, "SKILL.md"), { recursive: true });
+		brokenRegistry.entries.push({
+			id: "broken-entry",
+			name: "broken",
+			source: { type: "local", path: brokenDir },
+			scope: "user",
+			path: "skills/broken",
+			enabled: true,
+			importedAt: 100,
+			diagnostics: [],
+		});
+		writeSkillRegistry({ scope: "user", cwd, agentDir, registry: brokenRegistry });
+		expect(() => service.readSkillFile("broken")).toThrowError(SkillRegistryServiceError);
+		try {
+			service.readSkillFile("broken");
+		} catch (error) {
+			expect(error).toMatchObject({ diagnostics: [expect.objectContaining({ code: "skill_file_read_failed" })] });
 		}
 	});
 

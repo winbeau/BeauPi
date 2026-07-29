@@ -136,7 +136,11 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
-import { type SkillRegistryAction, SkillRegistrySelectorComponent } from "./components/skill-registry-selector.ts";
+import {
+	type SkillRegistryAction,
+	SkillRegistryFileViewerComponent,
+	SkillRegistrySelectorComponent,
+} from "./components/skill-registry-selector.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -5412,6 +5416,7 @@ export class InteractiveMode {
 			getCurrentSkillNames: () => new Set(this.session.resourceLoader.getSkills().skills.map((skill) => skill.name)),
 			getCurrentSkillPaths: () =>
 				new Map(this.session.resourceLoader.getSkills().skills.map((skill) => [skill.name, skill.filePath])),
+			getCurrentResourceDiagnostics: () => this.session.resourceLoader.getSkills().diagnostics,
 		});
 	}
 
@@ -5466,13 +5471,17 @@ export class InteractiveMode {
 			const snapshot = service.getSnapshot();
 			const records = service.list(search);
 			this.showSelector((done) => {
-				const selector = new SkillRegistrySelectorComponent({
+				let selector: SkillRegistrySelectorComponent;
+				selector = new SkillRegistrySelectorComponent({
 					snapshot,
 					records,
 					formatPath: (skillPath) => this.formatDisplayPath(skillPath),
 					onAction: (record, action) => {
+						const currentSearch = selector.getSearchQuery() || search;
 						done();
-						void this.handleSkillRegistryAction(record, action);
+						void this.handleSkillRegistryAction(record, action, () =>
+							this.showSkillRegistrySelector(currentSearch),
+						);
 					},
 					onCancel: () => {
 						done();
@@ -5486,7 +5495,11 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleSkillRegistryAction(record: SkillRegistryRecord, action: SkillRegistryAction): Promise<void> {
+	private async handleSkillRegistryAction(
+		record: SkillRegistryRecord,
+		action: SkillRegistryAction,
+		onReturnToSelector?: () => void,
+	): Promise<void> {
 		switch (action) {
 			case "enable":
 				await this.handleSkillEnableCommand(record.entry.name, true);
@@ -5496,6 +5509,9 @@ export class InteractiveMode {
 				break;
 			case "validate":
 				await this.handleSkillValidateCommand(record.entry.name);
+				break;
+			case "open":
+				await this.handleSkillOpenCommand(record, onReturnToSelector);
 				break;
 			case "update":
 				await this.handleSkillUpdateCommand(record.entry.name);
@@ -5518,12 +5534,22 @@ export class InteractiveMode {
 		]
 			.filter((value): value is string => value !== undefined)
 			.join(" · ");
+		const revision = [
+			review.source.type === "git" && review.source.ref ? `ref: ${review.source.ref}` : undefined,
+			review.source.type === "npm" && review.source.version ? `version: ${review.source.version}` : undefined,
+			review.source.type === "url" && review.source.sha256 ? `sha256: ${review.source.sha256}` : undefined,
+			review.pinnedRef ? `pinned ref: ${review.pinnedRef}` : undefined,
+			review.sha256 ? `sha256: ${review.sha256}` : undefined,
+		]
+			.filter((value): value is string => value !== undefined)
+			.join(" · ");
 		const preview = `${review.preview}${review.previewTruncated ? "\n… (preview truncated)" : ""}`;
 		const message = [
 			`Action: ${review.action}`,
 			`Skill: ${review.name}`,
 			`Scope: ${review.scope}${review.scope === "project" ? " (project trust granted)" : ""}`,
 			`Source: ${formatSkillSource(review.source)}${pin ? `\n${pin}` : ""}`,
+			`Version/ref/hash: ${revision || "not pinned"}`,
 			`Target: ${this.formatDisplayPath(review.targetPath)}`,
 			`Scripts: ${scripts}`,
 			`Executables: ${executables}`,
@@ -5557,14 +5583,39 @@ export class InteractiveMode {
 		}
 	}
 
+	private async handleSkillOpenCommand(record: SkillRegistryRecord, onReturnToSelector?: () => void): Promise<void> {
+		try {
+			const file = this.createSkillRegistryService().readSkillFile(record.entry.id);
+			this.showSelector((done) => {
+				const viewer = new SkillRegistryFileViewerComponent({
+					tui: this.ui,
+					path: this.formatDisplayPath(file.path),
+					content: file.content,
+					markdownTheme: this.getMarkdownThemeWithSettings(),
+					onCancel: () => {
+						done();
+						onReturnToSelector?.();
+						this.ui.requestRender();
+					},
+				});
+				return { component: viewer, focus: viewer };
+			});
+		} catch (error) {
+			this.showSkillRegistryError(error);
+			onReturnToSelector?.();
+		}
+	}
+
 	private async handleSkillUpdateCommand(name: string): Promise<void> {
 		if (!(await this.ensureSkillRegistryCommandIdle())) return;
 		try {
-			const result = await this.createSkillRegistryService().update(name, (review) =>
-				this.confirmSkillSecurityReview(review),
+			const service = this.createSkillRegistryService();
+			const result = await service.update(
+				name,
+				(review) => this.confirmSkillSecurityReview(review),
+				async () => this.handleReloadCommand(),
 			);
 			if (!result) return;
-			if (!(await this.handleReloadCommand())) return;
 			this.showStatus(`Updated Skill ${result.entry.name}`);
 		} catch (error) {
 			this.showSkillRegistryError(error);
@@ -5631,7 +5682,13 @@ export class InteractiveMode {
 
 	private showSkillRegistryError(error: unknown): void {
 		if (error instanceof SkillRegistryServiceError) {
-			this.showError(error.message);
+			const diagnostics = error.diagnostics
+				.map((diagnostic) => {
+					const location = diagnostic.path ? ` [${this.formatDisplayPath(diagnostic.path)}]` : "";
+					return `${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}${location}`;
+				})
+				.join("\n");
+			this.showError(diagnostics ? `${error.message}\n${diagnostics}` : error.message);
 			return;
 		}
 		this.showError(error instanceof Error ? error.message : String(error));

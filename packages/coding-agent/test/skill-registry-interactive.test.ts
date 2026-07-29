@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SkillRegistryEntry } from "../src/core/skill-registry.ts";
-import type { SkillRegistryRemoveResult, SkillSecurityReview } from "../src/core/skill-registry-service.ts";
+import {
+	type SkillRegistryRemoveResult,
+	SkillRegistryServiceError,
+	type SkillSecurityReview,
+} from "../src/core/skill-registry-service.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 const entry: SkillRegistryEntry = {
@@ -77,10 +81,33 @@ describe("InteractiveMode skill registry command integration", () => {
 		const [title, message] = showExtensionConfirm.mock.calls[0] ?? [];
 		expect(title).toContain("project Skill");
 		expect(message).toContain("https://example.com/SKILL.md");
+		expect(message).toContain("Version/ref/hash:");
+		expect(message).toContain("sha256:");
 		expect(message).toContain("/tmp/project/.beaupi/skills/review");
 		expect(message).toContain("scripts/check.sh");
 		expect(message).toContain("sudo usage");
 		expect(message).toContain("name: review");
+	});
+
+	it("keeps structured Skill diagnostics visible in InteractiveMode errors", () => {
+		const showError = vi.fn();
+		const fakeThis = {
+			showError,
+			formatDisplayPath: (value: string) => value,
+		};
+		const showSkillRegistryError = (
+			InteractiveMode as unknown as {
+				prototype: {
+					showSkillRegistryError(this: typeof fakeThis, error: unknown): void;
+				};
+			}
+		).prototype.showSkillRegistryError;
+		const error = new SkillRegistryServiceError("Skill read failed", [
+			{ code: "skill_file_read_failed", severity: "error", message: "permission denied", path: "/tmp/SKILL.md" },
+		]);
+		showSkillRegistryError.call(fakeThis, error);
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining("skill_file_read_failed"));
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
 	});
 
 	it("dispatches the remote Skill update command through InteractiveMode", async () => {

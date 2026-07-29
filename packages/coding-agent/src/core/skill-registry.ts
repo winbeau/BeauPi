@@ -34,6 +34,7 @@ const DIAGNOSTIC_CODES = [
 	"skill_path_invalid",
 	"skill_file_missing",
 	"skill_file_invalid",
+	"skill_file_read_failed",
 	"frontmatter_invalid",
 	"name_required",
 	"name_invalid",
@@ -51,6 +52,7 @@ const DIAGNOSTIC_CODES = [
 	"skill_candidate_missing",
 	"skill_candidate_ambiguous",
 	"source_update_unavailable",
+	"reload_failed",
 	"sha256_invalid",
 	"sha256_mismatch",
 	"name_conflict",
@@ -181,6 +183,7 @@ export interface SkillRegistryRecord {
 	entry: SkillRegistryEntry;
 	registryPath: string;
 	resolvedPath: string;
+	managedPath?: string;
 	validation: SkillValidationResult;
 	metadata: PathMetadata;
 }
@@ -1088,6 +1091,31 @@ export function formatSkillSource(source: SkillSource): string {
 	}
 }
 
+export function formatSkillSourceDetails(source: SkillSource): string[] {
+	switch (source.type) {
+		case "local":
+			return [`type: local`, `path: ${source.path}`];
+		case "git":
+			return [
+				`type: git`,
+				`repository: ${source.repository}`,
+				`ref: ${source.ref ?? "default"}`,
+				...(source.subdirectory ? [`subdirectory: ${source.subdirectory}`] : []),
+			];
+		case "npm":
+			return [
+				`type: npm`,
+				`package: ${source.package}`,
+				`version: ${source.version ?? "latest"}`,
+				...(source.subdirectory ? [`subdirectory: ${source.subdirectory}`] : []),
+			];
+		case "url":
+			return [`type: url`, `url: ${source.url}`, `source sha256: ${source.sha256 ?? "unpinned"}`];
+		case "external-directory":
+			return [`type: external-directory`, `harness: ${source.harness ?? "other"}`, `path: ${source.path}`];
+	}
+}
+
 export function resolveSkillRegistryProjection(options: {
 	cwd: string;
 	agentDir: string;
@@ -1139,10 +1167,13 @@ export function resolveSkillRegistryProjection(options: {
 			});
 			diagnostics.push(...validation.diagnostics);
 			const resolvedPath = validation.skillFilePath ?? validation.resolvedPath;
+			const managedRoot = resolvedPath.endsWith(`${sep}SKILL.md`) ? dirname(resolvedPath) : resolvedPath;
+			const managedPath = isPathInside(managedRoot, result.paths.managedSkillsDir) ? managedRoot : undefined;
 			records.push({
 				entry,
 				registryPath: result.paths.registryPath,
 				resolvedPath,
+				...(managedPath ? { managedPath } : {}),
 				validation,
 				metadata: {
 					source: `registry:${formatSkillSource(entry.source)}`,

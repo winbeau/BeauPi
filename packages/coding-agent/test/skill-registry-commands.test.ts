@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { parseSkillRegistryCommand } from "../src/core/skill-registry-commands.ts";
+import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
 
 describe("skill registry command parsing", () => {
+	it("registers every management command as a built-in slash command", () => {
+		const names = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
+		expect([...names]).toEqual(
+			expect.arrayContaining([
+				"skills",
+				"skill-import",
+				"skill-enable",
+				"skill-disable",
+				"skill-validate",
+				"skill-remove",
+				"skill-update",
+			]),
+		);
+	});
+
 	it("parses list search and scoped mutation commands", () => {
 		expect(parseSkillRegistryCommand("/skills")).toEqual({ type: "list" });
 		expect(parseSkillRegistryCommand("/skills collision warning")).toEqual({

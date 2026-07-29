@@ -18,6 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { parseGitUrl } from "../utils/git.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import type { ResourceDiagnostic } from "./diagnostics.ts";
 import { DefaultPackageManager } from "./package-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import {
@@ -70,6 +71,7 @@ export interface SkillSecurityReview {
 }
 
 export type SkillSecurityReviewConfirmation = (review: SkillSecurityReview) => Promise<boolean>;
+export type SkillRegistryReload = (phase: "update" | "rollback") => Promise<boolean>;
 
 export interface SkillRegistryServiceOptions {
 	cwd: string;
@@ -79,6 +81,8 @@ export interface SkillRegistryServiceOptions {
 	getCurrentSkillNames?: () => ReadonlySet<string>;
 	/** Current discovered path by name; an import may register that same source without treating it as a collision. */
 	getCurrentSkillPaths?: () => ReadonlyMap<string, string>;
+	/** Current ResourceLoader diagnostics, used to show native/discovery collision sides in /skills. */
+	getCurrentResourceDiagnostics?: () => readonly ResourceDiagnostic[];
 	settingsManager?: SettingsManager;
 	remoteFetcher?: SkillRemoteFetcher;
 	now?: () => number;
@@ -94,6 +98,11 @@ export interface SkillRegistryImportResult {
 export interface SkillRegistryRemoveResult {
 	entry: SkillRegistryEntry;
 	managedPath?: string;
+}
+
+export interface SkillFileReadResult {
+	path: string;
+	content: string;
 }
 
 export interface SkillRegistryMutationResult {
@@ -504,6 +513,7 @@ export class SkillRegistryService {
 	private readonly projectTrusted: boolean | (() => boolean);
 	private readonly getCurrentSkillNames: () => ReadonlySet<string>;
 	private readonly getCurrentSkillPaths: () => ReadonlyMap<string, string>;
+	private readonly getCurrentResourceDiagnostics: () => readonly ResourceDiagnostic[];
 	private readonly settingsManager: SettingsManager | undefined;
 	private readonly configuredRemoteFetcher: SkillRemoteFetcher | undefined;
 	private readonly now: () => number;
@@ -516,6 +526,7 @@ export class SkillRegistryService {
 		this.projectTrusted = options.projectTrusted;
 		this.getCurrentSkillNames = options.getCurrentSkillNames ?? (() => new Set<string>());
 		this.getCurrentSkillPaths = options.getCurrentSkillPaths ?? (() => new Map<string, string>());
+		this.getCurrentResourceDiagnostics = options.getCurrentResourceDiagnostics ?? (() => []);
 		this.settingsManager = options.settingsManager;
 		this.configuredRemoteFetcher = options.remoteFetcher;
 		this.now = options.now ?? Date.now;
@@ -527,26 +538,177 @@ export class SkillRegistryService {
 	}
 
 	getSnapshot(): SkillRegistryProjection {
-		return resolveSkillRegistryProjection({
+		const snapshot = resolveSkillRegistryProjection({
 			cwd: this.cwd,
 			agentDir: this.agentDir,
 			projectTrusted: this.isProjectTrusted(),
 		});
+		for (const diagnostic of this.getCurrentResourceDiagnostics()) {
+			if (diagnostic.type !== "collision" || !diagnostic.collision) continue;
+			const collision = diagnostic.collision;
+			const winnerPath = canonicalizePath(collision.winnerPath);
+			const loserPath = canonicalizePath(collision.loserPath);
+			const record = snapshot.records.find((candidate) => {
+				const paths = [candidate.resolvedPath, candidate.validation.skillFilePath, candidate.managedPath]
+					.filter((value): value is string => value !== undefined)
+					.map(canonicalizePath);
+				return paths.includes(winnerPath) || paths.includes(loserPath);
+			});
+			if (!record) continue;
+			const recordPath = canonicalizePath(record.resolvedPath);
+			const recordIsWinner = recordPath === winnerPath;
+			const recordSource = recordIsWinner
+				? (collision.winnerSource ?? "registry")
+				: (collision.loserSource ?? "discovery");
+			const relatedSource = recordIsWinner
+				? (collision.loserSource ?? "discovery")
+				: (collision.winnerSource ?? "registry");
+			const recordSide = recordIsWinner ? collision.winnerPath : collision.loserPath;
+			const relatedPath = recordIsWinner ? collision.loserPath : collision.winnerPath;
+			snapshot.diagnostics.push({
+				code: "name_conflict",
+				severity: "error",
+				message: `${diagnostic.message}: ${recordSource} ${recordSide} vs ${relatedSource} ${relatedPath}`,
+				name: collision.name,
+				scope: record.entry.scope,
+				registryPath: record.registryPath,
+				entryId: record.entry.id,
+				path: record.resolvedPath,
+				relatedPath,
+				source: record.entry.source,
+			});
+		}
+		return snapshot;
 	}
 
 	list(search?: string): SkillRegistryProjection["records"] {
-		const records = this.getSnapshot().records;
-		const query = search?.trim().toLowerCase();
-		if (!query) return records;
+		const snapshot = this.getSnapshot();
+		const records = snapshot.records;
+		const queryTokens = search?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
+		if (queryTokens.length === 0) return records;
 		return records.filter((record) => {
-			const diagnosticText = [...record.entry.diagnostics, ...record.validation.diagnostics]
-				.map((item) => item.message)
+			const diagnosticText = [...record.entry.diagnostics, ...record.validation.diagnostics, ...snapshot.diagnostics]
+				.filter(
+					(item) =>
+						item.entryId === record.entry.id ||
+						item.relatedEntryId === record.entry.id ||
+						item.path === record.resolvedPath ||
+						item.relatedPath === record.resolvedPath,
+				)
+				.map((item) => `${item.code} ${item.message} ${item.path ?? ""}`)
 				.join(" ");
-			return [record.entry.name, record.entry.scope, record.entry.path, diagnosticText]
+			const searchText = [
+				record.entry.name,
+				record.entry.scope,
+				record.entry.path,
+				record.entry.source.type,
+				formatSkillSource(record.entry.source),
+				record.managedPath ?? "",
+				record.entry.pinnedRef ?? "",
+				record.entry.sha256 ?? "",
+				diagnosticText,
+			]
 				.join(" ")
-				.toLowerCase()
-				.includes(query);
+				.toLowerCase();
+			return queryTokens.every((token) => searchText.includes(token));
 		});
+	}
+
+	readSkillFile(name: string): SkillFileReadResult {
+		const { loaded, entry } = this.findReadableEntry(name);
+		const resolvedEntryPath = resolve(loaded.paths.baseDir, entry.path);
+		let skillRoot: string;
+		try {
+			const stats = statSync(resolvedEntryPath);
+			if (stats.isDirectory()) {
+				skillRoot = resolvedEntryPath;
+			} else if (stats.isFile() && basename(resolvedEntryPath) === "SKILL.md") {
+				skillRoot = dirname(resolvedEntryPath);
+			} else {
+				throwMutationError("Registered skill path must be a directory or a SKILL.md file", [
+					mutationDiagnostic(
+						"skill_path_invalid",
+						"error",
+						"Registered skill path must be a directory or a SKILL.md file",
+						{
+							scope: entry.scope,
+							entryId: entry.id,
+							name: entry.name,
+							registryPath: loaded.paths.registryPath,
+							path: resolvedEntryPath,
+							source: entry.source,
+						},
+					),
+				]);
+			}
+		} catch (error) {
+			if (error instanceof SkillRegistryServiceError) throw error;
+			throwMutationError(`Failed to inspect Skill path ${resolvedEntryPath}`, [
+				mutationDiagnostic("skill_path_invalid", "error", error instanceof Error ? error.message : String(error), {
+					scope: entry.scope,
+					entryId: entry.id,
+					name: entry.name,
+					registryPath: loaded.paths.registryPath,
+					path: resolvedEntryPath,
+					source: entry.source,
+				}),
+			]);
+		}
+
+		const skillFilePath = join(skillRoot, "SKILL.md");
+		if (!existsSync(skillFilePath)) {
+			throwMutationError(`SKILL.md does not exist: ${skillFilePath}`, [
+				mutationDiagnostic("skill_file_missing", "error", `SKILL.md does not exist: ${skillFilePath}`, {
+					scope: entry.scope,
+					entryId: entry.id,
+					name: entry.name,
+					registryPath: loaded.paths.registryPath,
+					path: skillFilePath,
+					source: entry.source,
+				}),
+			]);
+		}
+		const canonicalSkillRoot = canonicalizePath(skillRoot);
+		const canonicalSkillFile = canonicalizePath(skillFilePath);
+		if (!isPathInside(canonicalSkillFile, canonicalSkillRoot)) {
+			throwMutationError("Refusing to open a Skill file outside its registered Skill directory", [
+				mutationDiagnostic(
+					"skill_path_invalid",
+					"error",
+					"SKILL.md resolves outside its registered Skill directory",
+					{
+						scope: entry.scope,
+						entryId: entry.id,
+						name: entry.name,
+						registryPath: loaded.paths.registryPath,
+						path: canonicalSkillFile,
+						source: entry.source,
+					},
+				),
+			]);
+		}
+		try {
+			if (!statSync(skillFilePath).isFile()) {
+				throw new Error("SKILL.md is not a regular file");
+			}
+			return { path: skillFilePath, content: readFileSync(skillFilePath, "utf-8") };
+		} catch (error) {
+			throwMutationError(`Could not read SKILL.md: ${skillFilePath}`, [
+				mutationDiagnostic(
+					"skill_file_read_failed",
+					"error",
+					error instanceof Error ? error.message : String(error),
+					{
+						scope: entry.scope,
+						entryId: entry.id,
+						name: entry.name,
+						registryPath: loaded.paths.registryPath,
+						path: skillFilePath,
+						source: entry.source,
+					},
+				),
+			]);
+		}
 	}
 
 	async importSource(
@@ -579,6 +741,7 @@ export class SkillRegistryService {
 	async update(
 		name: string,
 		confirm: SkillSecurityReviewConfirmation,
+		reload?: SkillRegistryReload,
 	): Promise<SkillRegistryImportResult | undefined> {
 		const { loaded, entry } = this.findUniqueEntry(name);
 		if (entry.source.type === "local" || entry.source.type === "external-directory") {
@@ -595,7 +758,7 @@ export class SkillRegistryService {
 		const prepared = await this.prepareRemote(entry.source, entry.scope, entry);
 		try {
 			if (!(await confirm(this.createSecurityReview("update", prepared)))) return undefined;
-			return this.commitUpdatedSkill(loaded, entry, prepared);
+			return await this.commitUpdatedSkill(loaded, entry, prepared, reload);
 		} finally {
 			if (prepared.stagingRoot) rmSync(prepared.stagingRoot, { recursive: true, force: true });
 		}
@@ -977,11 +1140,12 @@ export class SkillRegistryService {
 		return { entry, validation, managedPath: prepared.managedPath };
 	}
 
-	private commitUpdatedSkill(
+	private async commitUpdatedSkill(
 		loaded: LoadedScope,
 		oldEntry: SkillRegistryEntry,
 		prepared: PreparedSkill,
-	): SkillRegistryImportResult {
+		reload?: SkillRegistryReload,
+	): Promise<SkillRegistryImportResult> {
 		const managedPath = getManagedSkillRoot(
 			resolve(prepared.paths.baseDir, oldEntry.path),
 			prepared.paths.managedSkillsDir,
@@ -1013,6 +1177,55 @@ export class SkillRegistryService {
 		});
 
 		let movedOld = false;
+		let registryUpdated = false;
+		let restored = false;
+		const restoreOldSkill = (): void => {
+			if (restored) return;
+			if (movedOld && existsSync(backupPath)) {
+				if (existsSync(managedPath)) rmSync(managedPath, { recursive: true, force: true });
+				renameSync(backupPath, managedPath);
+			}
+			if (registryUpdated) {
+				this.writeScope(
+					loaded.scope,
+					loaded.registry.entries.map((candidate) => (candidate.id === oldEntry.id ? oldEntry : candidate)),
+				);
+			}
+			restored = true;
+		};
+		const restoreProjection = async (): Promise<SkillRegistryDiagnostic | undefined> => {
+			restoreOldSkill();
+			if (!reload) return undefined;
+			try {
+				if (await reload("rollback")) return undefined;
+				return mutationDiagnostic(
+					"reload_failed",
+					"error",
+					"Reload returned failure while restoring the previous Skill projection",
+					{
+						scope: oldEntry.scope,
+						entryId: oldEntry.id,
+						name: oldEntry.name,
+						path: managedPath,
+						source: oldEntry.source,
+					},
+				);
+			} catch (error) {
+				return mutationDiagnostic(
+					"reload_failed",
+					"error",
+					`Failed to reload the restored Skill projection: ${error instanceof Error ? error.message : String(error)}`,
+					{
+						scope: oldEntry.scope,
+						entryId: oldEntry.id,
+						name: oldEntry.name,
+						path: managedPath,
+						source: oldEntry.source,
+					},
+				);
+			}
+		};
+
 		try {
 			renameSync(managedPath, backupPath);
 			movedOld = true;
@@ -1044,11 +1257,63 @@ export class SkillRegistryService {
 				loaded.scope,
 				loaded.registry.entries.map((candidate) => (candidate.id === oldEntry.id ? updatedEntry : candidate)),
 			);
+			registryUpdated = true;
+
+			if (reload) {
+				let reloadSucceeded = false;
+				try {
+					reloadSucceeded = await reload("update");
+				} catch (error) {
+					const restoreDiagnostic = await restoreProjection();
+					throwMutationError("Skill update reload failed; restored the previous Skill and Registry entry", [
+						mutationDiagnostic("reload_failed", "error", error instanceof Error ? error.message : String(error), {
+							scope: oldEntry.scope,
+							entryId: oldEntry.id,
+							name: oldEntry.name,
+							path: managedPath,
+							source: oldEntry.source,
+						}),
+						...(restoreDiagnostic ? [restoreDiagnostic] : []),
+					]);
+				}
+				if (!reloadSucceeded) {
+					const restoreDiagnostic = await restoreProjection();
+					throwMutationError("Skill update reload failed; restored the previous Skill and Registry entry", [
+						mutationDiagnostic("reload_failed", "error", "Reload returned failure after the Skill update", {
+							scope: oldEntry.scope,
+							entryId: oldEntry.id,
+							name: oldEntry.name,
+							path: managedPath,
+							source: oldEntry.source,
+						}),
+						...(restoreDiagnostic ? [restoreDiagnostic] : []),
+					]);
+				}
+			}
+
 			rmSync(backupPath, { recursive: true, force: true });
 			return { entry: updatedEntry, validation, managedPath };
 		} catch (error) {
-			if (existsSync(managedPath)) rmSync(managedPath, { recursive: true, force: true });
-			if (movedOld && existsSync(backupPath)) renameSync(backupPath, managedPath);
+			if (!restored) {
+				try {
+					restoreOldSkill();
+				} catch (restoreError) {
+					throwMutationError("Failed to restore the previous Skill after an update failure", [
+						mutationDiagnostic(
+							"reload_failed",
+							"error",
+							restoreError instanceof Error ? restoreError.message : String(restoreError),
+							{
+								scope: oldEntry.scope,
+								entryId: oldEntry.id,
+								name: oldEntry.name,
+								path: managedPath,
+								source: oldEntry.source,
+							},
+						),
+					]);
+				}
+			}
 			throw error;
 		} finally {
 			rmSync(replacementPath, { recursive: true, force: true });
@@ -1168,11 +1433,28 @@ export class SkillRegistryService {
 		return { scope, registry: loaded.registry, paths: loaded.paths };
 	}
 
+	private findReadableEntry(name: string): { loaded: LoadedScope; entry: SkillRegistryEntry } {
+		const scopes = [this.getLoadedScope("user")];
+		if (this.isProjectTrusted()) scopes.push(this.getLoadedScope("project"));
+		return this.findUniqueEntryInScopes(name, scopes);
+	}
+
 	private findUniqueEntry(name: string): { loaded: LoadedScope; entry: SkillRegistryEntry } {
+		return this.findUniqueEntryInScopes(name, this.loadMutationScopes());
+	}
+
+	private findUniqueEntryInScopes(
+		name: string,
+		scopes: LoadedScope[],
+	): { loaded: LoadedScope; entry: SkillRegistryEntry } {
 		const normalizedName = name.trim();
 		if (!normalizedName) throwMutationError("Skill name is required");
+		for (const loaded of scopes) {
+			const byId = loaded.registry.entries.find((entry) => entry.id === normalizedName);
+			if (byId) return { loaded, entry: byId };
+		}
 		const matches: Array<{ loaded: LoadedScope; entry: SkillRegistryEntry }> = [];
-		for (const loaded of this.loadMutationScopes()) {
+		for (const loaded of scopes) {
 			for (const entry of loaded.registry.entries) {
 				if (entry.name === normalizedName) matches.push({ loaded, entry });
 			}

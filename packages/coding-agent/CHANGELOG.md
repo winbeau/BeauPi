@@ -11,6 +11,7 @@
 - Added the BeauPi Skill Registry core with deterministic user/project persistence, validation and inventory diagnostics, project-trust gating, conflict-aware precedence, and ResourceLoader reload projection.
 - Added local BeauPi Skill Registry management with a searchable `/skills` UI, local/Claude/Codex directory import, enable/disable, validation, safe removal confirmation, trust gating, collision checks, and hot reload.
 - Added remote BeauPi Skill imports and updates from Git, npm, and HTTPS sources with lifecycle-free staging, SHA-256 pins, validation/security review, explicit confirmation, symlink/cache filtering, atomic replacement, structured diagnostics, `/skill-update`, and controlled ResourceLoader Skill allowlists.
+- Added complete `/skills` registry management details, searchable source/scope/path/diagnostic fields, collision-side display, SKILL.md viewing, and explicit disabled actions for non-updateable sources.
 
 ### Changed
 
@@ -20,6 +21,7 @@
 - Changed the streaming working row to show the latest model Thinking summary while preserving explicit extension messages and Tool-associated summaries/results.
 - Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
 - Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
+- Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
 
 ### Fixed
 
