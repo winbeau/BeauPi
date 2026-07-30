@@ -413,7 +413,8 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - 复用系统 OpenSSH 配置、SSH Agent 和 known_hosts，不保存私钥或口令
 - SSH ControlMaster 连接复用、连接超时和明确关闭
 - 远程 read/write/edit/bash Operation adapter
-- `terminal_create`、`terminal_send`、`terminal_capture`、`terminal_status`、`terminal_close`
+- `terminal_create`、`terminal_bash`、`terminal_send`、`terminal_capture`、`terminal_status`、`terminal_close`
+- `terminal_bash` 在现有 pane 当前目录和导出环境中执行普通 Bash 命令，等待完成并返回输出/退出码；send/capture 保留给交互式控制和诊断
 - tmux 增量 capture、日志摘要和完整输出文件
 - 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
 - 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
@@ -426,7 +427,7 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - 目标选择、参数验证和信任边界
 - 连接建立、复用、超时、关闭和断线
 - 远程命令成功、失败、取消和退出码
-- tmux 创建、发送、增量捕获、状态和关闭
+- tmux 创建、Bash 命令注入与等待、发送、增量捕获、状态和关闭
 - 远程长日志 cursor、摘要和完整文件路径
 - Monitor 状态与远程会话生命周期一致
 - 不保存认证秘密，不把完整历史日志注入上下文
@@ -443,7 +444,7 @@ ssh h100-server 'hostname && curl -fsSL --max-time 20 -o /dev/null -w "http_code
 
 ### 验收标准
 
-Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；断线、超时和会话丢失状态可见；长日志默认增量展示。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；普通命令可直接使用 `terminal_bash` 在现有 terminal 当前目录执行并等待结果，无需手动组合 send/capture；断线、超时和会话丢失状态可见；长日志默认增量展示。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ---
 

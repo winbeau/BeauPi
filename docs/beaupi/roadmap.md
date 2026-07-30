@@ -157,7 +157,8 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 复用系统 OpenSSH 配置、SSH Agent 和 known_hosts，不保存私钥或口令
 - 支持 SSH ControlMaster 连接复用、连接超时和明确关闭
 - 增加远程 read/write/edit/bash Operation adapter
-- 实现 `terminal_create`、`terminal_send`、`terminal_capture`、`terminal_status` 和 `terminal_close`
+- 实现 `terminal_create`、`terminal_bash`、`terminal_send`、`terminal_capture`、`terminal_status` 和 `terminal_close`
+- `terminal_bash` 将普通命令注入现有 pane，在 terminal 当前目录和导出环境中等待执行完成并返回 Bash 风格输出与退出码；普通命令不再手动组合 send/capture
 - tmux capture 使用增量 cursor，完整日志写入文件
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
@@ -165,7 +166,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
 - 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 
-验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；断线、超时和会话丢失状态可见；长日志不会整体污染上下文；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；普通 tmux 命令通过 `terminal_bash` 在现有 terminal 当前目录执行并等待结果，交互式场景才使用 send/capture；断线、超时和会话丢失状态可见；长日志不会整体污染上下文；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ## 阶段 9：联网搜索
 

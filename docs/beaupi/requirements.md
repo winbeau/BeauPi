@@ -16,10 +16,13 @@
 - `target_select`
 - `remote_exec`
 - `terminal_create`
+- `terminal_bash`
 - `terminal_send`
 - `terminal_capture`
 - `terminal_status`
 - `terminal_close`
+
+`terminal_bash` 是普通命令的首选 tmux 接口：命令注入现有 terminal，在该 pane 当前目录和导出环境中按 Bash 语义执行，等待完成后返回输出与退出码，并复用 Bash 的超时、取消和截断行为。`terminal_send`/`terminal_capture` 只用于真正的交互式输入、终端诊断和增量观察，不要求 Agent 手动拼接 Enter、cursor 或完成标记。
 
 日志默认增量读取并返回摘要，完整日志写入临时文件，避免污染模型上下文。
 

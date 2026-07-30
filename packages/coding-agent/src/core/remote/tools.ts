@@ -5,12 +5,12 @@ import { Compile } from "typebox/compile";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
-import { createBashToolDefinition } from "../tools/bash.ts";
+import { type BashToolDetails, createBashToolDefinition } from "../tools/bash.ts";
 import { createEditToolDefinition } from "../tools/edit.ts";
 import { createReadToolDefinition } from "../tools/read.ts";
 import { createWriteToolDefinition } from "../tools/write.ts";
 import type { RemoteExecutionRuntime } from "./runtime.ts";
-import type { ExecutionTargetConfig, RemoteDiagnostic } from "./types.ts";
+import { type ExecutionTargetConfig, type RemoteDiagnostic, RemoteExecutionError } from "./types.ts";
 
 const targetSelectSchema = Type.Object({
 	targetId: Type.String({ minLength: 1, description: "Configured execution target id" }),
@@ -28,6 +28,11 @@ const terminalCreateSchema = Type.Object({
 	rows: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
 	targetId: Type.Optional(Type.String({ minLength: 1 })),
 });
+const terminalBashSchema = Type.Object({
+	terminalId: Type.String({ minLength: 1, description: "Existing tmux terminal id" }),
+	command: Type.String({ minLength: 1, description: "Bash command to execute in the terminal's current directory" }),
+	timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
+});
 const terminalSendSchema = Type.Object({ terminalId: Type.String({ minLength: 1 }), input: Type.String() });
 const terminalCaptureSchema = Type.Object({
 	terminalId: Type.String({ minLength: 1 }),
@@ -39,10 +44,24 @@ const terminalCloseSchema = Type.Object({ terminalId: Type.String({ minLength: 1
 type TargetSelectInput = Static<typeof targetSelectSchema>;
 type RemoteExecInput = Static<typeof remoteExecSchema>;
 type TerminalCreateInput = Static<typeof terminalCreateSchema>;
+type TerminalBashInput = Static<typeof terminalBashSchema>;
 type TerminalSendInput = Static<typeof terminalSendSchema>;
 type TerminalCaptureInput = Static<typeof terminalCaptureSchema>;
 type TerminalStatusInput = Static<typeof terminalStatusSchema>;
 type TerminalCloseInput = Static<typeof terminalCloseSchema>;
+
+export interface TerminalBashToolDetails extends BashToolDetails {
+	operation: "terminal_bash";
+	terminalId: string;
+	monitorId?: string;
+	logPath?: string;
+}
+
+type TerminalBashRenderState = {
+	startedAt?: number;
+	endedAt?: number;
+	interval?: NodeJS.Timeout;
+};
 
 export interface RemoteToolDetails {
 	version: 1;
@@ -68,6 +87,7 @@ const validators = {
 	targetSelect: Compile(targetSelectSchema),
 	remoteExec: Compile(remoteExecSchema),
 	terminalCreate: Compile(terminalCreateSchema),
+	terminalBash: Compile(terminalBashSchema),
 	terminalSend: Compile(terminalSendSchema),
 	terminalCapture: Compile(terminalCaptureSchema),
 	terminalStatus: Compile(terminalStatusSchema),
@@ -109,12 +129,14 @@ function literalInputSummary(value: string): string {
 
 class RemoteCallRenderComponent implements Component {
 	private name = "";
+	private contextLabel = "";
 	private summary = "";
 	private currentTheme: Theme | undefined;
 
-	setCall(name: string, summary: string, currentTheme: Theme): void {
+	setCall(name: string, summary: string, currentTheme: Theme, contextLabel?: string): void {
 		this.name = name;
-		this.summary = singleLineSummary(summary);
+		this.contextLabel = contextLabel ?? "";
+		this.summary = singleLineSummary(summary, "");
 		this.currentTheme = currentTheme;
 	}
 
@@ -123,10 +145,12 @@ class RemoteCallRenderComponent implements Component {
 		if (availableWidth === 0 || !this.currentTheme) return [];
 
 		const title = this.currentTheme.fg("toolTitle", this.currentTheme.bold(this.name));
-		const prefix = `${title}(`;
+		const context = this.contextLabel ? ` ${this.currentTheme.fg("toolOutput", `[${this.contextLabel}]`)}` : "";
+		const heading = `${title}${context}`;
+		const prefix = `${heading}(`;
 		const suffix = ")";
 		const summaryWidth = availableWidth - visibleWidth(prefix) - visibleWidth(suffix);
-		if (summaryWidth <= 0) return [truncateToWidth(title, availableWidth, "…")];
+		if (summaryWidth < 0) return [truncateToWidth(heading, availableWidth, "…")];
 
 		const summary = this.currentTheme.fg("toolOutput", this.summary);
 		return [`${prefix}${truncateToWidth(summary, summaryWidth, "…")}${suffix}`];
@@ -168,11 +192,22 @@ function renderCall(
 	summary: string,
 	currentTheme: Theme,
 	lastComponent?: Component,
+	contextLabel?: string,
 ): RemoteCallRenderComponent {
 	const component =
 		lastComponent instanceof RemoteCallRenderComponent ? lastComponent : new RemoteCallRenderComponent();
-	component.setCall(name, summary, currentTheme);
+	component.setCall(name, summary, currentTheme, contextLabel);
 	return component;
+}
+
+function renderTerminalCall(
+	name: string,
+	terminalId: string,
+	summary: string,
+	currentTheme: Theme,
+	lastComponent?: Component,
+): RemoteCallRenderComponent {
+	return renderCall(name, summary, currentTheme, lastComponent, terminalId);
 }
 
 function renderOutput(text: string, currentTheme: Theme): string {
@@ -388,9 +423,16 @@ function createTerminalCreateTool(
 			}
 		},
 		renderCall: (args, currentTheme, context) => {
-			const terminalId = args.terminalId ?? "tmux";
-			const summary = args.command ? `${terminalId} · ${singleLineSummary(args.command)}` : terminalId;
-			return renderCall("Terminal Create", summary, currentTheme, context.lastComponent);
+			const summary = [args.cwd ? `cwd ${args.cwd}` : "", args.command ? singleLineSummary(args.command) : ""]
+				.filter(Boolean)
+				.join(" · ");
+			return renderTerminalCall(
+				"Terminal Create",
+				args.terminalId ?? "auto",
+				summary,
+				currentTheme,
+				context.lastComponent,
+			);
 		},
 		renderResult: (result, options, currentTheme, context) =>
 			renderResult(
@@ -402,14 +444,115 @@ function createTerminalCreateTool(
 	};
 }
 
+function createTerminalBashTool(
+	runtime: RemoteExecutionRuntime,
+): ToolDefinition<typeof terminalBashSchema, TerminalBashToolDetails | undefined, TerminalBashRenderState> {
+	const bashRenderer = createBashToolDefinition(runtime.cwd, {
+		operations: runtime.createBashOperations(),
+		exposeSessionEnvironment: false,
+	});
+	return {
+		name: "terminal_bash",
+		label: "terminal_bash",
+		description:
+			"Execute a Bash command through an existing remote tmux terminal. The command inherits that terminal's current directory and exported environment, waits for completion, and uses Bash-compatible output, timeout, cancellation, truncation, and exit-code behavior.",
+		promptSnippet: "Execute a command in an existing remote tmux terminal",
+		promptGuidelines: [
+			"Use terminal_bash for normal commands in an existing terminal; treat it like bash running in that terminal's current directory.",
+			"Prefer terminal_bash over terminal_send plus terminal_capture when a command should run to completion and return output.",
+			"Use terminal_send and terminal_capture only for genuinely interactive input or terminal diagnosis.",
+			"Do not use sudo, su, doas, pkexec, or root shells.",
+		],
+		parameters: terminalBashSchema,
+		executionMode: "sequential",
+		execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+			validate<TerminalBashInput>("terminal_bash", validators.terminalBash, params);
+			let terminalResult: Awaited<ReturnType<RemoteExecutionRuntime["terminalBash"]>> | undefined;
+			const executor = createBashToolDefinition(runtime.cwd, {
+				exposeSessionEnvironment: false,
+				operations: {
+					exec: async (command, _cwd, options) => {
+						try {
+							terminalResult = await runtime.terminalBash(params.terminalId, command, {
+								signal: options.signal,
+								timeoutMs: options.timeout ? options.timeout * 1000 : undefined,
+								onData: options.onData,
+							});
+							return { exitCode: terminalResult.exitCode };
+						} catch (error) {
+							if (error instanceof RemoteExecutionError && error.diagnostic.code === "remote_cancelled") {
+								throw new Error("aborted");
+							}
+							if (error instanceof RemoteExecutionError && error.diagnostic.code === "remote_timeout") {
+								throw new Error(`timeout:${options.timeout ?? params.timeout ?? 0}`);
+							}
+							throw error;
+						}
+					},
+				},
+			});
+			const result = await executor.execute(
+				toolCallId,
+				{ command: params.command, timeout: params.timeout },
+				signal,
+				onUpdate
+					? (update) =>
+							onUpdate({
+								...update,
+								details: update.details
+									? { ...update.details, operation: "terminal_bash", terminalId: params.terminalId }
+									: undefined,
+							})
+					: undefined,
+				ctx,
+			);
+			return {
+				...result,
+				details: result.details
+					? {
+							...result.details,
+							operation: "terminal_bash",
+							terminalId: params.terminalId,
+							monitorId: terminalResult?.monitorId,
+							logPath: terminalResult?.logPath,
+						}
+					: undefined,
+			};
+		},
+		renderCall: (args, currentTheme, context) => {
+			if (context.executionStarted && context.state.startedAt === undefined) {
+				context.state.startedAt = Date.now();
+				context.state.endedAt = undefined;
+			}
+			return renderTerminalCall(
+				"Terminal Bash",
+				args.terminalId,
+				`${singleLineSummary(args.command)}${args.timeout ? ` · timeout ${args.timeout}s` : ""}`,
+				currentTheme,
+				context.lastComponent,
+			);
+		},
+		renderResult: (result, options, currentTheme, context) =>
+			bashRenderer.renderResult?.(
+				result as AgentToolResult<BashToolDetails | undefined>,
+				options,
+				currentTheme,
+				context as never,
+			) ?? textComponent("", context.lastComponent),
+	};
+}
+
 function createTerminalSendTool(
 	runtime: RemoteExecutionRuntime,
 ): ToolDefinition<typeof terminalSendSchema, RemoteToolDetails> {
 	return {
 		name: "terminal_send",
 		label: "terminal_send",
-		description: "Send literal input to an existing remote tmux session.",
-		promptSnippet: "Send input to a remote tmux terminal",
+		description: "Send literal input to an existing remote tmux session for genuinely interactive terminal control.",
+		promptSnippet: "Send interactive input to a remote tmux terminal",
+		promptGuidelines: [
+			"Do not use terminal_send plus terminal_capture for ordinary commands; use terminal_bash instead.",
+		],
 		parameters: terminalSendSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalSendInput>("terminal_send", validators.terminalSend, params);
@@ -425,9 +568,10 @@ function createTerminalSendTool(
 			}
 		},
 		renderCall: (args, currentTheme, context) =>
-			renderCall(
+			renderTerminalCall(
 				"Terminal Send",
-				`${args.terminalId} · ${literalInputSummary(args.input)}`,
+				args.terminalId,
+				literalInputSummary(args.input),
 				currentTheme,
 				context.lastComponent,
 			),
@@ -473,7 +617,13 @@ function createTerminalCaptureTool(
 			}
 		},
 		renderCall: (args, currentTheme, context) =>
-			renderCall("Terminal Capture", args.terminalId, currentTheme, context.lastComponent),
+			renderTerminalCall(
+				"Terminal Capture",
+				args.terminalId,
+				args.cursor === undefined ? "" : `cursor ${args.cursor}`,
+				currentTheme,
+				context.lastComponent,
+			),
 		renderResult: (result, options, currentTheme, context) =>
 			renderResult(
 				result as AgentToolResult<RemoteToolDetails>,
@@ -514,7 +664,7 @@ function createTerminalStatusTool(
 			}
 		},
 		renderCall: (args, currentTheme, context) =>
-			renderCall("Terminal Status", args.terminalId, currentTheme, context.lastComponent),
+			renderTerminalCall("Terminal Status", args.terminalId, "", currentTheme, context.lastComponent),
 		renderResult: (result, options, currentTheme, context) =>
 			renderResult(
 				result as AgentToolResult<RemoteToolDetails>,
@@ -549,7 +699,7 @@ function createTerminalCloseTool(
 			}
 		},
 		renderCall: (args, currentTheme, context) =>
-			renderCall("Terminal Close", args.terminalId, currentTheme, context.lastComponent),
+			renderTerminalCall("Terminal Close", args.terminalId, "", currentTheme, context.lastComponent),
 		renderResult: (result, options, currentTheme, context) =>
 			renderResult(
 				result as AgentToolResult<RemoteToolDetails>,
@@ -584,6 +734,7 @@ export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): To
 		createTargetSelectTool(runtime),
 		createRemoteExecTool(runtime),
 		createTerminalCreateTool(runtime),
+		createTerminalBashTool(runtime),
 		createTerminalSendTool(runtime),
 		createTerminalCaptureTool(runtime),
 		createTerminalStatusTool(runtime),
@@ -598,6 +749,7 @@ export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): To
 export {
 	remoteExecSchema,
 	targetSelectSchema,
+	terminalBashSchema,
 	terminalCaptureSchema,
 	terminalCloseSchema,
 	terminalCreateSchema,

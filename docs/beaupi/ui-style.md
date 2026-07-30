@@ -97,6 +97,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 ### 输出规则
 
 - Tool 标题使用运行图标、粗体名称和括号参数：`● Read(path)`
+- Terminal 系 Tool 在参数括号前显示 tmux 名称：`● Terminal Bash [pi5-env](npm run check)`；无额外参数时仍保留空括号，例如 `Terminal Status [pi5-env]()`
 - 结果使用 `  ⎿  ` 五列 gutter，后续换行与结果正文对齐
 - queued 状态显示灰色空心圆点；运行、成功和失败使用 accent、绿色和红色实心小圆点
 - 等待权限或 classifier 时在标题下显示 dim 状态
@@ -129,6 +130,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 | `delegate_task` | `Agent` |
 | `workflow_run` | `Workflow` |
 | `background_start` | `Background` |
+| `terminal_bash` | `Terminal Bash` |
 
 底层 Tool 名称保持不变，只修改 renderer。
 

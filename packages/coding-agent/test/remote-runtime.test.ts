@@ -271,6 +271,62 @@ describe("M7 fake tmux lifecycle", () => {
 		expect(lost.status).toBe("lost");
 	});
 
+	it("executes Bash-like commands through an interactive terminal and consumes their captured output", async () => {
+		const setup = createSetup();
+		setup.runtime.selectTarget("fake");
+		const created = await setup.runtime.terminalCreate({ terminalId: "bash-terminal" });
+		setup.adapter.setTerminalCommandResult(created.terminalId, "printf terminal-ok", {
+			stdout: "terminal-ok\n",
+			exitCode: 0,
+		});
+		const result = await setup.runtime.terminalBash(created.terminalId, "printf terminal-ok");
+		expect(result).toMatchObject({
+			terminalId: created.terminalId,
+			monitorId: created.monitorId,
+			command: "printf terminal-ok",
+			stdout: "terminal-ok\n",
+			stderr: "",
+			exitCode: 0,
+		});
+		expect(setup.adapter.terminalCommandCalls).toEqual([
+			{ terminalId: created.terminalId, command: "printf terminal-ok" },
+		]);
+		expect(readFileSync(created.logPath, "utf8")).toBe("terminal-ok\n");
+		const capture = await setup.runtime.terminalCapture(created.terminalId);
+		expect(capture.content).toBe("");
+	});
+
+	it("rejects terminal Bash on fixed-command or busy terminals and maps timeout and cancellation", async () => {
+		const fixed = createSetup();
+		fixed.runtime.selectTarget("fake");
+		const fixedTerminal = await fixed.runtime.terminalCreate({ terminalId: "fixed-terminal", command: "sleep 30" });
+		await expect(fixed.runtime.terminalBash(fixedTerminal.terminalId, "pwd")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_busy" },
+		});
+
+		const setup = createSetup();
+		setup.runtime.selectTarget("fake");
+		const created = await setup.runtime.terminalCreate({ terminalId: "slow-terminal" });
+		setup.adapter.setTerminalCommandResult(created.terminalId, "sleep 30", { delayMs: 50 });
+		const running = setup.runtime.terminalBash(created.terminalId, "sleep 30");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await expect(setup.runtime.terminalSend(created.terminalId, "echo overlap\n")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_busy" },
+		});
+		await expect(running).resolves.toMatchObject({ exitCode: 0 });
+
+		setup.adapter.setTerminalCommandResult(created.terminalId, "sleep timeout", { delayMs: 50 });
+		await expect(
+			setup.runtime.terminalBash(created.terminalId, "sleep timeout", { timeoutMs: 1 }),
+		).rejects.toMatchObject({ diagnostic: { code: "remote_timeout" } });
+
+		setup.adapter.setTerminalCommandResult(created.terminalId, "sleep cancel", { delayMs: 50 });
+		const controller = new AbortController();
+		const cancelled = setup.runtime.terminalBash(created.terminalId, "sleep cancel", { signal: controller.signal });
+		controller.abort();
+		await expect(cancelled).rejects.toMatchObject({ diagnostic: { code: "remote_cancelled" } });
+	});
+
 	it("restores an unverifiable remote monitor as lost", async () => {
 		const original = createSetup();
 		original.runtime.selectTarget("fake");

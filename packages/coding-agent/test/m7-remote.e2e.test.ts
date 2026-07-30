@@ -98,6 +98,17 @@ describe.skipIf(!realE2e)("M7 real h100-server E2E", () => {
 			expect(terminalId).toBeDefined();
 			const first = await executeTool(definitions.terminal_capture, { terminalId });
 			expect(first.details.cursor).toBeGreaterThanOrEqual(0);
+			const terminalBash = await executeTool(definitions.terminal_bash, {
+				terminalId,
+				command: "pwd; printf terminal-bash-ok",
+			});
+			expect(textFrom(terminalBash)).toContain("/tmp");
+			expect(textFrom(terminalBash)).toContain("terminal-bash-ok");
+			expect(terminalBash.details).toMatchObject({
+				operation: "terminal_bash",
+				terminalId,
+				exitCode: 0,
+			});
 			await executeTool(definitions.remote_exec, { command: "sleep 2" });
 			await executeTool(definitions.terminal_send, { terminalId, input: "pwd\n" });
 			await executeTool(definitions.remote_exec, { command: "sleep 0.2" });

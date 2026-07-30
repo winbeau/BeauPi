@@ -63,6 +63,35 @@ function targetArgs(target: ExecutionTargetConfig, controlPath: string): string[
 	return args;
 }
 
+const TMUX_WAIT_POLL_MS = 500;
+const TMUX_INTERRUPT_SETTLE_MS = 50;
+const REMOTE_FILE_READ_TIMEOUT_MS = 5_000;
+
+function delay(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function terminalCommandTempPaths(token: string): {
+	directory: string;
+	command: string;
+	helper: string;
+	stdout: string;
+	stderr: string;
+	status: string;
+	channel: string;
+} {
+	const directory = `/tmp/beaupi-terminal-bash-${token}`;
+	return {
+		directory,
+		command: `${directory}/command.sh`,
+		helper: `${directory}/run.sh`,
+		stdout: `${directory}/stdout.log`,
+		stderr: `${directory}/stderr.log`,
+		status: `${directory}/status`,
+		channel: `beaupi-terminal-bash-${token}`,
+	};
+}
+
 async function runSsh(args: string[], options: RemoteCommandOptions = {}): Promise<RemoteCommandResult> {
 	const startedAt = Date.now();
 	if (options.signal?.aborted) {
@@ -195,11 +224,11 @@ class OpenSshConnection implements SshConnection {
 	}
 
 	async tmuxSend(
-		sessionId: string,
+		targetId: string,
 		input: string,
 		commandOptions?: RemoteCommandOptions,
 	): Promise<RemoteCommandResult> {
-		const target = shellQuote(sessionId);
+		const target = shellQuote(targetId);
 		const segments = input.split(/\r\n|\r|\n/);
 		const commands: string[] = [];
 		for (let index = 0; index < segments.length; index++) {
@@ -213,17 +242,113 @@ class OpenSshConnection implements SshConnection {
 		);
 	}
 
-	async tmuxCapture(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
-		return this.execute(`tmux capture-pane -p -S - -t ${shellQuote(sessionId)}`, commandOptions);
+	async tmuxExecute(
+		targetId: string,
+		command: string,
+		commandOptions: RemoteCommandOptions = {},
+	): Promise<RemoteCommandResult> {
+		const startedAt = Date.now();
+		const token = randomUUID().replaceAll("-", "");
+		const paths = terminalCommandTempPaths(token);
+		const encodedCommand = Buffer.from(command, "utf8").toString("base64");
+		const helper = [
+			"#!/usr/bin/env bash",
+			`bash ${shellQuote(paths.command)} >${shellQuote(paths.stdout)} 2>${shellQuote(paths.stderr)}`,
+			"__beaupi_terminal_status=$?",
+			`printf '%s\\n' "$__beaupi_terminal_status" >${shellQuote(paths.status)}`,
+			`cat -- ${shellQuote(paths.stdout)}`,
+			`cat -- ${shellQuote(paths.stderr)} >&2`,
+			`tmux wait-for -S ${shellQuote(paths.channel)}`,
+			'exit "$__beaupi_terminal_status"',
+		].join("\n");
+		const encodedHelper = Buffer.from(helper, "utf8").toString("base64");
+		let waitCompleted = false;
+		try {
+			const setup = await this.execute(
+				[
+					`mkdir -m 700 -- ${shellQuote(paths.directory)}`,
+					`printf %s ${shellQuote(encodedCommand)} | base64 -d > ${shellQuote(paths.command)}`,
+					`printf %s ${shellQuote(encodedHelper)} | base64 -d > ${shellQuote(paths.helper)}`,
+					`chmod 600 -- ${shellQuote(paths.command)} ${shellQuote(paths.helper)}`,
+				].join(" && "),
+				{ signal: commandOptions.signal, timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS },
+			);
+			if (setup.exitCode !== 0) {
+				throw new RemoteExecutionError({
+					code: "remote_command",
+					message: `Could not prepare terminal command: ${safeDiagnosticText(setup.stderr) || "remote setup failed"}`,
+					targetId: this.targetId,
+					exitCode: setup.exitCode,
+				});
+			}
+			const sent = await this.tmuxSend(targetId, `bash ${shellQuote(paths.helper)}\n`, {
+				signal: commandOptions.signal,
+			});
+			if (sent.exitCode !== 0) {
+				throw new RemoteExecutionError({
+					code: "terminal_session_lost",
+					message: `Could not inject command into tmux pane: ${safeDiagnosticText(sent.stderr) || "tmux send failed"}`,
+					targetId: this.targetId,
+					exitCode: sent.exitCode,
+				});
+			}
+			try {
+				await this.waitForTmuxSignal(paths.channel, targetId, commandOptions);
+				waitCompleted = true;
+			} catch (error) {
+				const status = await this.readTerminalExitCode(paths.status);
+				if (status === undefined) {
+					await this.interruptTmuxPane(targetId);
+					await delay(TMUX_INTERRUPT_SETTLE_MS);
+				}
+				const partial = await this.readTerminalCommandOutput(paths.stdout, paths.stderr);
+				if (partial.stdout) commandOptions.onData?.(Buffer.from(partial.stdout, "utf8"));
+				if (partial.stderr) commandOptions.onData?.(Buffer.from(partial.stderr, "utf8"));
+				throw error;
+			}
+			const output = await this.readTerminalCommandOutput(paths.stdout, paths.stderr);
+			const exitCode = await this.readTerminalExitCode(paths.status);
+			if (exitCode === undefined) {
+				throw new RemoteExecutionError({
+					code: "remote_command",
+					message: "Terminal command completed without a valid exit status",
+					targetId: this.targetId,
+				});
+			}
+			if (output.stdout) commandOptions.onData?.(Buffer.from(output.stdout, "utf8"));
+			if (output.stderr) commandOptions.onData?.(Buffer.from(output.stderr, "utf8"));
+			return { ...output, exitCode, startedAt, completedAt: Date.now() };
+		} finally {
+			const cleanup = `rm -rf -- ${shellQuote(paths.directory)}`;
+			if (waitCompleted) {
+				await this.execute(cleanup, { timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS }).catch(() => {});
+			} else {
+				await this.execute(`(sleep 60; ${cleanup}) >/dev/null 2>&1 &`, {
+					timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS,
+				}).catch(() => {});
+			}
+		}
 	}
 
-	async tmuxStatus(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
-		const result = await this.execute(`tmux has-session -t ${shellQuote(sessionId)}`, commandOptions);
-		if (result.exitCode === 0) return { exists: true, attached: false };
-		if (
-			result.stderr.toLowerCase().includes("unknown command") ||
-			result.stderr.toLowerCase().includes("not found")
-		) {
+	async tmuxCapture(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		return this.execute(`tmux capture-pane -p -J -S - -t ${shellQuote(targetId)}`, commandOptions);
+	}
+
+	async tmuxStatus(targetId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
+		const result = await this.execute(
+			`tmux display-message -p -t ${shellQuote(targetId)} ${shellQuote("#{pane_id}\t#{pane_current_command}")}`,
+			commandOptions,
+		);
+		if (result.exitCode === 0) {
+			const [paneId, currentCommand] = result.stdout.trimEnd().split("\t", 2);
+			return {
+				exists: true,
+				attached: false,
+				paneId: paneId || undefined,
+				currentCommand: currentCommand || undefined,
+			};
+		}
+		if (/tmux.*(?:not found|unknown command)|command not found.*tmux/i.test(result.stderr)) {
 			throw new RemoteExecutionError({
 				code: "tmux_unavailable",
 				message: "tmux is not available on the remote target",
@@ -231,6 +356,89 @@ class OpenSshConnection implements SshConnection {
 			});
 		}
 		return { exists: false, attached: false };
+	}
+
+	private async waitForTmuxSignal(
+		channel: string,
+		targetId: string,
+		commandOptions: RemoteCommandOptions,
+	): Promise<void> {
+		const deadline =
+			commandOptions.timeoutMs === undefined ? undefined : Date.now() + Math.max(1, commandOptions.timeoutMs);
+		while (true) {
+			const remaining = deadline === undefined ? undefined : deadline - Date.now();
+			if (remaining !== undefined && remaining <= 0) {
+				throw new RemoteExecutionError({
+					code: "remote_timeout",
+					message: `Terminal command timed out after ${Math.ceil((commandOptions.timeoutMs ?? 0) / 1000)} seconds`,
+					targetId: this.targetId,
+					retryable: true,
+				});
+			}
+			const pollTimeoutMs = Math.max(1, Math.min(TMUX_WAIT_POLL_MS, remaining ?? TMUX_WAIT_POLL_MS));
+			try {
+				const result = await this.execute(`tmux wait-for ${shellQuote(channel)}`, {
+					signal: commandOptions.signal,
+					timeoutMs: pollTimeoutMs,
+				});
+				if (result.exitCode !== 0) {
+					throw new RemoteExecutionError({
+						code: "terminal_session_lost",
+						message: safeDiagnosticText(result.stderr) || "tmux wait-for failed",
+						targetId: this.targetId,
+						exitCode: result.exitCode,
+					});
+				}
+				return;
+			} catch (error) {
+				if (!(error instanceof RemoteExecutionError) || error.diagnostic.code !== "remote_timeout") throw error;
+				if (deadline !== undefined && Date.now() >= deadline) {
+					throw new RemoteExecutionError({
+						code: "remote_timeout",
+						message: `Terminal command timed out after ${Math.ceil((commandOptions.timeoutMs ?? 0) / 1000)} seconds`,
+						targetId: this.targetId,
+						retryable: true,
+					});
+				}
+				const status = await this.tmuxStatus(targetId, { signal: commandOptions.signal, timeoutMs: pollTimeoutMs });
+				if (!status.exists) {
+					throw new RemoteExecutionError({
+						code: "terminal_session_lost",
+						message: "tmux pane disappeared while the terminal command was running",
+						targetId: this.targetId,
+					});
+				}
+			}
+		}
+	}
+
+	private async interruptTmuxPane(targetId: string): Promise<void> {
+		await this.execute(`tmux send-keys -t ${shellQuote(targetId)} C-c`, {
+			timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS,
+		}).catch(() => {});
+	}
+
+	private async readTerminalCommandOutput(
+		stdoutPath: string,
+		stderrPath: string,
+	): Promise<{ stdout: string; stderr: string }> {
+		const [stdout, stderr] = await Promise.all([
+			this.execute(`cat -- ${shellQuote(stdoutPath)}`, { timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS }),
+			this.execute(`cat -- ${shellQuote(stderrPath)}`, { timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS }),
+		]);
+		return {
+			stdout: stdout.exitCode === 0 ? stdout.stdout : "",
+			stderr: stderr.exitCode === 0 ? stderr.stdout : "",
+		};
+	}
+
+	private async readTerminalExitCode(statusPath: string): Promise<number | undefined> {
+		const result = await this.execute(`cat -- ${shellQuote(statusPath)}`, {
+			timeoutMs: REMOTE_FILE_READ_TIMEOUT_MS,
+		}).catch(() => undefined);
+		if (!result || result.exitCode !== 0) return undefined;
+		const status = result.stdout.trim();
+		return /^\d+$/.test(status) ? Number(status) : undefined;
 	}
 
 	async tmuxClose(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -429,23 +637,27 @@ class FakeSshConnection implements SshConnection {
 	}
 
 	async tmuxSend(
-		sessionId: string,
+		targetId: string,
 		input: string,
 		commandOptions?: RemoteCommandOptions,
 	): Promise<RemoteCommandResult> {
-		this.adapter.sendFakeTerminal(sessionId, input);
-		return this.execute(`tmux send-keys ${sessionId}`, commandOptions);
+		this.adapter.sendFakeTerminal(targetId, input);
+		return this.execute(`tmux send-keys ${targetId}`, commandOptions);
 	}
 
-	async tmuxCapture(sessionId: string, _commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
-		const output = this.adapter.captureFakeTerminal(sessionId);
+	tmuxExecute(targetId: string, command: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		return this.adapter.executeFakeTerminal(targetId, command, commandOptions);
+	}
+
+	async tmuxCapture(targetId: string, _commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		const output = this.adapter.captureFakeTerminal(targetId);
 		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
 	}
 
-	async tmuxStatus(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
+	async tmuxStatus(targetId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
 		if (commandOptions?.signal?.aborted)
 			throw new RemoteExecutionError({ code: "remote_cancelled", message: "Remote SSH operation was cancelled" });
-		return { exists: this.adapter.hasFakeTerminal(sessionId), attached: false };
+		return this.adapter.statusFakeTerminal(targetId);
 	}
 
 	async tmuxClose(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -463,11 +675,17 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 	readonly kind = "ssh-tmux" as const;
 	private readonly connections = new Map<string, FakeSshConnection>();
 	private readonly commandResults = new Map<string, FakeCommand>();
-	private readonly terminals = new Map<string, { output: string; exists: boolean }>();
+	private readonly terminalCommandResults = new Map<string, FakeCommand>();
+	private readonly terminals = new Map<
+		string,
+		{ output: string; exists: boolean; paneId: string; currentCommand: string }
+	>();
 	private readonly snapshots = new Map<string, MonitorAdapterSnapshot>();
 	private readonly stopResults = new Map<string, MonitorStopResult>();
+	private nextPaneId = 1;
 	connectCalls = 0;
 	commandCalls: string[] = [];
+	terminalCommandCalls: Array<{ terminalId: string; command: string }> = [];
 	tmuxCreateCalls: TmuxCreateOptions[] = [];
 	closeCalls = 0;
 	failConnect?: RemoteExecutionError;
@@ -484,6 +702,15 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 
 	setCommandResult(command: string, result: Partial<FakeCommand>): void {
 		this.commandResults.set(command, { stdout: "", stderr: "", exitCode: 0, ...result });
+	}
+
+	setTerminalCommandResult(terminalId: string, command: string, result: Partial<FakeCommand>): void {
+		this.terminalCommandResults.set(`${terminalId}\0${command}`, {
+			stdout: "",
+			stderr: "",
+			exitCode: 0,
+			...result,
+		});
 	}
 
 	setSnapshot(monitorId: string, snapshot: MonitorAdapterSnapshot): void {
@@ -511,10 +738,104 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 	}
 
 	async executeFake(command: string, options: RemoteCommandOptions = {}): Promise<RemoteCommandResult> {
-		if (options.signal?.aborted)
-			throw new RemoteExecutionError({ code: "remote_cancelled", message: "Remote SSH operation was cancelled" });
 		this.commandCalls.push(command);
 		const configured = this.commandResults.get(command) ?? { stdout: "ok\n", stderr: "", exitCode: 0 };
+		return this.resolveFakeCommand(configured, options);
+	}
+
+	async executeFakeTerminal(
+		targetId: string,
+		command: string,
+		options: RemoteCommandOptions = {},
+	): Promise<RemoteCommandResult> {
+		const entry = this.findFakeTerminal(targetId);
+		if (!entry?.terminal.exists) {
+			throw new RemoteExecutionError({
+				code: "terminal_session_lost",
+				message: `tmux target ${JSON.stringify(targetId)} is missing`,
+			});
+		}
+		this.terminalCommandCalls.push({ terminalId: entry.terminalId, command });
+		const configured = this.terminalCommandResults.get(`${entry.terminalId}\0${command}`) ?? {
+			stdout: "ok\n",
+			stderr: "",
+			exitCode: 0,
+		};
+		const shellCommand = entry.terminal.currentCommand;
+		entry.terminal.currentCommand = "bash";
+		try {
+			const result = await this.resolveFakeCommand(configured, options);
+			entry.terminal.output += `${command}\n${result.stdout}${result.stderr}`;
+			return result;
+		} finally {
+			entry.terminal.currentCommand = shellCommand;
+		}
+	}
+
+	createFakeTerminal(options: TmuxCreateOptions): void {
+		this.tmuxCreateCalls.push(structuredClone(options));
+		this.terminals.set(options.sessionId, {
+			output: options.command ? `${options.command}\n` : "",
+			exists: true,
+			paneId: `%${this.nextPaneId++}`,
+			currentCommand: options.command ? options.command.split(/\s+/, 1)[0] || "sh" : "bash",
+		});
+	}
+
+	sendFakeTerminal(targetId: string, input: string): void {
+		const entry = this.findFakeTerminal(targetId);
+		if (entry?.terminal.exists) entry.terminal.output += input;
+	}
+
+	captureFakeTerminal(targetId: string): string {
+		const entry = this.findFakeTerminal(targetId);
+		if (!entry?.terminal.exists)
+			throw new RemoteExecutionError({
+				code: "terminal_session_lost",
+				message: `tmux target ${JSON.stringify(targetId)} is missing`,
+			});
+		return entry.terminal.output;
+	}
+
+	statusFakeTerminal(targetId: string): TmuxStatus {
+		const entry = this.findFakeTerminal(targetId);
+		if (!entry?.terminal.exists) return { exists: false, attached: false };
+		return {
+			exists: true,
+			attached: false,
+			paneId: entry.terminal.paneId,
+			currentCommand: entry.terminal.currentCommand,
+		};
+	}
+
+	hasFakeTerminal(targetId: string): boolean {
+		return this.findFakeTerminal(targetId)?.terminal.exists === true;
+	}
+
+	closeFakeTerminal(sessionId: string): void {
+		const terminal = this.terminals.get(sessionId);
+		if (terminal) terminal.exists = false;
+	}
+
+	private findFakeTerminal(
+		targetId: string,
+	):
+		| { terminalId: string; terminal: { output: string; exists: boolean; paneId: string; currentCommand: string } }
+		| undefined {
+		const direct = this.terminals.get(targetId);
+		if (direct) return { terminalId: targetId, terminal: direct };
+		for (const [terminalId, terminal] of this.terminals) {
+			if (terminal.paneId === targetId) return { terminalId, terminal };
+		}
+		return undefined;
+	}
+
+	private async resolveFakeCommand(
+		configured: FakeCommand,
+		options: RemoteCommandOptions,
+	): Promise<RemoteCommandResult> {
+		if (options.signal?.aborted)
+			throw new RemoteExecutionError({ code: "remote_cancelled", message: "Remote SSH operation was cancelled" });
 		if (configured.delayMs && configured.delayMs > 0) {
 			await new Promise<void>((resolve, reject) => {
 				let settled = false;
@@ -550,35 +871,6 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		if (configured.stdout) options.onData?.(Buffer.from(configured.stdout));
 		if (configured.stderr) options.onData?.(Buffer.from(configured.stderr));
 		return { ...configured, startedAt: Date.now(), completedAt: Date.now() };
-	}
-
-	createFakeTerminal(options: TmuxCreateOptions): void {
-		this.tmuxCreateCalls.push(structuredClone(options));
-		this.terminals.set(options.sessionId, { output: options.command ? `${options.command}\n` : "", exists: true });
-	}
-
-	sendFakeTerminal(sessionId: string, input: string): void {
-		const terminal = this.terminals.get(sessionId);
-		if (terminal?.exists) terminal.output += input;
-	}
-
-	captureFakeTerminal(sessionId: string): string {
-		const terminal = this.terminals.get(sessionId);
-		if (!terminal?.exists)
-			throw new RemoteExecutionError({
-				code: "terminal_session_lost",
-				message: `tmux session ${JSON.stringify(sessionId)} is missing`,
-			});
-		return terminal.output;
-	}
-
-	hasFakeTerminal(sessionId: string): boolean {
-		return this.terminals.get(sessionId)?.exists === true;
-	}
-
-	closeFakeTerminal(sessionId: string): void {
-		const terminal = this.terminals.get(sessionId);
-		if (terminal) terminal.exists = false;
 	}
 }
 

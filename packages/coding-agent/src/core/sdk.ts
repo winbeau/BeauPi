@@ -339,6 +339,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"target_select",
 		"remote_exec",
 		"terminal_create",
+		"terminal_bash",
 		"terminal_send",
 		"terminal_capture",
 		"terminal_status",

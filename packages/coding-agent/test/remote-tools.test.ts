@@ -86,12 +86,27 @@ describe("M7 remote tools", () => {
 		expect(setup.adapter.commandCalls).toContain("cd '/srv/project' && pwd");
 		const terminal = await execute(setup.definitions.terminal_create, { terminalId: "tool-terminal" });
 		expect(terminal.details).toMatchObject({ operation: "terminal_create", ok: true, terminalId: "tool-terminal" });
+		setup.adapter.setTerminalCommandResult("tool-terminal", "printf terminal-tool-ok", {
+			stdout: "terminal-tool-ok\n",
+			exitCode: 0,
+		});
+		const terminalBash = await execute(setup.definitions.terminal_bash, {
+			terminalId: "tool-terminal",
+			command: "printf terminal-tool-ok",
+		});
+		expect(terminalBash.details).toMatchObject({
+			operation: "terminal_bash",
+			terminalId: "tool-terminal",
+			exitCode: 0,
+		});
+		expect(terminalBash.content).toEqual([{ type: "text", text: "terminal-tool-ok\n" }]);
 		const capture = await execute(setup.definitions.terminal_capture, { terminalId: "tool-terminal" });
 		expect(capture.details).toMatchObject({
 			operation: "terminal_capture",
 			ok: true,
 			terminalId: "tool-terminal",
-			cursor: 0,
+			cursor: expect.any(Number),
+			changed: false,
 		});
 		const close = await execute(setup.definitions.terminal_close, { terminalId: "tool-terminal" });
 		expect(close.details).toMatchObject({ operation: "terminal_close", ok: true, status: "completed" });
@@ -198,7 +213,16 @@ describe("M7 remote tools", () => {
 			context,
 		);
 		expect(terminalCreateCall?.render(64)).toHaveLength(1);
-		expect(stripAnsi(terminalCreateCall?.render(64)[0] ?? "")).toContain("Terminal Create(");
+		expect(stripAnsi(terminalCreateCall?.render(64)[0] ?? "")).toMatch(/^Terminal Create \[build\]\(/);
+
+		const terminalBashCall = setup.definitions.terminal_bash.renderCall?.(
+			{ terminalId: "build", command: "npm run check", timeout: 30 } as never,
+			theme,
+			context,
+		);
+		expect(stripAnsi(terminalBashCall?.render(160)[0] ?? "")).toBe(
+			"Terminal Bash [build](npm run check · timeout 30s)",
+		);
 
 		const terminalSendCall = setup.definitions.terminal_send.renderCall?.(
 			{ terminalId: "build", input: "echo ready\n" } as never,
@@ -206,7 +230,26 @@ describe("M7 remote tools", () => {
 			context,
 		);
 		expect(terminalSendCall?.render(64)).toHaveLength(1);
-		expect(stripAnsi(terminalSendCall?.render(64)[0] ?? "")).toContain("echo ready\\n");
+		expect(stripAnsi(terminalSendCall?.render(64)[0] ?? "")).toBe("Terminal Send [build](echo ready\\n)");
+
+		const terminalCaptureCall = setup.definitions.terminal_capture.renderCall?.(
+			{ terminalId: "build", cursor: 120 } as never,
+			theme,
+			context,
+		);
+		expect(stripAnsi(terminalCaptureCall?.render(160)[0] ?? "")).toBe("Terminal Capture [build](cursor 120)");
+		const terminalStatusCall = setup.definitions.terminal_status.renderCall?.(
+			{ terminalId: "build" } as never,
+			theme,
+			context,
+		);
+		expect(stripAnsi(terminalStatusCall?.render(160)[0] ?? "")).toBe("Terminal Status [build]()");
+		const terminalCloseCall = setup.definitions.terminal_close.renderCall?.(
+			{ terminalId: "build" } as never,
+			theme,
+			context,
+		);
+		expect(stripAnsi(terminalCloseCall?.render(160)[0] ?? "")).toBe("Terminal Close [build]()");
 
 		await execute(setup.definitions.terminal_create, { terminalId: "capture-preview" });
 		await execute(setup.definitions.terminal_send, { terminalId: "capture-preview", input: output });
@@ -240,6 +283,11 @@ describe("M7 remote tools", () => {
 		});
 		const bash = setup.definitions.remote_bash;
 		expect(bash).toBeDefined();
+		await execute(setup.definitions.terminal_create, { terminalId: "failed-terminal" });
+		setup.adapter.setTerminalCommandResult("failed-terminal", "false", { stderr: "failed\n", exitCode: 7 });
+		await expect(
+			execute(setup.definitions.terminal_bash, { terminalId: "failed-terminal", command: "false" }),
+		).rejects.toThrow(/failed[\s\S]*code 7/);
 		const read = setup.runtime.createReadOperations();
 		setup.adapter.setCommandResult("cd '/workspace' && cat -- 'hello.txt'", {
 			stdout: "hello\n",

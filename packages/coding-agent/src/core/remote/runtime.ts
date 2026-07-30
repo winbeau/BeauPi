@@ -28,6 +28,10 @@ interface RemoteTerminalState {
 	targetId: string;
 	monitorId: string;
 	logPath: string;
+	paneId: string;
+	shellCommand?: string;
+	interactive: boolean;
+	busy: boolean;
 	lastCapture: string;
 	captureCursor: number;
 }
@@ -60,6 +64,16 @@ export interface TerminalCreateResult {
 	status: "running";
 	logPath: string;
 	targetId: string;
+}
+
+export interface TerminalBashResult {
+	terminalId: string;
+	monitorId: string;
+	command: string;
+	stdout: string;
+	stderr: string;
+	exitCode: number | null;
+	logPath: string;
 }
 
 export interface TerminalCaptureResult {
@@ -125,6 +139,10 @@ function logPathFor(cwd: string, sessionId: string, operationId: string): string
 
 function hashText(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
+}
+
+function delay(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function incrementalCapture(previous: string, current: string): string {
@@ -396,12 +414,25 @@ export class RemoteExecutionRuntime {
 			const connection = await this.connect(target.id, options.signal);
 			const result = await connection.tmuxCreate(tmuxOptions, { signal: options.signal });
 			if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_invalid");
+			const status = await connection.tmuxStatus(terminalId, { signal: options.signal });
+			if (!status.exists || !status.paneId) {
+				throw new RemoteExecutionError({
+					code: "terminal_session_lost",
+					message: `tmux session ${JSON.stringify(terminalId)} did not expose a controllable pane`,
+					targetId: target.id,
+					operationId: terminalId,
+				});
+			}
 			await this.initializeTerminalLog(monitor.id, logPath);
 			this.terminals.set(terminalId, {
 				terminalId,
 				targetId: target.id,
 				monitorId: monitor.id,
 				logPath,
+				paneId: status.paneId,
+				shellCommand: status.currentCommand,
+				interactive: options.command === undefined,
+				busy: false,
 				lastCapture: "",
 				captureCursor: 0,
 			});
@@ -435,10 +466,17 @@ export class RemoteExecutionRuntime {
 		signal?: AbortSignal,
 	): Promise<{ terminalId: string; monitorId: string; status: string }> {
 		const terminal = this.assertTerminal(terminalId);
+		if (terminal.busy) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is already running a terminal_bash command`,
+				operationId: terminalId,
+			});
+		}
 		assertNormalUserCommand(input);
 		const target = this.assertTarget(terminal.targetId);
 		const connection = await this.connect(target.id, signal);
-		const result = await connection.tmuxSend(terminalId, input, { signal });
+		const result = await connection.tmuxSend(terminal.paneId, input, { signal });
 		if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
 		this.setMonitorSnapshot(terminal.monitorId, {
 			availability: "confirmed",
@@ -455,13 +493,107 @@ export class RemoteExecutionRuntime {
 		};
 	}
 
+	async terminalBash(
+		terminalId: string,
+		command: string,
+		options: { timeoutMs?: number; signal?: AbortSignal; onData?: (data: Buffer) => void } = {},
+	): Promise<TerminalBashResult> {
+		if (!command.trim() || command.includes("\0")) {
+			throw new RemoteExecutionError({
+				code: "remote_command",
+				message: "terminal_bash requires a non-empty command without NUL bytes",
+				operationId: terminalId,
+			});
+		}
+		assertNormalUserCommand(command);
+		const terminal = this.assertTerminal(terminalId);
+		if (!terminal.interactive) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} was created with a fixed command, not an interactive shell`,
+				operationId: terminalId,
+			});
+		}
+		if (terminal.busy) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is already running a terminal_bash command`,
+				operationId: terminalId,
+			});
+		}
+		const target = this.assertTarget(terminal.targetId);
+		const connection = await this.connect(target.id, options.signal);
+		const status = await connection.tmuxStatus(terminal.paneId, { signal: options.signal });
+		if (!status.exists) {
+			throw new RemoteExecutionError({
+				code: "terminal_session_lost",
+				message: `tmux pane for terminal ${JSON.stringify(terminalId)} no longer exists`,
+				targetId: target.id,
+				operationId: terminalId,
+			});
+		}
+		if (terminal.shellCommand && status.currentCommand && status.currentCommand !== terminal.shellCommand) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is currently running ${JSON.stringify(status.currentCommand)}`,
+				targetId: target.id,
+				operationId: terminalId,
+			});
+		}
+		terminal.busy = true;
+		const outputChunks: Buffer[] = [];
+		try {
+			const result = await connection.tmuxExecute(terminal.paneId, command, {
+				signal: options.signal,
+				timeoutMs: options.timeoutMs,
+				onData: (data) => outputChunks.push(Buffer.from(data)),
+			});
+			const stdout = redactOutput(result.stdout);
+			const stderr = redactOutput(result.stderr);
+			if (stdout) options.onData?.(Buffer.from(stdout, "utf8"));
+			if (stderr) options.onData?.(Buffer.from(stderr, "utf8"));
+			await this.recordTerminalCommandOutput(terminal, connection, `${stdout}${stderr}`);
+			return {
+				terminalId,
+				monitorId: terminal.monitorId,
+				command: redactCommand(command),
+				stdout,
+				stderr,
+				exitCode: result.exitCode,
+				logPath: terminal.logPath,
+			};
+		} catch (error) {
+			const diagnostic = diagnosticForError(error, target.id, terminalId);
+			const partialOutput = redactOutput(Buffer.concat(outputChunks).toString("utf8"));
+			if (partialOutput) options.onData?.(Buffer.from(partialOutput, "utf8"));
+			if (diagnostic.code === "terminal_session_lost" || diagnostic.code === "ssh_disconnected") {
+				if (partialOutput) await appendFile(terminal.logPath, partialOutput, "utf8");
+				this.setMonitorSnapshot(terminal.monitorId, {
+					availability: "missing",
+					exitReason: diagnostic.code,
+					diagnostics: [diagnostic.message],
+					logPath: terminal.logPath,
+				});
+				await this.monitorRuntime.poll();
+				if (diagnostic.code === "ssh_disconnected") {
+					await this.markConnectionLost(target.id, diagnostic.message);
+				}
+			} else {
+				await this.recordTerminalCommandOutput(terminal, connection, partialOutput);
+			}
+			throw new RemoteExecutionError(diagnostic);
+		} finally {
+			terminal.busy = false;
+		}
+	}
+
 	async terminalCapture(terminalId: string, signal?: AbortSignal, cursor?: number): Promise<TerminalCaptureResult> {
 		const terminal = this.assertTerminal(terminalId);
 		const target = this.assertTarget(terminal.targetId);
 		const connection = await this.connect(target.id, signal);
 		let result: RemoteCommandResult;
 		try {
-			result = await connection.tmuxCapture(terminalId, { signal });
+			result = await connection.tmuxCapture(terminal.paneId, { signal });
 		} catch (error) {
 			const diagnostic = diagnosticForError(error, target.id, terminalId);
 			if (diagnostic.code === "ssh_disconnected") await this.markConnectionLost(target.id, diagnostic.message);
@@ -517,7 +649,7 @@ export class RemoteExecutionRuntime {
 		const target = this.assertTarget(terminal.targetId);
 		try {
 			const connection = await this.connect(target.id, signal);
-			const status = await connection.tmuxStatus(terminalId, { signal });
+			const status = await connection.tmuxStatus(terminal.paneId, { signal });
 			this.setMonitorSnapshot(
 				terminal.monitorId,
 				status.exists
@@ -680,6 +812,33 @@ export class RemoteExecutionRuntime {
 			return relativePath.split(sep).join("/");
 		}
 		return localPath.split(sep).join("/");
+	}
+
+	private async recordTerminalCommandOutput(
+		terminal: RemoteTerminalState,
+		connection: SshConnection,
+		output: string,
+	): Promise<void> {
+		if (output) {
+			await appendFile(terminal.logPath, output, "utf8");
+			terminal.captureCursor += Buffer.byteLength(output, "utf8");
+		}
+		await delay(25);
+		try {
+			const capture = await connection.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 });
+			if (capture.exitCode === 0) terminal.lastCapture = capture.stdout;
+		} catch {
+			// The command result remains authoritative if prompt synchronization fails.
+		}
+		if (output) await this.monitorRuntime.logs(terminal.monitorId);
+		this.setMonitorSnapshot(terminal.monitorId, {
+			availability: "confirmed",
+			running: true,
+			healthy: true,
+			lastActivityAt: this.now(),
+			logPath: terminal.logPath,
+		});
+		await this.monitorRuntime.poll();
 	}
 
 	private async markConnectionLost(targetId: string, message: string): Promise<void> {

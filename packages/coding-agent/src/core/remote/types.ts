@@ -42,6 +42,7 @@ export type RemoteDiagnosticCode =
 	| "tmux_unavailable"
 	| "terminal_invalid"
 	| "terminal_not_found"
+	| "terminal_busy"
 	| "terminal_session_lost"
 	| "terminal_closed"
 	| "adapter_unavailable";
@@ -90,6 +91,8 @@ export interface TmuxCreateOptions {
 export interface TmuxStatus {
 	exists: boolean;
 	attached: boolean;
+	paneId?: string;
+	currentCommand?: string;
 	lastActivityAt?: number;
 }
 
@@ -98,9 +101,10 @@ export interface SshConnection {
 	readonly targetId: string;
 	execute(command: string, options?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxCreate(options: TmuxCreateOptions, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
-	tmuxSend(sessionId: string, input: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
-	tmuxCapture(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
-	tmuxStatus(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus>;
+	tmuxSend(target: string, input: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxExecute(target: string, command: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxCapture(target: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxStatus(target: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus>;
 	tmuxClose(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	close(): Promise<void>;
 }

@@ -49,6 +49,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
 	target_select: "Target Select",
 	remote_exec: "Remote Exec",
 	terminal_create: "Terminal Create",
+	terminal_bash: "Terminal Bash",
 	terminal_send: "Terminal Send",
 	terminal_capture: "Terminal Capture",
 	terminal_status: "Terminal Status",
