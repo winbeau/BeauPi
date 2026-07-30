@@ -19,6 +19,11 @@ export interface AppKeybindings {
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
+	"app.question.next": true;
+	"app.question.previous": true;
+	"app.question.toggle": true;
+	"app.question.notes": true;
+	"app.question.submit": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
@@ -83,6 +88,11 @@ export const KEYBINDINGS = {
 		description: "Cycle to previous model",
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
+	"app.question.next": { defaultKeys: ["tab", "right"], description: "Next question" },
+	"app.question.previous": { defaultKeys: ["shift+tab", "left"], description: "Previous question" },
+	"app.question.toggle": { defaultKeys: "space", description: "Toggle question option" },
+	"app.question.notes": { defaultKeys: "n", description: "Edit question notes" },
+	"app.question.submit": { defaultKeys: "enter", description: "Confirm question selection" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
@@ -246,6 +256,11 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	cycleModelForward: "app.model.cycleForward",
 	cycleModelBackward: "app.model.cycleBackward",
 	selectModel: "app.model.select",
+	questionNext: "app.question.next",
+	questionPrevious: "app.question.previous",
+	questionToggle: "app.question.toggle",
+	questionNotes: "app.question.notes",
+	questionSubmit: "app.question.submit",
 	expandTools: "app.tools.expand",
 	toggleThinking: "app.thinking.toggle",
 	toggleSessionNamedFilter: "app.session.toggleNamedFilter",

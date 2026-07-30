@@ -70,6 +70,87 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("custom result");
 	});
 
+	test("renders ask_user_question waiting, answer, cancellation, and interaction failure states compactly", () => {
+		const args = {
+			questions: [
+				{
+					question: "Choose",
+					header: "Target",
+					options: [
+						{ label: "A", description: "Use A" },
+						{ label: "B", description: "Use B" },
+					],
+					multiSelect: false,
+				},
+			],
+		};
+		const component = new ToolExecutionComponent(
+			"ask_user_question",
+			"question-call",
+			args,
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Question — waiting for user response");
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "answered" }],
+				details: {
+					version: 1,
+					requestId: "question-call",
+					status: "answered",
+					answers: [{ header: "Target", selectedLabels: ["A"] }],
+					createdAt: "2026-03-15T00:00:00.000Z",
+				},
+				isError: false,
+			},
+			false,
+		);
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Target: A");
+		expect(rendered).not.toContain(JSON.stringify(args, null, 2));
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "cancelled" }],
+				details: {
+					version: 1,
+					requestId: "question-call",
+					status: "cancelled",
+					answers: [],
+					createdAt: "2026-03-15T00:00:00.000Z",
+				},
+				isError: false,
+			},
+			false,
+		);
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Cancelled by user");
+		expect(component.getDisplayState()).toBe("cancelled");
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "failed" }],
+				details: {
+					version: 1,
+					requestId: "question-call",
+					status: "interaction_error",
+					answers: [],
+					createdAt: "2026-03-15T00:00:00.000Z",
+					diagnostic: "host failed",
+				},
+				isError: false,
+			},
+			false,
+		);
+		expect(component.getDisplayState()).toBe("error");
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("host failed");
+	});
+
 	test("uses a minimal shell with lifecycle symbols and no status background", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),

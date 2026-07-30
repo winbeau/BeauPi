@@ -235,7 +235,19 @@ export class ToolExecutionComponent extends Container {
 	getDisplayState(): BeauPiToolState {
 		if (this.forcedState) return this.forcedState;
 		if (this.result && !this.isPartial) {
-			if (isCancellationResult(this.result)) return "cancelled";
+			if (
+				isCancellationResult(this.result) ||
+				this.result.details?.status === "cancelled" ||
+				this.result.details?.status === "rejected"
+			) {
+				return "cancelled";
+			}
+			if (
+				this.result.details?.status === "interaction_error" ||
+				this.result.details?.status === "interaction_required"
+			) {
+				return "error";
+			}
 			return this.result.isError ? "error" : "success";
 		}
 		if (this.executionStarted || this.result) return "running";

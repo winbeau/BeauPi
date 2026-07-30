@@ -286,7 +286,7 @@ pi --models "claude-*,gpt-4o"
 pi --tools read,grep,find,ls -p "Review the code"
 
 # Disable one extension or built-in tool while keeping the rest available
-pi --exclude-tools ask_question
+pi --exclude-tools ask_user_question
 ```
 
 ## Design Principles

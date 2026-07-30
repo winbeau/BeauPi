@@ -55,6 +55,16 @@ export interface AgentTaskBudgetSummary {
 
 export type AgentTaskCitation = DocumentCitation | WebCitation;
 
+export interface AgentClarificationQuestion {
+	question: string;
+	options: string[];
+}
+
+export interface AgentClarificationRequest {
+	version: 1;
+	questions: AgentClarificationQuestion[];
+}
+
 export interface AgentTaskResult {
 	taskId: string;
 	profile: string;
@@ -65,6 +75,7 @@ export interface AgentTaskResult {
 	filesModified: string[];
 	checks: AgentTaskCheck[];
 	diagnostics: string[];
+	clarificationRequest?: AgentClarificationRequest;
 	error?: AgentTaskError;
 	usage: AgentTaskUsage;
 	budget: AgentTaskBudgetSummary;
@@ -142,7 +153,7 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 type DelegateTaskParameters = Static<typeof DELEGATE_TASK_PARAMETERS>;
 
 const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
-const RESERVED_TOOL_NAMES = new Set(["delegate_task"]);
+const RESERVED_TOOL_NAMES = new Set(["delegate_task", "ask_user_question"]);
 
 function errorWithCode(code: string, message: string): AgentTaskError {
 	return { code, message };
@@ -165,6 +176,43 @@ function taskSummary(task: string): string {
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
+}
+
+function parseClarificationRequest(text: string | undefined): AgentClarificationRequest | undefined {
+	if (!text) return undefined;
+	const match = text.match(/<clarification_request>\s*([\s\S]*?)\s*<\/clarification_request>/);
+	if (!match?.[1]) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(match[1]);
+	} catch {
+		return undefined;
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+	const record = parsed as Record<string, unknown>;
+	if (
+		record.version !== 1 ||
+		!Array.isArray(record.questions) ||
+		record.questions.length < 1 ||
+		record.questions.length > 4
+	) {
+		return undefined;
+	}
+	const questions: AgentClarificationQuestion[] = [];
+	for (const item of record.questions) {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined;
+		const question = item as Record<string, unknown>;
+		if (typeof question.question !== "string" || !question.question.trim()) return undefined;
+		if (!Array.isArray(question.options) || question.options.length < 2 || question.options.length > 4)
+			return undefined;
+		if (
+			!question.options.every((option): option is string => typeof option === "string" && option.trim().length > 0)
+		) {
+			return undefined;
+		}
+		questions.push({ question: question.question, options: [...question.options] });
+	}
+	return { version: 1, questions };
 }
 
 function usageFromSession(session: AgentSession): AgentTaskUsage {
@@ -296,13 +344,16 @@ export class AgentPool {
 		this.profiles = resolveAgentProfiles(config);
 		this.defaultProfileId = config.defaultProfile ?? config.profiles?.[0]?.id ?? DEFAULT_AGENT_PROFILE.id;
 		this.dependencies = dependencies;
-		this.customTools = (dependencies.customTools ?? []).filter((tool) => tool.name !== "delegate_task");
+		this.customTools = (dependencies.customTools ?? []).filter((tool) => !RESERVED_TOOL_NAMES.has(tool.name));
 		this._delegateTaskTool = {
 			name: "delegate_task",
 			label: "Agent",
 			description: "Run an isolated in-process sub-agent and return only a structured result.",
 			promptSnippet: "delegate_task: delegate a bounded task to an isolated sub-agent",
-			promptGuidelines: ["Never use delegate_task from a controlled sub-agent."],
+			promptGuidelines: [
+				"Never use delegate_task from a controlled sub-agent.",
+				"When delegate_task returns clarificationRequest, resolve it from existing context or ask the user from the Coordinator; never fabricate a child answer.",
+			],
 			parameters: DELEGATE_TASK_PARAMETERS,
 			executionMode: "sequential",
 			execute: async (
@@ -560,7 +611,7 @@ export class AgentPool {
 					retry: { enabled: false },
 				}),
 				tools: toolAllowlist,
-				excludeTools: ["delegate_task"],
+				excludeTools: ["delegate_task", "ask_user_question"],
 				customTools: [...this.customTools],
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
@@ -677,6 +728,8 @@ export class AgentPool {
 							: undefined;
 			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, error);
 			result.summary = child.getLastAssistantText() ?? "No summary returned by the child agent.";
+			const clarificationRequest = parseClarificationRequest(result.summary);
+			if (clarificationRequest) result.clarificationRequest = clarificationRequest;
 			result.citations = uniqueCitations([
 				...(snapshot.documentContract?.sourceCitations ?? []),
 				...snapshot.network.flatMap((record) => record.citations),

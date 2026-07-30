@@ -166,6 +166,33 @@ BEAUPI_SEARXNG_ENDPOINT
 
 Coordinator 和受控 `researcher` 子 Agent 共享同一 Search Runtime/cache。可通过普通 Tool allowlist/denylist 明确启用或禁用 `web_search`、`web_fetch`。
 
+## 交互式询问
+
+M9 默认在 Coordinator 注册：
+
+```text
+ask_user_question(questions)
+```
+
+一次可提交 1–4 个问题；每题包含不超过 12 个字符的唯一 header、2–4 个唯一选项和 `multiSelect`。UI 自动追加 `Other`，模型不得重复提供 `Other`/`其他` 等价选项。单选支持可选 Markdown preview；多选使用 Space 切换并显式进入下一题；多问题结束后进入 review/submit。每题还可通过 `N` 编辑 notes，并在 Other/notes 编辑器中使用现有外部编辑器键位。
+
+默认问题键位：
+
+```text
+Up/Down                选项导航
+Enter                  单选确认 / 多选进入下一题 / review 提交
+Space                  多选切换
+Tab/Right               下一题
+Shift+Tab/Left          上一题
+N                       编辑 notes
+Escape/Ctrl+C           取消
+Ctrl+G                  Other/notes 外部编辑器
+```
+
+所有问题动作都可在 `keybindings.json` 中通过 `app.question.*` 修改。答案以 `version: 1` Tool details 写入正常 Session 生命周期；Task Ledger 保留当前 branch 的精简 interaction facts，并只在等待回答时显示用户 Todo。
+
+TUI 外运行不会读取 stdin：Print/JSON 和无 handler SDK 立即返回 `interaction_required`。SDK 可传 `questionHandler`；RPC 会发出 `method: "askUserQuestion"` 的 `extension_ui_request`，客户端必须以同一 `id` 返回 `answers`、`cancelled: true`、`rejected: true` 或结构化 `error`。受控子 Agent 永远不暴露该 Tool，只返回结构化 `<clarification_request>`。
+
 ## 开发检查
 
 代码修改后：
@@ -182,13 +209,12 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi M0–M8 已完成。当前按优先主线推进：
+BeauPi M0–M9 已完成。当前按优先主线推进：
 
-1. M9：实现 Claude Code 风格 `ask_user_question` 询问选择框。
-2. M10：实现 Policy Engine、等价 fallback 和失败预算；不增加专用 Git Tools。
-3. M11：在稳定策略边界上实现多 Agent Workflow。
-4. M12：扩展 Monitor Runtime，实现后台任务自动唤醒。
-5. M13：最后实现受控权限能力。
-6. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
+1. M10：实现 Policy Engine、等价 fallback 和失败预算；不增加专用 Git Tools。
+2. M11：在稳定策略边界上实现多 Agent Workflow。
+3. M12：扩展 Monitor Runtime，实现后台任务自动唤醒。
+4. M13：最后实现受控权限能力。
+5. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
 
-M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime 和 M8 Search Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用和生命周期事件与 Coordinator 交互。
+M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime 和 M9 Question Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用和生命周期事件与 Coordinator 交互。

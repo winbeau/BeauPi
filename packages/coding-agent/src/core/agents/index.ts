@@ -1,4 +1,6 @@
 export {
+	type AgentClarificationQuestion,
+	type AgentClarificationRequest,
 	type AgentLifecycleEvent,
 	type AgentLifecycleEventListener,
 	type AgentLifecycleEventType,

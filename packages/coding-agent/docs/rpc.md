@@ -1144,9 +1144,10 @@ Emitted when an extension throws an error.
 
 Extensions can request user interaction via `ctx.ui.select()`, `ctx.ui.confirm()`, etc. In RPC mode, these are translated into a request/response sub-protocol on top of the base command/event flow.
 
-There are two categories of extension UI methods:
+There are two categories of extension UI methods, plus the built-in question bridge:
 
 - **Dialog methods** (`select`, `confirm`, `input`, `editor`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
+- **Built-in question method** (`askUserQuestion`): emitted by `ask_user_question`; carries the versioned question schema and waits for structured `answers`, cancellation, rejection, or host error.
 - **Fire-and-forget methods** (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`): emit an `extension_ui_request` on stdout but do not expect a response. The client can display the information or ignore it.
 
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
@@ -1233,6 +1234,66 @@ Open a multi-line text editor with optional prefilled content.
 
 Expected response: `extension_ui_response` with `value` (the edited text) or `cancelled: true`.
 
+#### askUserQuestion
+
+Render the built-in bounded question flow. `id` identifies this RPC UI request and must be echoed in the response; `requestId` is the original Tool call id stored in the question result.
+
+```json
+{
+  "type": "extension_ui_request",
+  "id": "uuid-question-1",
+  "method": "askUserQuestion",
+  "requestId": "tool-call-7",
+  "questions": [
+    {
+      "question": "Which library should we use?",
+      "header": "Library",
+      "options": [
+        {"label": "React", "description": "Use React", "preview": "# React\n\n```ts\n...\n```"},
+        {"label": "Vue", "description": "Use Vue"}
+      ],
+      "multiSelect": false
+    }
+  ]
+}
+```
+
+The client must return exactly one answer per question, preserving each `header`. `selectedLabels` must contain only labels from that question. A custom Other response uses `customAnswer`; optional per-question notes use `notes`.
+
+```json
+{
+  "type": "extension_ui_response",
+  "id": "uuid-question-1",
+  "answers": [
+    {
+      "header": "Library",
+      "selectedLabels": ["React"],
+      "notes": "Keep the existing renderer"
+    }
+  ]
+}
+```
+
+To cancel:
+
+```json
+{"type": "extension_ui_response", "id": "uuid-question-1", "cancelled": true}
+```
+
+To explicitly decline the request rather than cancel navigation:
+
+```json
+{"type": "extension_ui_response", "id": "uuid-question-1", "rejected": true, "reason": "Decision deferred"}
+```
+
+A host-side rendering or input failure can be returned as a structured interaction error:
+
+```json
+{"type": "extension_ui_response", "id": "uuid-question-1", "error": "Question UI failed"}
+```
+
+Question requests have no implicit timeout. `abort`, session replacement/reload, input disconnect, and process shutdown cancel the pending request. Unknown response ids produce an RPC error instead of resolving another request.
+
 #### notify
 
 Display a notification. Fire-and-forget, no response expected.
@@ -1310,7 +1371,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ### Extension UI Responses (stdin)
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods and `askUserQuestion`. The `id` must match the request.
 
 #### Value response (select, input, editor)
 
@@ -1324,13 +1385,43 @@ Responses are sent for dialog methods only (`select`, `confirm`, `input`, `edito
 {"type": "extension_ui_response", "id": "uuid-2", "confirmed": true}
 ```
 
-#### Cancellation response (any dialog)
+#### Structured question response (`askUserQuestion`)
 
-Dismiss any dialog method. The extension receives `undefined` (for select/input/editor) or `false` (for confirm).
+```json
+{"type":"extension_ui_response","id":"uuid-question-1","answers":[{"header":"Library","selectedLabels":["React"]}]}
+```
+
+#### Rejection response (`askUserQuestion`)
+
+```json
+{"type":"extension_ui_response","id":"uuid-question-1","rejected":true,"reason":"Decision deferred"}
+```
+
+#### Cancellation response (any dialog or question)
+
+Dismiss any dialog method or built-in question. Extensions receive `undefined`/`false`; `ask_user_question` receives structured `cancelled` status.
 
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
+
+### RpcClient question callback
+
+The TypeScript `RpcClient` can answer built-in question requests without manually handling JSONL:
+
+```typescript
+const client = new RpcClient({
+  questionHandler: async (request) => ({
+    status: "answered",
+    answers: request.questions.map((question) => ({
+      header: question.header,
+      selectedLabels: [question.options[0].label],
+    })),
+  }),
+});
+```
+
+You can replace or clear the handler with `client.setQuestionHandler(handler)`. If no handler is configured, `RpcClient` immediately returns `cancelled: true` so an embedded process does not hang. Lower-level RPC clients that read JSONL directly remain responsible for answering `askUserQuestion` requests.
 
 ## Error Handling
 

@@ -2,6 +2,10 @@ import type { ResourceExtensionPaths, ResourceLoader, ResourceLoaderSkillProject
 import { createSkillAllowlistOverride, type SkillResourceSet } from "../skill-registry.ts";
 import type { AgentProfile } from "./agent-profile.ts";
 
+export const CONTROLLED_AGENT_CLARIFICATION_PROTOCOL = `If the task cannot be completed without user clarification, do not ask interactively. Return exactly one machine-readable block in the final response:
+<clarification_request>{"version":1,"questions":[{"question":"A focused question","options":["Option A","Option B"]}]}</clarification_request>
+Use 1-4 questions and 2-4 concrete options per question. Do not request secrets.`;
+
 function getRawSkills(loader: ResourceLoader): SkillResourceSet {
 	const projection = loader.getSkillProjection?.();
 	if (projection) return projection.raw;
@@ -29,7 +33,7 @@ export function createControlledResourceLoader(base: ResourceLoader, profile: Ag
 		getPrompts: () => base.getPrompts(),
 		getThemes: () => base.getThemes(),
 		getAgentsFiles: () => base.getAgentsFiles(),
-		getSystemPrompt: () => profile.systemPrompt,
+		getSystemPrompt: () => `${profile.systemPrompt}\n\n${CONTROLLED_AGENT_CLARIFICATION_PROTOCOL}`,
 		getAppendSystemPrompt: () => [],
 		// Child extensions are not allowed to mutate the Coordinator's resource set.
 		extendResources: (_paths: ResourceExtensionPaths) => {},

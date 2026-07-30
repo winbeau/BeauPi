@@ -84,6 +84,7 @@ import {
 } from "../../core/model-resolver.ts";
 import { MONITOR_SESSION_ENTRY_TYPE } from "../../core/monitor/index.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import type { QuestionInteractionRequest, QuestionInteractionResponse } from "../../core/question.ts";
 import {
 	EXECUTION_TARGET_VERSION,
 	type ExecutionTargetConfig,
@@ -138,6 +139,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { QuestionSelectorComponent } from "./components/question-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -1674,6 +1676,7 @@ export class InteractiveMode {
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
+		this.session.setQuestionInteractionHandler((request, signal) => this.showQuestionInteraction(request, signal));
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
@@ -2529,6 +2532,30 @@ export class InteractiveMode {
 			this.showWarning(message);
 		} else {
 			this.showStatus(message);
+		}
+	}
+
+	private async showQuestionInteraction(
+		request: QuestionInteractionRequest,
+		signal: AbortSignal | undefined,
+	): Promise<QuestionInteractionResponse> {
+		if (signal?.aborted) return { status: "cancelled" };
+		let abortHandler: (() => void) | undefined;
+		try {
+			return await this.showExtensionCustom<QuestionInteractionResponse>((tui, _theme, keybindings, done) => {
+				abortHandler = () => done({ status: "cancelled" });
+				signal?.addEventListener("abort", abortHandler, { once: true });
+				return new QuestionSelectorComponent({
+					tui,
+					keybindings,
+					request,
+					externalEditorCommand: this.settingsManager.getExternalEditorCommand(),
+					onSubmit: (answers) => done({ status: "answered", answers }),
+					onCancel: () => done({ status: "cancelled" }),
+				});
+			});
+		} finally {
+			if (abortHandler) signal?.removeEventListener("abort", abortHandler);
 		}
 	}
 

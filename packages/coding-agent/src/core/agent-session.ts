@@ -108,6 +108,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { RemoteExecutionRuntime } from "./remote/runtime.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { attachSearchRuntimeToolDetails, getSearchRuntimeToolDetails } from "./search/index.ts";
@@ -222,7 +223,7 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
-	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
+	/** Initial active built-in tool names. Defaults to coding, document, and ask_user_question tools. */
 	initialActiveToolNames?: string[];
 	/** Disable the default document tools while retaining the existing built-in registry. */
 	disableDocumentTools?: boolean;
@@ -245,6 +246,8 @@ export interface AgentSessionConfig {
 	documentRuntime?: DocumentRuntime;
 	/** Optional in-process child-agent pool owned by this Coordinator session. */
 	agentPool?: AgentPool;
+	/** Session-bound interactive question runtime. */
+	questionRuntime?: QuestionRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
 	/** Optional M7 remote runtime. Created here when omitted. */
@@ -332,12 +335,14 @@ export class AgentSession {
 	readonly settingsManager: SettingsManager;
 	readonly taskLedger: TaskLedger;
 	readonly documentRuntime: DocumentRuntime;
+	readonly questionRuntime: QuestionRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
+	private _unsubscribeQuestionRuntime?: () => void;
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
 	private _pendingPromptPreflights = new Set<Promise<void>>();
@@ -416,6 +421,10 @@ export class AgentSession {
 			cwd: config.sessionManager.getCwd(),
 			entries: config.sessionManager.getBranch(),
 		});
+		this.questionRuntime = config.questionRuntime ?? new QuestionRuntime();
+		this._unsubscribeQuestionRuntime = this.questionRuntime.subscribe((pending) => {
+			this.taskLedger.setPendingInteraction(pending);
+		});
 		this.documentRuntime =
 			config.documentRuntime ??
 			new DocumentRuntime({
@@ -478,6 +487,10 @@ export class AgentSession {
 
 	get agentPool(): AgentPool | undefined {
 		return this._agentPool;
+	}
+
+	setQuestionInteractionHandler(handler: QuestionInteractionHandler | undefined): void {
+		this.questionRuntime.setHandler(handler);
 	}
 
 	/** Validate the branch-restored contract before the first provider request. */
@@ -962,6 +975,7 @@ export class AgentSession {
 			this.abortCompaction();
 			this.abortBranchSummary();
 			this.abortBash();
+			this.questionRuntime.cancelPending();
 			this.agent.abort();
 			void this.remoteRuntime.dispose();
 			this.monitorRuntime.dispose();
@@ -974,6 +988,8 @@ export class AgentSession {
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
+		this._unsubscribeQuestionRuntime?.();
+		this._unsubscribeQuestionRuntime = undefined;
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
 	}
@@ -1764,6 +1780,7 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		this.abortRetry();
+		this.questionRuntime.cancelPending();
 		this.agent.abort();
 		if (this._pendingPromptPreflights.size > 0 && this._extensionCommandExecutionDepth === 0) {
 			await Promise.all(this._pendingPromptPreflights);
@@ -2796,6 +2813,7 @@ export class AgentSession {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
 					documentRuntime: this.documentRuntime,
+					questionRuntime: this.questionRuntime,
 				});
 		if (this._disableDocumentTools) {
 			delete baseToolDefinitions.docs_search;
@@ -2829,7 +2847,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "docs_search", "docs_read", "docs_resolve_task"];
+			: ["read", "bash", "edit", "write", "docs_search", "docs_read", "docs_resolve_task", "ask_user_question"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -2838,6 +2856,7 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
+		this.questionRuntime.cancelPending();
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();

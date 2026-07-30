@@ -59,6 +59,7 @@
 - TUI 外模式必须通过 SDK/RPC 回调处理或明确返回 `interaction_required`，不得无限等待键盘输入
 - Coordinator 是唯一直接询问用户的 Agent；子 Agent 只返回结构化 clarification request
 - Tool result 只保存问题、答案和必要 annotation，不保存独立对话 transcript
+- M9 已实现：结果 `version: 1`，状态为 `answered`、`cancelled`、`rejected`、`interaction_required` 或 `interaction_error`；每题答案保留 `header`、`selectedLabels`、可选 `customAnswer` 和可选 `notes`
 
 ### 执行可视化
 

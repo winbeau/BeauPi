@@ -26,6 +26,8 @@ export {
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
 export {
+	type AgentClarificationQuestion,
+	type AgentClarificationRequest,
 	type AgentLifecycleEvent,
 	type AgentLifecycleEventListener,
 	type AgentLifecycleEventType,
@@ -104,6 +106,7 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export * from "./monitor/index.ts";
+export * from "./question.ts";
 export * from "./remote/index.ts";
 export {
 	DefaultResourceLoader,
@@ -182,6 +185,7 @@ export {
 	type TaskCompletionCriterionState,
 	type TaskDocumentContractSnapshot,
 	type TaskDocumentItemStatus,
+	type TaskInteractionRecord,
 	TaskLedger,
 	type TaskLedgerSnapshot,
 	type TaskLedgerToolDetails,

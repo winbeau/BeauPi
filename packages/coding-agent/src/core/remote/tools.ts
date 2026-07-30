@@ -1,7 +1,8 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Text } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { createBashToolDefinition } from "../tools/bash.ts";
@@ -92,9 +93,86 @@ function toolResult(
 	};
 }
 
-function renderCall(name: string, summary: string, currentTheme: Theme, targetId?: string): Text {
-	const target = targetId ? currentTheme.fg("muted", ` [${targetId}]`) : "";
-	return new Text(`${currentTheme.fg("toolTitle", currentTheme.bold(name))}${target}(${summary})`, 0, 0);
+const REMOTE_OUTPUT_PREVIEW_LINES = 10;
+
+function singleLineSummary(value: string, emptyFallback = "…"): string {
+	const summary = value
+		.replace(/[ \t]*(?:\r\n|\r|\n)[ \t]*/g, " ")
+		.replace(/\t/g, "   ")
+		.trim();
+	return summary || emptyFallback;
+}
+
+function literalInputSummary(value: string): string {
+	return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") || "(empty input)";
+}
+
+class RemoteCallRenderComponent implements Component {
+	private name = "";
+	private summary = "";
+	private currentTheme: Theme | undefined;
+
+	setCall(name: string, summary: string, currentTheme: Theme): void {
+		this.name = name;
+		this.summary = singleLineSummary(summary);
+		this.currentTheme = currentTheme;
+	}
+
+	render(width: number): string[] {
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (availableWidth === 0 || !this.currentTheme) return [];
+
+		const title = this.currentTheme.fg("toolTitle", this.currentTheme.bold(this.name));
+		const prefix = `${title}(`;
+		const suffix = ")";
+		const summaryWidth = availableWidth - visibleWidth(prefix) - visibleWidth(suffix);
+		if (summaryWidth <= 0) return [truncateToWidth(title, availableWidth, "…")];
+
+		const summary = this.currentTheme.fg("toolOutput", this.summary);
+		return [`${prefix}${truncateToWidth(summary, summaryWidth, "…")}${suffix}`];
+	}
+
+	invalidate(): void {}
+}
+
+class RemoteOutputRenderComponent implements Component {
+	private text = "";
+	private expanded = false;
+	private currentTheme: Theme | undefined;
+
+	setOutput(text: string, expanded: boolean, currentTheme: Theme): void {
+		this.text = text;
+		this.expanded = expanded;
+		this.currentTheme = currentTheme;
+	}
+
+	render(width: number): string[] {
+		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+		if (availableWidth === 0 || !this.text || !this.currentTheme) return [];
+
+		const lines = new Text(this.text, 0, 0).render(availableWidth);
+		if (this.expanded || lines.length <= REMOTE_OUTPUT_PREVIEW_LINES) return lines;
+
+		const hidden = lines.length - REMOTE_OUTPUT_PREVIEW_LINES;
+		const hint =
+			this.currentTheme.fg("muted", `… (${hidden} more lines, ${lines.length} total,`) +
+			` ${keyHint("app.tools.expand", "to expand")}${this.currentTheme.fg("muted", ")")}`;
+		return [...lines.slice(0, REMOTE_OUTPUT_PREVIEW_LINES), truncateToWidth(hint, availableWidth, "…")];
+	}
+
+	invalidate(): void {}
+}
+
+function renderCall(
+	name: string,
+	summary: string,
+	currentTheme: Theme,
+	lastComponent?: Component,
+): RemoteCallRenderComponent {
+	const component =
+		lastComponent instanceof RemoteCallRenderComponent ? lastComponent : new RemoteCallRenderComponent();
+	component.setCall(name, summary, currentTheme);
+	return component;
 }
 
 function renderOutput(text: string, currentTheme: Theme): string {
@@ -104,7 +182,30 @@ function renderOutput(text: string, currentTheme: Theme): string {
 		.join("\n");
 }
 
-function renderResult(result: AgentToolResult<RemoteToolDetails>, currentTheme: Theme): Text {
+function textComponent(text: string, lastComponent?: Component): Text {
+	const component = lastComponent instanceof Text ? lastComponent : new Text("", 0, 0);
+	component.setText(text);
+	return component;
+}
+
+function boundedOutputComponent(
+	text: string,
+	expanded: boolean,
+	currentTheme: Theme,
+	lastComponent?: Component,
+): RemoteOutputRenderComponent {
+	const component =
+		lastComponent instanceof RemoteOutputRenderComponent ? lastComponent : new RemoteOutputRenderComponent();
+	component.setOutput(text, expanded, currentTheme);
+	return component;
+}
+
+function renderResult(
+	result: AgentToolResult<RemoteToolDetails>,
+	expanded: boolean,
+	currentTheme: Theme,
+	lastComponent?: Component,
+): Component {
 	const details = result.details;
 	const diagnostic = details.diagnostic
 		? currentTheme.fg("error", `${details.diagnostic.code}: ${details.diagnostic.message}`)
@@ -113,7 +214,21 @@ function renderResult(result: AgentToolResult<RemoteToolDetails>, currentTheme: 
 		const output = [details.stdout, details.stderr].filter((value): value is string => Boolean(value)).join("\n");
 		const content = result.content.map((item) => (item.type === "text" ? item.text : "")).join("");
 		const body = output || (!details.diagnostic ? content || `exit ${details.exitCode ?? 0}` : "");
-		return new Text([diagnostic, body ? renderOutput(body, currentTheme) : ""].filter(Boolean).join("\n"), 0, 0);
+		return boundedOutputComponent(
+			[diagnostic, body ? renderOutput(body, currentTheme) : ""].filter(Boolean).join("\n"),
+			expanded,
+			currentTheme,
+			lastComponent,
+		);
+	}
+	if (details.operation === "terminal_capture") {
+		const content = result.content.map((item) => (item.type === "text" ? item.text : "")).join("");
+		return boundedOutputComponent(
+			[diagnostic, content ? renderOutput(content, currentTheme) : ""].filter(Boolean).join("\n"),
+			expanded,
+			currentTheme,
+			lastComponent,
+		);
 	}
 	const summary = [
 		details.status,
@@ -122,7 +237,7 @@ function renderResult(result: AgentToolResult<RemoteToolDetails>, currentTheme: 
 	]
 		.filter(Boolean)
 		.join(" · ");
-	return new Text(
+	return textComponent(
 		diagnostic ||
 			(summary
 				? renderOutput(summary, currentTheme)
@@ -130,8 +245,7 @@ function renderResult(result: AgentToolResult<RemoteToolDetails>, currentTheme: 
 						result.content.map((item) => (item.type === "text" ? item.text : "")).join(""),
 						currentTheme,
 					)),
-		0,
-		0,
+		lastComponent,
 	);
 }
 
@@ -176,9 +290,15 @@ function createTargetSelectTool(
 				return result;
 			}
 		},
-		renderCall: (args, currentTheme) => renderCall("Target Select", args.targetId, currentTheme),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall("Target Select", args.targetId, currentTheme, context.lastComponent),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -225,10 +345,15 @@ function createRemoteExecTool(
 				return errorResult("remote_exec", error);
 			}
 		},
-		renderCall: (args, currentTheme) =>
-			renderCall("Remote Exec", args.command, currentTheme, args.targetId ?? runtime.selectedTarget?.id),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall("Remote Exec", args.command, currentTheme, context.lastComponent),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -262,15 +387,18 @@ function createTerminalCreateTool(
 				return errorResult("terminal_create", error);
 			}
 		},
-		renderCall: (args, currentTheme) =>
-			renderCall(
-				"Terminal Create",
-				args.terminalId ?? "tmux",
+		renderCall: (args, currentTheme, context) => {
+			const terminalId = args.terminalId ?? "tmux";
+			const summary = args.command ? `${terminalId} · ${singleLineSummary(args.command)}` : terminalId;
+			return renderCall("Terminal Create", summary, currentTheme, context.lastComponent);
+		},
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
 				currentTheme,
-				args.targetId ?? runtime.selectedTarget?.id,
+				context.lastComponent,
 			),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -296,9 +424,20 @@ function createTerminalSendTool(
 				return errorResult("terminal_send", error);
 			}
 		},
-		renderCall: (args, currentTheme) => renderCall("Terminal Send", args.terminalId, currentTheme),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall(
+				"Terminal Send",
+				`${args.terminalId} · ${literalInputSummary(args.input)}`,
+				currentTheme,
+				context.lastComponent,
+			),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -333,9 +472,15 @@ function createTerminalCaptureTool(
 				return errorResult("terminal_capture", error);
 			}
 		},
-		renderCall: (args, currentTheme) => renderCall("Terminal Capture", args.terminalId, currentTheme),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall("Terminal Capture", args.terminalId, currentTheme, context.lastComponent),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -368,9 +513,15 @@ function createTerminalStatusTool(
 				return errorResult("terminal_status", error);
 			}
 		},
-		renderCall: (args, currentTheme) => renderCall("Terminal Status", args.terminalId, currentTheme),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall("Terminal Status", args.terminalId, currentTheme, context.lastComponent),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -397,9 +548,15 @@ function createTerminalCloseTool(
 				return errorResult("terminal_close", error);
 			}
 		},
-		renderCall: (args, currentTheme) => renderCall("Terminal Close", args.terminalId, currentTheme),
-		renderResult: (result, _options, currentTheme) =>
-			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
+		renderCall: (args, currentTheme, context) =>
+			renderCall("Terminal Close", args.terminalId, currentTheme, context.lastComponent),
+		renderResult: (result, options, currentTheme, context) =>
+			renderResult(
+				result as AgentToolResult<RemoteToolDetails>,
+				options.expanded,
+				currentTheme,
+				context.lastComponent,
+			),
 	};
 }
 
@@ -416,6 +573,13 @@ export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): To
 		operations: runtime.createBashOperations(),
 		exposeSessionEnvironment: false,
 	});
+	const remoteBash = rename(bash, "remote_bash");
+	remoteBash.renderCall = (args, currentTheme, context) => {
+		const input = args as { command?: unknown; timeout?: unknown };
+		const command = typeof input.command === "string" ? input.command : "";
+		const timeout = typeof input.timeout === "number" ? ` · timeout ${input.timeout}s` : "";
+		return renderCall("Remote Bash", `${singleLineSummary(command)}${timeout}`, currentTheme, context.lastComponent);
+	};
 	return [
 		createTargetSelectTool(runtime),
 		createRemoteExecTool(runtime),
@@ -427,7 +591,7 @@ export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): To
 		rename(read, "remote_read"),
 		rename(write, "remote_write"),
 		rename(edit, "remote_edit"),
-		rename(bash, "remote_bash"),
+		remoteBash,
 	] as ToolDefinition[];
 }
 

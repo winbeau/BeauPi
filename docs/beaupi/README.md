@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0–M8 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux 和联网搜索闭环。当前优先主线为 M9 Claude Code 风格询问选择框；Policy Engine、Workflow、自动唤醒和 sudo 后置。
+当前进度：M0–M9 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索和 `ask_user_question` 询问选择闭环。当前优先主线为 M10 Policy Engine；Workflow、自动唤醒和 sudo 后置。
 
 ## 文档
 
@@ -30,14 +30,15 @@ BeauPi 是一个文档驱动、工具优先、支持多 Agent 协作的终端编
 
 ## 当前优先级
 
-M5–M8 已交付四个可直接使用的能力闭环：
+M5–M9 已交付五个可直接使用的能力闭环：
 
 1. 进程内 `delegate_task` 子 Agent
 2. 本地进程、Tool 和子 Agent 的 Monitor 监控、增量日志和状态恢复
 3. SSH/tmux 远程执行，并复用同一 Monitor Runtime
 4. 单一 SearXNG Provider 的 `web_search`/`web_fetch`、共享缓存、稳定引用和严格预算
+5. 内置 `ask_user_question` 的单选、多选、Other、notes、多问题 review、Markdown preview 及 SDK/RPC 回调
 
-下一步是 M9 Claude Code 风格询问选择框：新增 `ask_user_question`，支持单选、多选、自由输入、多问题导航和可选 Markdown 预览，并复用现有 AgentSession、Tool registry、selector/keybinding 和 minimal TUI 生命周期。M10 再实现 Policy Engine，集中处理重复命令、失败预算和本地/远程/网络 fallback。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。自动唤醒和 sudo 继续后置。
+下一步是 M10 Policy Engine，集中处理重复命令、失败预算和本地/远程/网络 fallback。M9 已复用现有 AgentSession、Tool registry、InteractiveMode custom UI、Editor、Markdown、keybinding、Session 和 Task Ledger 生命周期，没有创建第二套输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。自动唤醒和 sudo 继续后置。
 
 ## 实现策略
 

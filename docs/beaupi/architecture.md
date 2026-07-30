@@ -185,11 +185,13 @@ AgentSession
 
 输入限定为 1–4 个唯一问题，每个问题包含不超过 12 个显示字符的 header、2–4 个唯一选项、单选/多选标记和可选 preview。普通问题由 UI 自动提供“其他”自由输入，不允许模型重复构造 `Other` 选项。
 
-单问题单选在选择后直接完成；多问题或多选保留每题状态，通过 tab/左右键切换并在最终 review 后提交。所有按键使用现有可配置 keybinding，Esc 返回结构化 cancelled/rejected 状态。可选 preview 只支持不可信 Markdown 文本，不执行 HTML、脚本或代码；窄终端退化为纵向选项和折叠 preview。
+单问题单选在选择后直接完成；多问题或多选保留每题状态，通过 tab/左右键切换并在最终 review 后提交。所有按键使用现有可配置 keybinding；Esc 返回结构化 `cancelled`，SDK/RPC host 还可明确返回 `rejected`。可选 preview 只支持不可信 Markdown 文本，不执行 HTML、脚本或代码；窄终端退化为纵向选项和折叠 preview。
 
 TUI 外模式不能等待不存在的键盘输入：SDK/RPC 可提供 interaction callback，否则 Tool 返回结构化 `interaction_required`。受控子 Agent 默认没有该 Tool，只能把 clarification request 返回 Coordinator，由 Coordinator 决定是否询问用户。
 
 参考 `../claude-code/` 中的 `AskUserQuestionTool`、`AskUserQuestionPermissionRequest`、`QuestionView`、`QuestionNavigationBar`、`SubmitQuestionsView` 和 preview 组件重新实现行为；只提炼交互和布局，不复制 React/Ink 代码或品牌资源。
+
+M9 已落地为 Session-bound `QuestionRuntime`：Tool result 继续走普通 Agent message/Session JSONL 生命周期，Task Ledger 从当前 branch 重建完成交互事实，并只在实际等待回答时投影一个 `owner: user` 的 blocked Todo。InteractiveMode 使用现有 custom UI editor replacement/focus 恢复；RPC 复用现有 `extension_ui_request`/`extension_ui_response` id 关联；Print/JSON 和无 handler SDK 不读取 stdin，立即返回 `interaction_required`。受控子 Agent 在 Tool allowlist 和 custom Tool 投影后仍硬排除 `ask_user_question`，并通过 `<clarification_request>` 结果约定返回机器可读澄清请求。
 
 ## Policy Engine
 

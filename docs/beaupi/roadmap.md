@@ -8,14 +8,14 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M8 已完成。近期开发只推进阶段 10（M9）Claude Code 风格询问选择框：
+M0–M9 已完成。近期开发推进阶段 11（M10）Policy Engine：
 
-1. 增加结构化 `ask_user_question`，支持 1–4 个问题、单选、多选和自由输入。
-2. 复用现有 AgentSession、Tool registry、InteractiveMode selector、editor 和 keybinding，不创建第二套输入循环。
-3. 对齐 Claude Code 的问题 tab、回答标记、review/submit、可选 Markdown preview 和窄终端降级。
-4. M10 再推进 Policy Engine；之后才是 Workflow、后台自动唤醒和 sudo。
+1. 集中分类重复命令、权限、认证、网络、超时和失败。
+2. 为本地、远程和网络 fallback 建立确定性预算与 block/confirm/replace/pause 结果。
+3. 复用 M9 的稳定交互接口处理 Policy confirm，但不把普通澄清问题与权限确认混为同一结果类型。
+4. Policy Engine 稳定后再推进 Workflow、后台自动唤醒和 sudo。
 
-M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；它不会调用 Shell fallback。模型主动绕过专用 Tool 的通用阻断仍属于 M10 Policy Engine，不在 M9 询问选择框阶段提前实现。
+M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；M9 已提供 `ask_user_question` 的完整 TUI、SDK/RPC、Session、Task Ledger 和 AgentPool 边界。模型主动绕过专用 Tool 的通用阻断仍属于 M10 Policy Engine。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -183,6 +183,8 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 ## 阶段 10：Claude Code 风格询问选择框
 
+状态：已完成（2026-07-30）。
+
 - 新增结构化 `ask_user_question` Tool，标记为 read-only、requires-user-interaction
 - 输入支持 1–4 个唯一问题；每题包含不超过 12 个显示字符的 header、明确 question 和 2–4 个唯一选项
 - 支持单选、多选和普通问题自动追加的 `Other` 自由输入
@@ -205,6 +207,8 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 不纳入 M9 第一版：图片粘贴、Plan interview 专用动作、HTML preview、Channel relay 或新的 Plan Mode。
 
 验收：faux Coordinator 调用 `ask_user_question` 后，用户可以完成单选、多选、Other 输入、多问题切换、review/submit 和取消；结构化答案回到同一 Tool call 后 Agent 继续；TUI 外模式不会挂起；暗色/亮色及 40/80/120/160 列无横向溢出。
+
+M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案结果、Session-bound Question Runtime、Claude 风格 selector、Markdown preview、可配置问题键位、minimal Tool 状态、SDK handler、RPC `askUserQuestion` 请求响应、Task Ledger interaction facts/pending Todo，以及受控子 Agent 的 Tool 硬排除与结构化 clarification request。Print/JSON 和无 handler SDK 立即返回 `interaction_required`；取消、拒绝、abort、重叠调用和 handler 错误均以确定性结构化状态结束。
 
 ## 阶段 11：Policy Engine
 
@@ -308,10 +312,10 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 3. 文档发现与读取（已完成）
 4. Skill Registry 和 `/skills`（已完成）
 5. 进程内 `delegate_task`（已完成）
-6. Monitor Runtime、增量日志和运行状态可视化
-7. SSH/tmux 远程执行并接入 Monitor Runtime
-8. 一个搜索 Provider
-9. Claude Code 风格 `ask_user_question` 询问选择框
+6. Monitor Runtime、增量日志和运行状态可视化（已完成）
+7. SSH/tmux 远程执行并接入 Monitor Runtime（已完成）
+8. 一个搜索 Provider（已完成）
+9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
 10. Policy Engine：重复命令、失败预算和等价 fallback 阻断
 
-当前已连续完成子 Agent、Monitor、SSH/tmux 和联网搜索闭环。下一步只推进询问选择框；之后再推进 Policy Engine，且不增加专用 Git Tools。不要提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。
+当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索和询问选择闭环。下一步只推进 Policy Engine，且不增加专用 Git Tools。不要提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。

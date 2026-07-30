@@ -89,6 +89,18 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows) | Paste image from clipboard |
 
+### Question Selector
+
+Used by the built-in `ask_user_question` Tool. Option movement reuses `tui.select.up` and `tui.select.down`; cancellation reuses `tui.select.cancel`; the Other/notes editor reuses `app.editor.external`.
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.question.next` | `tab`, `right` | Move to the next question or review |
+| `app.question.previous` | `shift+tab`, `left` | Move to the previous question |
+| `app.question.toggle` | `space` | Toggle the focused multi-select option |
+| `app.question.notes` | `n` | Edit optional notes for the current question |
+| `app.question.submit` | `enter` | Confirm a single selection, advance a multi-select question, or submit review |
+
 ### Sessions
 
 | Keybinding id | Default | Description |

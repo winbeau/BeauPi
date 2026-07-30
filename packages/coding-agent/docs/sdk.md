@@ -492,8 +492,8 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
-- Default built-ins: `read`, `bash`, `edit`, `write`
+- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`
+- Default built-ins include coding, document, and `ask_user_question`; runtime-specific search, remote, monitor, and AgentPool tools are added when configured
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
@@ -515,7 +515,7 @@ const { session } = await createAgentSession({
 
 // Disable one tool while keeping the rest available
 const { session } = await createAgentSession({
-  excludeTools: ["ask_question"],
+  excludeTools: ["ask_user_question"],
 });
 ```
 
@@ -543,6 +543,48 @@ const { session } = await createAgentSession({
 ```
 
 > See [examples/sdk/05-tools.ts](../examples/sdk/05-tools.ts)
+
+#### Interactive questions
+
+`ask_user_question` is a built-in sequential Tool. TUI mode installs BeauPi's question selector automatically. An SDK host can provide an in-process handler with `questionHandler`:
+
+```typescript
+import {
+  createAgentSession,
+  type QuestionInteractionHandler,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
+
+const questionHandler: QuestionInteractionHandler = async (request, signal) => {
+  if (signal?.aborted) return { status: "cancelled" };
+
+  // Render request.questions in the host UI, then return one answer per question.
+  return {
+    status: "answered",
+    answers: request.questions.map((question) => ({
+      header: question.header,
+      selectedLabels: [question.options[0].label],
+    })),
+  };
+};
+
+const { session } = await createAgentSession({
+  sessionManager: SessionManager.inMemory(),
+  questionHandler,
+});
+```
+
+Question results use `version: 1` and one of these statuses:
+
+- `answered`: `answers` contains one structured answer per question
+- `cancelled`: the user or abort signal cancelled the interaction
+- `rejected`: the user or host explicitly declined to answer
+- `interaction_required`: no handler is available
+- `interaction_error`: validation or host interaction failed
+
+Each answer contains `header`, `selectedLabels`, optional `customAnswer`, and optional `notes`. Inputs are bounded to 1–4 questions and 2–4 options per question. The runtime adds the Other choice, so callers must not supply an `Other`/`其他` equivalent label.
+
+If neither `questionHandler` nor an injected `questionRuntime` is provided, the Tool returns `interaction_required` immediately. It never reads stdin. `runPrintMode()` clears question handlers for both text and JSON output, so those modes always remain non-interactive. Use `excludeTools: ["ask_user_question"]` to remove it entirely. Controlled AgentPool children never receive this Tool; they return a machine-readable `clarificationRequest` through `delegate_task` instead.
 
 ### Custom Tools
 
@@ -604,7 +646,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator, and `delegate_task` is always excluded from child tools even when it exists in the global registry. Subscribe through `session.agentPool` for stable lifecycle/progress events.
+When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Both `delegate_task` and `ask_user_question` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead. Subscribe through `session.agentPool` for stable lifecycle/progress events.
 
 ### Extensions
 
@@ -1198,6 +1240,16 @@ createCodingTools
 createReadOnlyTools
 createReadTool, createBashTool, createEditTool, createWriteTool
 createGrepTool, createFindTool, createLsTool
+createAskUserQuestionToolDefinition, QuestionRuntime
+
+// Question interaction
+QUESTION_RESULT_VERSION
+QUESTION_LIMITS
+type QuestionInteractionHandler
+type QuestionInteractionRequest
+type QuestionInteractionResponse
+type QuestionAnswer
+type QuestionResult
 
 // Types
 type CreateAgentSessionOptions

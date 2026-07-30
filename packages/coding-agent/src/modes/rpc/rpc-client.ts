@@ -10,9 +10,17 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { QuestionInteractionResponse } from "../../core/question.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
+import type {
+	RpcCommand,
+	RpcExtensionUIRequest,
+	RpcExtensionUIResponse,
+	RpcResponse,
+	RpcSessionState,
+	RpcSlashCommand,
+} from "./rpc-types.ts";
 
 // ============================================================================
 // Types
@@ -37,6 +45,8 @@ export interface RpcClientOptions {
 	model?: string;
 	/** Additional CLI arguments */
 	args?: string[];
+	/** Handler for built-in ask_user_question RPC requests. Missing handlers cancel immediately. */
+	questionHandler?: RpcQuestionHandler;
 }
 
 export interface ModelInfo {
@@ -47,6 +57,10 @@ export interface ModelInfo {
 }
 
 export type RpcEventListener = (event: AgentSessionEvent) => void;
+export type RpcQuestionRequest = Extract<RpcExtensionUIRequest, { method: "askUserQuestion" }>;
+export type RpcQuestionHandler = (
+	request: RpcQuestionRequest,
+) => QuestionInteractionResponse | Promise<QuestionInteractionResponse>;
 
 // ============================================================================
 // RPC Client
@@ -59,12 +73,15 @@ export class RpcClient {
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	private requestId = 0;
+	private questionHandler: RpcQuestionHandler | undefined;
+	private questionGeneration = 0;
 	private stderr = "";
 	private exitError: Error | null = null;
 	private options: RpcClientOptions;
 
 	constructor(options: RpcClientOptions = {}) {
 		this.options = options;
+		this.questionHandler = options.questionHandler;
 	}
 
 	/**
@@ -146,6 +163,7 @@ export class RpcClient {
 
 		this.stopReadingStdout?.();
 		this.stopReadingStdout = null;
+		this.questionGeneration++;
 		this.process.kill("SIGTERM");
 
 		// Wait for process to exit
@@ -176,6 +194,11 @@ export class RpcClient {
 				this.eventListeners.splice(index, 1);
 			}
 		};
+	}
+
+	setQuestionHandler(handler: RpcQuestionHandler | undefined): void {
+		this.questionGeneration++;
+		this.questionHandler = handler;
 	}
 
 	/**
@@ -216,6 +239,7 @@ export class RpcClient {
 	 * Abort current operation.
 	 */
 	async abort(): Promise<void> {
+		this.questionGeneration++;
 		await this.send({ type: "abort" });
 	}
 
@@ -225,6 +249,7 @@ export class RpcClient {
 	 * @returns Object with `cancelled: true` if an extension cancelled the new session
 	 */
 	async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
+		this.questionGeneration++;
 		const response = await this.send({ type: "new_session", parentSession });
 		return this.getData(response);
 	}
@@ -367,6 +392,7 @@ export class RpcClient {
 	 * @returns Object with `cancelled: true` if an extension cancelled the switch
 	 */
 	async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+		this.questionGeneration++;
 		const response = await this.send({ type: "switch_session", sessionPath });
 		return this.getData(response);
 	}
@@ -376,6 +402,7 @@ export class RpcClient {
 	 * @returns Object with `text` (the message text) and `cancelled` (if extension cancelled)
 	 */
 	async fork(entryId: string): Promise<{ text: string; cancelled: boolean }> {
+		this.questionGeneration++;
 		const response = await this.send({ type: "fork", entryId });
 		return this.getData(response);
 	}
@@ -385,6 +412,7 @@ export class RpcClient {
 	 * @returns Object with `cancelled: true` if an extension cancelled the clone
 	 */
 	async clone(): Promise<{ cancelled: boolean }> {
+		this.questionGeneration++;
 		const response = await this.send({ type: "clone" });
 		return this.getData(response);
 	}
@@ -516,6 +544,11 @@ export class RpcClient {
 				return;
 			}
 
+			if (data.type === "extension_ui_request" && data.method === "askUserQuestion") {
+				void this.handleQuestionRequest(data as RpcQuestionRequest);
+				return;
+			}
+
 			// Otherwise it's an event
 			for (const listener of this.eventListeners) {
 				listener(data as AgentSessionEvent);
@@ -523,6 +556,32 @@ export class RpcClient {
 		} catch {
 			// Ignore non-JSON lines
 		}
+	}
+
+	private async handleQuestionRequest(request: RpcQuestionRequest): Promise<void> {
+		const generation = this.questionGeneration;
+		let response: QuestionInteractionResponse = { status: "cancelled" };
+		try {
+			response = this.questionHandler ? await this.questionHandler(request) : response;
+		} catch (error) {
+			response = { status: "error", diagnostic: error instanceof Error ? error.message : String(error) };
+		}
+		if (generation !== this.questionGeneration) return;
+		if (!this.process?.stdin?.writable || this.process.stdin.destroyed || this.exitError) return;
+		const rpcResponse: RpcExtensionUIResponse =
+			response.status === "answered"
+				? { type: "extension_ui_response", id: request.id, answers: response.answers }
+				: response.status === "error"
+					? { type: "extension_ui_response", id: request.id, error: response.diagnostic }
+					: response.status === "rejected"
+						? {
+								type: "extension_ui_response",
+								id: request.id,
+								rejected: true,
+								...(response.diagnostic ? { reason: response.diagnostic } : {}),
+							}
+						: { type: "extension_ui_response", id: request.id, cancelled: true };
+		this.process.stdin.write(serializeJsonLine(rpcResponse));
 	}
 
 	private createProcessExitError(code: number | null, signal: NodeJS.Signals | null): Error {

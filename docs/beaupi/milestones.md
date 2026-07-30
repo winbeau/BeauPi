@@ -487,6 +487,8 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 ## M9：Claude Code 风格询问选择框
 
+状态：已完成（2026-07-30）。
+
 ### 目标
 
 让 Agent 在存在真实歧义或需要用户偏好时，通过结构化 Tool 显示 Claude Code 风格的询问选择框，并把用户选择作为当前 Tool call 的确定性结果继续执行。
@@ -533,6 +535,17 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 ### 验收标准
 
 用户可以只用键盘完成单选、多选、Other 输入、多问题 review 和取消；结构化答案回到原 Tool call 后 Agent 继续；TUI 外模式不挂起；所有布局在窄终端下无横向溢出。
+
+### 验收记录（2026-07-30）
+
+- `ask_user_question` 使用严格 TypeBox schema：1–4 题、12 字符 header、2–4 个选项、无额外字段；Runtime 复验 NFKC、header/label 唯一性、内置 Other 冲突、单选 preview 限制和总 preview 预算。
+- Session-bound `QuestionRuntime` 串行化交互，处理 answered/cancelled/rejected/interaction-required/interaction-error、AbortSignal、重叠请求和 handler 异常；无 handler 时立即返回，不读取 stdin。
+- InteractiveMode 复用现有 custom UI、Editor、Markdown、Theme 和焦点恢复，支持单选、多选、Other、notes、问题 tab、answered 标记、review、preview confirmation、外部编辑器以及宽/窄布局。
+- `app.question.next/previous/toggle/notes/submit` 已进入统一 keybinding；选项导航、取消和外部编辑器继续复用现有 TUI/app action。
+- Tool result 走普通 message/Session JSONL 生命周期；Task Ledger 从当前 branch 重建精简 interaction facts，仅在等待回答时投影一个用户 blocked Todo，并通过 Compact/branch 测试验证恢复。
+- RPC 复用 `extension_ui_request`/`extension_ui_response`，新增 `askUserQuestion` 和同 id answers/cancelled/rejected/error 响应；`RpcClient` 提供可控 callback。SDK 提供 `questionHandler`/`questionRuntime`。
+- Coordinator 默认启用；AgentPool 在 allowlist、custom Tool 和 `excludeTools` 三层硬排除该 Tool，子 Agent system prompt/result 使用机器可读 `<clarification_request>`。
+- faux provider、fake RPC child、可控时钟和 fake TUI 覆盖 schema、错误、顺序、Session/Compact/branch、SDK、RPC、AgentPool、renderer、CJK、Markdown 和窄终端。
 
 ---
 
@@ -696,10 +709,10 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 ## 当前推荐开发入口
 
-M0–M8 已形成连续能力闭环。下一阶段只推进 M9：
+M0–M9 已形成连续能力闭环。下一阶段只推进 M10：
 
-1. 复用现有 AgentSession、Tool registry、InteractiveMode selector、editor、keybinding 和 minimal Tool renderer，实现 `ask_user_question`。
-2. 先闭环单选、多选、Other、多问题 review、preview、TUI 外 interaction callback 和 Session branch 恢复。
-3. 不提前实现 M10 Policy Engine、M11 Workflow、M12 自动唤醒或 M13 sudo。
+1. 复用现有 Tool hooks、Task Ledger、Monitor、Remote/Search Runtime 和 M9 interaction callback，实现统一 Policy Decision。
+2. 先闭环重复命令、失败预算和本地/远程/网络 fallback 的 block/confirm/replace/pause。
+3. 不提前实现 M11 Workflow、M12 自动唤醒或 M13 sudo，也不增加专用 Git Tools。
 
-不要创建第二套 Runtime、Session、ResourceLoader、Task Ledger 或 Tool 执行链。Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。
+不要创建第二套 Runtime、Session、ResourceLoader、Task Ledger 或 Tool 执行链。M9 的问题 selector、Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。

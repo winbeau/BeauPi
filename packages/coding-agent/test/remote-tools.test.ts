@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import type { ExtensionContext, ToolRenderContext } from "../src/core/extensions/types.ts";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
 import {
 	createRemoteToolDefinitions,
@@ -13,6 +14,7 @@ import {
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 const cleanup: string[] = [];
 beforeAll(() => initTheme(undefined, false));
@@ -116,14 +118,16 @@ describe("M7 remote tools", () => {
 		} as never;
 		const call = setup.definitions.remote_exec.renderCall?.({ command: "printf tool-ok" } as never, theme, context);
 		expect(call?.render(160).join("\n")).toContain("Remote Exec");
-		expect(call?.render(160).join("\n")).toContain("[fake]");
+		expect(call?.render(160).join("\n")).not.toContain("[fake]");
 		expect(call?.render(160).join("\n")).toContain("printf tool-ok");
 		const explicitCall = setup.definitions.remote_exec.renderCall?.(
 			{ command: "pwd", targetId: "fake-two" } as never,
 			theme,
 			context,
 		);
-		expect(explicitCall?.render(160).join("\n")).toContain("[fake-two]");
+		const explicitCallText = stripAnsi(explicitCall?.render(160).join("\n") ?? "");
+		expect(explicitCallText).toContain("Remote Exec(pwd)");
+		expect(explicitCallText).not.toContain("[fake-two]");
 		const rendered = setup.definitions.remote_exec.renderResult?.(
 			result as never,
 			{ expanded: false, isPartial: false },
@@ -133,6 +137,94 @@ describe("M7 remote tools", () => {
 		const lines = rendered?.render(160).join("\n") ?? "";
 		expect(lines).toContain("tool-ok");
 		expect(lines).not.toContain("Full log:");
+	});
+
+	it("renders SSH and tmux calls on one line and bounds output previews", async () => {
+		const setup = await createSetup();
+		await execute(setup.definitions.target_select, { targetId: "fake" });
+		const command = `printf first\nprintf '${"long-command-segment ".repeat(12)}'\nprintf last`;
+		const output = Array.from({ length: 15 }, (_, index) => `output line ${index + 1}`).join("\n");
+		setup.adapter.setCommandResult(`cd '/workspace' && ${command}`, { stdout: output, exitCode: 0 });
+		const result = await execute(setup.definitions.remote_exec, { command });
+		const context = {
+			args: { command },
+			toolCallId: "m7-render-compact",
+			invalidate: () => {},
+			lastComponent: undefined,
+			state: {},
+			cwd: setup.cwd,
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+			expanded: false,
+			showImages: true,
+			isError: false,
+		} satisfies ToolRenderContext<Record<string, never>, { command: string }>;
+
+		const call = setup.definitions.remote_exec.renderCall?.({ command } as never, theme, context);
+		const callLines = call?.render(72) ?? [];
+		expect(callLines).toHaveLength(1);
+		expect(visibleWidth(callLines[0] ?? "")).toBeLessThanOrEqual(72);
+		const callText = stripAnsi(callLines[0] ?? "");
+		expect(callText).toMatch(/^Remote Exec\(/);
+		expect(callText).toContain("…)");
+		expect(callText).not.toContain("[fake]");
+		expect(callText).not.toContain("\n");
+
+		const rendered = setup.definitions.remote_exec.renderResult?.(
+			result as never,
+			{ expanded: false, isPartial: false },
+			theme,
+			context,
+		);
+		const previewLines = rendered?.render(100) ?? [];
+		const previewText = stripAnsi(previewLines.join("\n"));
+		expect(previewLines).toHaveLength(11);
+		expect(previewText).toContain("output line 10");
+		expect(previewText).not.toContain("output line 11");
+		expect(previewText).toContain("5 more lines, 15 total");
+
+		const expanded = setup.definitions.remote_exec.renderResult?.(
+			result as never,
+			{ expanded: true, isPartial: false },
+			theme,
+			{ ...context, expanded: true, lastComponent: rendered } as never,
+		);
+		expect(stripAnsi(expanded?.render(100).join("\n") ?? "")).toContain("output line 15");
+
+		const terminalCreateCall = setup.definitions.terminal_create.renderCall?.(
+			{ terminalId: "build", command } as never,
+			theme,
+			context,
+		);
+		expect(terminalCreateCall?.render(64)).toHaveLength(1);
+		expect(stripAnsi(terminalCreateCall?.render(64)[0] ?? "")).toContain("Terminal Create(");
+
+		const terminalSendCall = setup.definitions.terminal_send.renderCall?.(
+			{ terminalId: "build", input: "echo ready\n" } as never,
+			theme,
+			context,
+		);
+		expect(terminalSendCall?.render(64)).toHaveLength(1);
+		expect(stripAnsi(terminalSendCall?.render(64)[0] ?? "")).toContain("echo ready\\n");
+
+		await execute(setup.definitions.terminal_create, { terminalId: "capture-preview" });
+		await execute(setup.definitions.terminal_send, { terminalId: "capture-preview", input: output });
+		const capture = await execute(setup.definitions.terminal_capture, { terminalId: "capture-preview" });
+		const captureRendered = setup.definitions.terminal_capture.renderResult?.(
+			capture as never,
+			{ expanded: false, isPartial: false },
+			theme,
+			{ ...context, args: { terminalId: "capture-preview" } } as never,
+		);
+		const capturePreview = stripAnsi(captureRendered?.render(100).join("\n") ?? "");
+		expect(capturePreview).toContain("output line 10");
+		expect(capturePreview).not.toContain("output line 11");
+		expect(capturePreview).toContain("5 more lines, 15 total");
+
+		const remoteBashCall = setup.definitions.remote_bash.renderCall?.({ command } as never, theme, context);
+		expect(remoteBashCall?.render(64)).toHaveLength(1);
+		expect(stripAnsi(remoteBashCall?.render(64)[0] ?? "")).toContain("Remote Bash(");
 	});
 
 	it("keeps remote command failure structured and exposes operation adapters", async () => {

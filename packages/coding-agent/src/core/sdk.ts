@@ -15,6 +15,7 @@ import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
@@ -60,7 +61,7 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (coding and document tools)
+	 * - "builtin": disable the default built-in tools (coding, document, and question tools)
 	 *   but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
@@ -76,6 +77,10 @@ export interface CreateAgentSessionOptions {
 	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
+	/** In-process handler for ask_user_question. Without one, the tool returns interaction_required immediately. */
+	questionHandler?: QuestionInteractionHandler;
+	/** Inject a session-bound Question Runtime, primarily for deterministic tests and custom hosts. */
+	questionRuntime?: QuestionRuntime;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -327,6 +332,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_search",
 		"docs_read",
 		"docs_resolve_task",
+		"ask_user_question",
 		"web_search",
 		"web_fetch",
 		...(childAgentPool ? ["delegate_task"] : []),
@@ -479,6 +485,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentDir,
 			resourceLoader,
 		});
+	const questionRuntime = options.questionRuntime ?? new QuestionRuntime({ handler: options.questionHandler });
+	if (options.questionRuntime && options.questionHandler) questionRuntime.setHandler(options.questionHandler);
 	const session = new AgentSession({
 		agent,
 		sessionManager,
@@ -497,6 +505,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 		documentRuntime,
+		questionRuntime,
 		remoteRuntime,
 	});
 	await session.initializeDocumentRuntime();

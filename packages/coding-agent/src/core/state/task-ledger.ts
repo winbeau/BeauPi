@@ -12,6 +12,7 @@ import {
 	type Requirement,
 } from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
+import type { PendingQuestionInteraction } from "../question.ts";
 import {
 	getSearchRuntimeToolDetails,
 	type SearchBudgetSnapshot,
@@ -82,6 +83,15 @@ export interface FailureRecord {
 	commandId: string;
 	toolName: string;
 	status: "failed" | "cancelled";
+	timestamp: number;
+}
+
+export interface TaskInteractionRecord {
+	id: string;
+	requestId: string;
+	status: "answered" | "cancelled" | "rejected";
+	questionHeaders: string[];
+	answerSummaries: string[];
 	timestamp: number;
 }
 
@@ -166,6 +176,7 @@ export interface TaskLedgerSnapshot {
 	filesModified: readonly string[];
 	failures: readonly FailureRecord[];
 	network: readonly NetworkToolRecord[];
+	interactions: readonly TaskInteractionRecord[];
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -200,6 +211,7 @@ const TOOL_LABELS = Object.freeze({
 	web_search: "Web Search",
 	web_fetch: "Fetch",
 	delegate_task: "Agent",
+	ask_user_question: "Question",
 	workflow_run: "Workflow",
 	background_start: "Background",
 	monitor_attach: "Monitor Attach",
@@ -241,6 +253,59 @@ function asStringArray(value: unknown): string[] {
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
+}
+
+function conciseInteractionValue(value: string): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	const characters = [...normalized];
+	return characters.length > 120 ? `${characters.slice(0, 119).join("")}…` : normalized;
+}
+
+function getQuestionInteractionRecord(
+	details: unknown,
+	args: unknown,
+	fallbackTimestamp: number,
+): TaskInteractionRecord | undefined {
+	const record = asRecord(details);
+	if (record?.version !== 1 || typeof record.requestId !== "string" || !Array.isArray(record.answers))
+		return undefined;
+	if (record.status !== "answered" && record.status !== "cancelled" && record.status !== "rejected") return undefined;
+	const answers = record.answers
+		.map(asRecord)
+		.filter((answer): answer is Record<string, unknown> => answer !== undefined);
+	const answeredHeaders = answers
+		.map((answer) => answer.header)
+		.filter((header): header is string => typeof header === "string" && header.length > 0);
+	const questionHeaders =
+		answeredHeaders.length > 0
+			? answeredHeaders
+			: Array.isArray(asRecord(args)?.questions)
+				? (asRecord(args)?.questions as unknown[])
+						.map(asRecord)
+						.map((question) => question?.header)
+						.filter((header): header is string => typeof header === "string" && header.length > 0)
+				: [];
+	const answerSummaries = answers.map((answer) => {
+		const header = typeof answer.header === "string" ? answer.header : "Question";
+		const selectedLabels = asStringArray(answer.selectedLabels).map(conciseInteractionValue);
+		const customAnswer =
+			typeof answer.customAnswer === "string" ? conciseInteractionValue(answer.customAnswer) : undefined;
+		const values = [...selectedLabels, ...(customAnswer ? [`Other: ${customAnswer}`] : [])];
+		const notes = typeof answer.notes === "string" && answer.notes.trim().length > 0 ? " (notes supplied)" : "";
+		return `${conciseInteractionValue(header)}: ${values.join(", ")}${notes}`;
+	});
+	const createdAt = typeof record.createdAt === "string" ? Date.parse(record.createdAt) : Number.NaN;
+	return {
+		id: `interaction:${record.requestId}`,
+		requestId: record.requestId,
+		status: record.status,
+		questionHeaders,
+		answerSummaries:
+			answerSummaries.length > 0
+				? answerSummaries
+				: questionHeaders.map((header) => `${conciseInteractionValue(header)}: ${record.status}`),
+		timestamp: Number.isNaN(createdAt) ? fallbackTimestamp : createdAt,
+	};
 }
 
 function messageTimestamp(entry: SessionEntry): number {
@@ -510,8 +575,10 @@ export class TaskLedger {
 	private readonly fileModifications = new Map<string, FileModificationRecord>();
 	private readonly failures = new Map<string, FailureRecord>();
 	private readonly networkRecords = new Map<string, NetworkToolRecord>();
+	private readonly interactionRecords = new Map<string, TaskInteractionRecord>();
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
+	private pendingInteraction: PendingQuestionInteraction | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -530,8 +597,10 @@ export class TaskLedger {
 		this.fileModifications.clear();
 		this.failures.clear();
 		this.networkRecords.clear();
+		this.interactionRecords.clear();
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
+		this.pendingInteraction = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
@@ -691,6 +760,13 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	setPendingInteraction(pending: PendingQuestionInteraction | undefined): void {
+		if (!pending && !this.pendingInteraction) return;
+		if (pending && this.pendingInteraction?.requestId === pending.requestId) return;
+		this.pendingInteraction = pending ? structuredClone(pending) : undefined;
+		this.revision++;
+	}
+
 	getToolDetails(toolCallId: string): TaskLedgerToolDetails | undefined {
 		const record = this.commands.get(`tool:${toolCallId}`);
 		if (!record || record.status === "queued" || record.status === "running") return undefined;
@@ -712,9 +788,23 @@ export class TaskLedger {
 		const fileModifications = [...this.fileModifications.values()].map((record) => ({ ...record }));
 		const failures = [...this.failures.values()].map((record) => ({ ...record }));
 		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
+		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
+		const todos = this.buildTodos(commands, filesModified, verification, now);
+		if (this.pendingInteraction) {
+			todos.push({
+				id: `interaction:${this.pendingInteraction.requestId}`,
+				label: `Answer required: ${this.pendingInteraction.questions.map((question) => question.header).join(", ")}`,
+				status: "blocked",
+				sequence: -100,
+				updatedAt: Date.parse(this.pendingInteraction.createdAt) || now,
+				owner: "user",
+				blockedBy: ["user response"],
+				source: "ask_user_question",
+			});
+		}
 		return {
 			taskId: this.taskId,
 			phase: this.phase,
@@ -728,8 +818,9 @@ export class TaskLedger {
 			filesModified,
 			failures,
 			network,
+			interactions,
 			verification,
-			todos: this.buildTodos(commands, filesModified, verification, now),
+			todos,
 			documentContract,
 		};
 	}
@@ -845,12 +936,22 @@ export class TaskLedger {
 				timestamp: metadata?.endedAt ?? endedAt,
 			});
 		}
+		const interaction =
+			toolName === "ask_user_question" ? getQuestionInteractionRecord(details, record.args, endedAt) : undefined;
+		if (interaction) this.interactionRecords.set(interaction.id, interaction);
+		const resultStatus =
+			toolName === "ask_user_question" &&
+			(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
+				? "cancelled"
+				: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
+					? "failed"
+					: fallbackStatus;
 		const suppliedFilesRead =
-			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, fallbackStatus);
+			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, resultStatus);
 		const suppliedFilesModified =
-			metadata?.filesModified ?? this.extractFilesModified(toolName, record.args, details, fallbackStatus);
+			metadata?.filesModified ?? this.extractFilesModified(toolName, record.args, details, resultStatus);
 		return this.applyFinalFacts(record, {
-			status: metadata?.status ?? fallbackStatus,
+			status: metadata?.status ?? resultStatus,
 			endedAt: metadata?.endedAt ?? endedAt,
 			filesRead: suppliedFilesRead,
 			filesModified: suppliedFilesModified,

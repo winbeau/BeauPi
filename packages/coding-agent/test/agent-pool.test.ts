@@ -116,7 +116,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 					{
 						id: "controlled",
 						systemPrompt: "CONTROLLED PROFILE",
-						toolAllowlist: ["read", "edit", "write", "delegate_task", "custom_allowed"],
+						toolAllowlist: ["read", "edit", "write", "delegate_task", "ask_user_question", "custom_allowed"],
 						skillAllowlist: { allow: ["allowed-skill"] },
 						allowFileModifications: false,
 					},
@@ -149,9 +149,40 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(seenTools).not.toContain("edit");
 		expect(seenTools).not.toContain("write");
 		expect(seenTools).not.toContain("delegate_task");
+		expect(seenTools).not.toContain("ask_user_question");
 		expect(seenSystemPrompt).toContain("CONTROLLED PROFILE");
+		expect(seenSystemPrompt).toContain("<clarification_request>");
 		expect(seenSystemPrompt).toContain("allowed-skill");
 		expect(seenSystemPrompt).not.toContain("blocked-skill");
+	});
+
+	it("returns machine-readable clarification requests without exposing the interactive question tool", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [
+					{
+						id: "clarifier",
+						systemPrompt: "Clarify when required",
+						toolAllowlist: ["ask_user_question"],
+					},
+				],
+				defaultProfile: "clarifier",
+			},
+		});
+		harness.setResponses([
+			(context) => {
+				expect(context.tools?.map((tool) => tool.name)).not.toContain("ask_user_question");
+				return fauxAssistantMessage(
+					'<clarification_request>{"version":1,"questions":[{"question":"Which target?","options":["A","B"]}]}</clarification_request>',
+				);
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Do an ambiguous task" });
+		expect(result.clarificationRequest).toEqual({
+			version: 1,
+			questions: [{ question: "Which target?", options: ["A", "B"] }],
+		});
 	});
 
 	it("enforces turn and token budgets with structured errors", async () => {

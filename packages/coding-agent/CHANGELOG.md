@@ -16,6 +16,7 @@
 - Added the M6 session-scoped MonitorRuntime and MonitorRegistry with deterministic Process/Tool/Sub-Agent records, fake adapters, the reserved SSH/tmux adapter interface, six `monitor_*` Tools, cursor/hash incremental logs, lifecycle event deduplication, and Session restoration loss handling.
 - Added the interactive `/target-server` command for creating and updating user/project SSH execution targets, persisting non-secret OpenSSH configuration, and selecting the saved target immediately.
 - Added the BeauPi M8 web research loop with a configurable SearXNG provider, `web_search` and SSRF-safe `web_fetch` Tools, shared query/URL caching, stable citations, content-hash deduplication, deterministic network budgets, Task Ledger evidence, and controlled sub-agent access.
+- Added BeauPi M9 `ask_user_question` with strict bounded schemas, single/multi-select, built-in Other and notes editors, multi-question review, Markdown preview, configurable keybindings, versioned Session/Task Ledger facts, SDK/RPC callbacks, and controlled sub-agent clarification boundaries.
 
 ### Changed
 
@@ -29,7 +30,8 @@
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
 - Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
-- Changed the BeauPi roadmap to schedule a Claude Code-style `ask_user_question` selector before the Policy Engine, with single/multi-select, free-text, multi-question review, optional Markdown previews, and non-interactive lifecycle boundaries.
+- Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
+- Changed the BeauPi roadmap to mark the Claude Code-style `ask_user_question` selector complete and advance the active milestone to the Policy Engine.
 
 ### Fixed
 

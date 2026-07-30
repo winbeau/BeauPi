@@ -25,6 +25,11 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import {
+	type QuestionInteractionRequest,
+	type QuestionInteractionResponse,
+	validateQuestionAnswers,
+} from "../../core/question.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -81,6 +86,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		{ resolve: (value: any) => void; reject: (error: Error) => void }
 	>();
 
+	const cancelPendingExtensionRequests = (): void => {
+		for (const [id, pending] of pendingExtensionRequests) {
+			pendingExtensionRequests.delete(id);
+			pending.resolve({ type: "extension_ui_response", id, cancelled: true });
+		}
+	};
+
 	// Shutdown request flag
 	let shutdownRequested = false;
 	let shuttingDown = false;
@@ -127,6 +139,31 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
+	}
+
+	function createQuestionPromise(
+		request: QuestionInteractionRequest,
+		signal: AbortSignal | undefined,
+	): Promise<QuestionInteractionResponse> {
+		return createDialogPromise(
+			{ signal },
+			{ status: "cancelled" },
+			{ method: "askUserQuestion", requestId: request.requestId, questions: request.questions },
+			(response): QuestionInteractionResponse => {
+				if ("cancelled" in response && response.cancelled) return { status: "cancelled" };
+				if ("rejected" in response && response.rejected) {
+					return { status: "rejected", ...(response.reason ? { diagnostic: response.reason } : {}) };
+				}
+				if ("error" in response) return { status: "error", diagnostic: response.error };
+				if (!("answers" in response))
+					return { status: "error", diagnostic: "RPC question response omitted answers" };
+				try {
+					return { status: "answered", answers: validateQuestionAnswers(request.questions, response.answers) };
+				} catch (error) {
+					return { status: "error", diagnostic: error instanceof Error ? error.message : String(error) };
+				}
+			},
+		);
 	}
 
 	/**
@@ -314,7 +351,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	});
 
 	const rebindSession = async (): Promise<void> => {
+		cancelPendingExtensionRequests();
 		session = runtimeHost.session;
+		session.setQuestionInteractionHandler(createQuestionPromise);
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -338,6 +377,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return runtimeHost.switchSession(sessionPath, options);
 				},
 				reload: async () => {
+					cancelPendingExtensionRequests();
 					await session.reload();
 				},
 			},
@@ -730,6 +770,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		cancelPendingExtensionRequests();
 		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();
@@ -772,6 +813,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			if (pending) {
 				pendingExtensionRequests.delete(response.id);
 				pending.resolve(response);
+			} else {
+				output(
+					error(undefined, "extension_ui_response", `Unknown extension UI request id: ${String(response.id)}`),
+				);
+				await waitForRawStdoutBackpressure();
 			}
 			return;
 		}

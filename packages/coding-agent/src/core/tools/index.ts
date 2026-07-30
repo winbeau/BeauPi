@@ -1,4 +1,27 @@
 export {
+	ASK_USER_QUESTION_PARAMETERS,
+	ASK_USER_QUESTION_TOOL_NAME,
+	type AskUserQuestionInput,
+	createAskUserQuestionToolDefinition,
+	type PendingQuestionInteraction,
+	QUESTION_ANSWER_SCHEMA,
+	QUESTION_LIMITS,
+	QUESTION_OPTION_SCHEMA,
+	QUESTION_RESULT_SCHEMA,
+	QUESTION_RESULT_VERSION,
+	QUESTION_SCHEMA,
+	type QuestionAnswer,
+	type QuestionInteractionHandler,
+	type QuestionInteractionRequest,
+	type QuestionInteractionResponse,
+	type QuestionOption,
+	type QuestionResult,
+	QuestionRuntime,
+	type QuestionRuntimeOptions,
+	type UserQuestion,
+	validateQuestionAnswers,
+} from "../question.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -84,6 +107,7 @@ export {
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { DocumentRuntime } from "../documents/document-runtime.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { createAskUserQuestionToolDefinition, type QuestionRuntime } from "../question.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import {
 	createDocsReadToolDefinition,
@@ -110,7 +134,8 @@ export type ToolName =
 	| "ls"
 	| "docs_search"
 	| "docs_read"
-	| "docs_resolve_task";
+	| "docs_resolve_task"
+	| "ask_user_question";
 export const allToolNames: Set<string> = new Set([
 	"read",
 	"bash",
@@ -122,6 +147,7 @@ export const allToolNames: Set<string> = new Set([
 	"docs_search",
 	"docs_read",
 	"docs_resolve_task",
+	"ask_user_question",
 	"web_search",
 	"web_fetch",
 ]);
@@ -135,6 +161,7 @@ export interface ToolsOptions {
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
 	documentRuntime?: DocumentRuntime;
+	questionRuntime?: QuestionRuntime;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -159,6 +186,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createDocsReadToolDefinition(options?.documentRuntime);
 		case "docs_resolve_task":
 			return createDocsResolveTaskToolDefinition(options?.documentRuntime);
+		case "ask_user_question":
+			return createAskUserQuestionToolDefinition(options?.questionRuntime);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -183,6 +212,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 		case "docs_search":
 		case "docs_read":
 		case "docs_resolve_task":
+		case "ask_user_question":
 			return wrapToolDefinition(createToolDefinition(toolName, cwd, options));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
@@ -198,6 +228,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 		createDocsSearchToolDefinition(options?.documentRuntime),
 		createDocsReadToolDefinition(options?.documentRuntime),
 		createDocsResolveTaskToolDefinition(options?.documentRuntime),
+		createAskUserQuestionToolDefinition(options?.questionRuntime),
 	];
 }
 
@@ -225,6 +256,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		docs_search: createDocsSearchToolDefinition(options?.documentRuntime),
 		docs_read: createDocsReadToolDefinition(options?.documentRuntime),
 		docs_resolve_task: createDocsResolveTaskToolDefinition(options?.documentRuntime),
+		ask_user_question: createAskUserQuestionToolDefinition(options?.questionRuntime),
 	};
 }
 
@@ -234,6 +266,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 		createBashTool(cwd, options?.bash),
 		createEditTool(cwd, options?.edit),
 		createWriteTool(cwd, options?.write),
+		wrapToolDefinition(createAskUserQuestionToolDefinition(options?.questionRuntime)),
 	];
 }
 
@@ -258,5 +291,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		docs_search: wrapToolDefinition(createDocsSearchToolDefinition(options?.documentRuntime)),
 		docs_read: wrapToolDefinition(createDocsReadToolDefinition(options?.documentRuntime)),
 		docs_resolve_task: wrapToolDefinition(createDocsResolveTaskToolDefinition(options?.documentRuntime)),
+		ask_user_question: wrapToolDefinition(createAskUserQuestionToolDefinition(options?.questionRuntime)),
 	};
 }
