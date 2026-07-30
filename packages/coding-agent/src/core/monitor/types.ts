@@ -62,6 +62,10 @@ export interface SubAgentMonitorTarget {
 export interface SshTmuxMonitorTarget {
 	kind: "ssh-tmux";
 	targetId?: string;
+	/** M7 resource tracked by this record. M6 attachments may omit it. */
+	resource?: "connection" | "command" | "terminal";
+	/** Stable operation/terminal id, never an auth credential. */
+	operationId?: string;
 	sessionId?: string;
 	logPath?: string;
 }
@@ -128,6 +132,7 @@ export interface MonitorAdapterSnapshot {
 	availability: "confirmed" | "missing" | "unknown";
 	running?: boolean;
 	healthy?: boolean;
+	cancelled?: boolean;
 	exitCode?: number;
 	exitReason?: string;
 	lastActivityAt?: number;

@@ -190,6 +190,7 @@ export class FooterComponent implements Component {
 		const cwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
 		const branch = this.footerData.getGitBranch();
 		const sessionName = this.session.sessionManager.getSessionName();
+		const selectedTarget = this.session.remoteRuntime?.selectedTarget;
 		const taskLedger = this.session.taskLedger.getSnapshot();
 		const monitorSummary = this.session.monitorRuntime?.getSummary();
 		const hasTaskActivity = taskLedger.startedAt !== undefined || taskLedger.commands.length > 0;
@@ -234,6 +235,7 @@ export class FooterComponent implements Component {
 				},
 				{ text: modifiedFiles ? theme.fg("dim", modifiedFiles) : "", separator: " · ", priority: 2 },
 				{ text: sessionName ? theme.fg("dim", sessionName) : "", separator: " · ", priority: 2 },
+				{ text: selectedTarget ? theme.fg("dim", `ssh:${selectedTarget.id}`) : "", separator: " · ", priority: 2 },
 				{ text: verification ? theme.fg("dim", verification) : "", separator: " · ", priority: 0 },
 				{
 					text: documentContract

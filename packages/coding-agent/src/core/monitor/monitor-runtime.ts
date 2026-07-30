@@ -255,6 +255,13 @@ export class MonitorRuntime {
 		return this.records.size;
 	}
 
+	/** Replace one adapter before or during M7 runtime binding without creating another registry. */
+	setAdapter(kind: MonitorKind, adapter: MonitorAdapter): void {
+		if (adapter.kind !== kind)
+			throw new Error(`Monitor adapter kind mismatch: expected ${kind}, got ${adapter.kind}`);
+		this.adapters.set(kind, adapter);
+	}
+
 	getSummary(): MonitorSummary {
 		const summary: MonitorSummary = {
 			total: this.records.size,
@@ -590,11 +597,11 @@ export class MonitorRuntime {
 			factsChanged = true;
 		}
 		if (snapshot.running === false) {
-			const status = snapshot.exitCode === 0 ? "completed" : "failed";
+			const status = snapshot.cancelled ? "cancelled" : snapshot.exitCode === 0 ? "completed" : "failed";
 			const stateChanged = this.transition(
 				record,
 				status,
-				status === "completed" ? "completed" : "failed",
+				status === "cancelled" ? "cancelled" : status === "completed" ? "completed" : "failed",
 				{
 					exitCode: snapshot.exitCode,
 					exitReason: snapshot.exitReason ?? (status === "completed" ? "exit_0" : "exit_nonzero"),

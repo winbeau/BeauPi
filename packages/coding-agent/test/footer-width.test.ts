@@ -30,6 +30,7 @@ function createSession(options: {
 	filesModified?: string[];
 	verificationStatus?: TaskVerificationStatus;
 	monitors?: MonitorRecord[];
+	selectedTargetId?: string;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -86,6 +87,11 @@ function createSession(options: {
 		getContextUsage: () => ({ tokens: 24_600, contextWindow: 200_000, percent: 12.3 }),
 		modelRuntime: {
 			isUsingOAuth: () => false,
+		},
+		remoteRuntime: {
+			selectedTarget: options.selectedTargetId
+				? { id: options.selectedTargetId, scope: "session", sshAlias: "h100-server" }
+				: undefined,
 		},
 		monitorRuntime: {
 			getSummary: () => ({
@@ -289,6 +295,18 @@ describe("FooterComponent width handling", () => {
 		for (const width of [80, 120, 160]) {
 			const lines = footer.render(width).map(stripAnsi);
 			expect(lines[0]).toContain("mon 0 run · 1 attention");
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("shows a selected SSH target without overflowing at responsive widths", () => {
+		const footer = new FooterComponent(
+			createSession({ sessionName: "", selectedTargetId: "h100-server" }),
+			createFooterData(1),
+		);
+		for (const width of [80, 120, 160]) {
+			const lines = footer.render(width).map(stripAnsi);
+			expect(lines[0]).toContain("ssh:h100-server");
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});

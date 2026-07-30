@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { ExecutionTargetConfig } from "./remote/types.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -104,6 +105,7 @@ export interface Settings {
 	enableInstallTelemetry?: boolean; // default: true - anonymous version/update ping after changelog-detected updates
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
+	executionTargets?: ExecutionTargetConfig[];
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -964,6 +966,22 @@ export class SettingsManager {
 			this.markModified("trackingId");
 		}
 		this.save();
+	}
+
+	getExecutionTargets(): ExecutionTargetConfig[] {
+		return structuredClone(this.settings.executionTargets ?? []);
+	}
+
+	setExecutionTargets(targets: ExecutionTargetConfig[]): void {
+		this.globalSettings.executionTargets = structuredClone(targets);
+		this.markModified("executionTargets");
+		this.save();
+	}
+
+	setProjectExecutionTargets(targets: ExecutionTargetConfig[]): void {
+		this.updateProjectSettings("executionTargets", (settings) => {
+			settings.executionTargets = structuredClone(targets);
+		});
 	}
 
 	getPackages(): PackageSource[] {

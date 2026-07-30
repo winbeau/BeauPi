@@ -108,6 +108,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+import { RemoteExecutionRuntime } from "./remote/runtime.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -245,6 +246,8 @@ export interface AgentSessionConfig {
 	agentPool?: AgentPool;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
+	/** Optional M7 remote runtime. Created here when omitted. */
+	remoteRuntime?: RemoteExecutionRuntime;
 }
 
 export interface ExtensionBindings {
@@ -390,6 +393,7 @@ export class AgentSession {
 	private _modelRuntime: ModelRuntime;
 	private _agentPool?: AgentPool;
 	readonly monitorRuntime: MonitorRuntime;
+	readonly remoteRuntime: RemoteExecutionRuntime;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -432,6 +436,15 @@ export class AgentSession {
 				cwd: config.cwd,
 				sessionManager: config.sessionManager,
 				agentPool: this._agentPool,
+			});
+		this.remoteRuntime =
+			config.remoteRuntime ??
+			new RemoteExecutionRuntime({
+				cwd: config.cwd,
+				sessionId: config.sessionManager.getSessionId(),
+				sessionManager: config.sessionManager,
+				settingsManager: config.settingsManager,
+				monitorRuntime: this.monitorRuntime,
 			});
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
@@ -946,6 +959,7 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.agent.abort();
+			void this.remoteRuntime.dispose();
 			this.monitorRuntime.dispose();
 			this._agentPool?.dispose();
 		} catch {

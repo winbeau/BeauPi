@@ -1,0 +1,56 @@
+export {
+	classifyConnectionFailure,
+	FakeSshTmuxAdapter,
+	OpenSshTmuxAdapter,
+	type OpenSshTmuxAdapterOptions,
+	safeDiagnosticText,
+	shellQuote,
+} from "./adapter.ts";
+export {
+	incrementalCapture,
+	type RemoteExecResult,
+	RemoteExecutionRuntime,
+	type RemoteExecutionRuntimeOptions,
+	redactCommand,
+	redactOutput,
+	type TerminalCaptureResult,
+	type TerminalCreateResult,
+	type TerminalStatusResult,
+} from "./runtime.ts";
+export {
+	ExecutionTargetRegistry,
+	type ExecutionTargetRegistryOptions,
+	type ExecutionTargetValidationResult,
+	validateExecutionTarget,
+} from "./targets.ts";
+export {
+	createRemoteToolDefinitions,
+	type RemoteToolDetails,
+	remoteExecSchema,
+	targetSelectSchema,
+	terminalCaptureSchema,
+	terminalCloseSchema,
+	terminalCreateSchema,
+	terminalSendSchema,
+	terminalStatusSchema,
+} from "./tools.ts";
+export {
+	EXECUTION_TARGET_VERSION,
+	type ExecutionTargetConfig,
+	type ExecutionTargetScope,
+	REMOTE_TARGET_SESSION_ENTRY_TYPE,
+	type RemoteCommandOptions,
+	type RemoteCommandResult,
+	type RemoteConnectionSnapshot,
+	type RemoteDiagnostic,
+	type RemoteDiagnosticCode,
+	RemoteExecutionError,
+	type RemoteMonitorRecord,
+	type RemoteOperationResult,
+	type SelectedExecutionTarget,
+	type SshConnection,
+	type SshTmuxAdapter,
+	type SshTmuxMonitorTarget,
+	type TmuxCreateOptions,
+	type TmuxStatus,
+} from "./types.ts";

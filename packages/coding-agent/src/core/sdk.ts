@@ -15,6 +15,7 @@ import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -91,6 +92,8 @@ export interface CreateAgentSessionOptions {
 	agentPool?: AgentPoolConfig | false;
 	/** Inject a session-scoped Monitor Runtime, primarily for deterministic tests. */
 	monitorRuntime?: MonitorRuntime;
+	/** Inject a session-scoped M7 remote runtime, primarily for deterministic tests. */
+	remoteRuntime?: RemoteExecutionRuntime;
 }
 
 /** Result from createAgentSession */
@@ -271,11 +274,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			agentPool: childAgentPool,
 		});
+	const remoteRuntime =
+		options.remoteRuntime ??
+		new RemoteExecutionRuntime({
+			cwd,
+			sessionId: sessionManager.getSessionId(),
+			sessionManager,
+			settingsManager,
+			monitorRuntime,
+		});
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
+	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
 	const customTools = [...(options.customTools ?? [])];
 	if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
 	for (const monitorTool of monitorTools) {
 		if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
+	}
+	for (const remoteTool of remoteTools) {
+		if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
 	}
 	const defaultActiveToolNames: string[] = [
 		"read",
@@ -286,6 +302,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_read",
 		"docs_resolve_task",
 		...(childAgentPool ? ["delegate_task"] : []),
+		"target_select",
+		"remote_exec",
+		"terminal_create",
+		"terminal_send",
+		"terminal_capture",
+		"terminal_status",
+		"terminal_close",
+		"remote_read",
+		"remote_write",
+		"remote_edit",
+		"remote_bash",
 	];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
@@ -442,6 +469,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 		documentRuntime,
+		remoteRuntime,
 	});
 	await session.initializeDocumentRuntime();
 	await session.initializeMonitorRuntime();
