@@ -219,7 +219,7 @@ Execution targets are non-secret SSH configuration entries used by the built-in 
 }
 ```
 
-`sshAlias` is resolved by OpenSSH, so existing `~/.ssh/config`, SSH Agent, and `known_hosts` configuration are reused. Do not put credentials in settings.
+`sshAlias` is resolved by OpenSSH, so existing `~/.ssh/config`, SSH Agent, and `known_hosts` configuration are reused. `remoteCwd` may be a safe relative POSIX path resolved from the remote user's `~`, or an absolute POSIX path such as `/workspace`. Do not put credentials in settings.
 
 ### Sessions
 

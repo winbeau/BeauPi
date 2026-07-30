@@ -15,7 +15,7 @@ export interface ExecutionTargetConfig {
 	sshAlias: string;
 	user?: string;
 	port?: number;
-	/** Default directory used for relative remote paths and tmux sessions. */
+	/** Default directory used for relative remote paths and tmux sessions; relative values resolve from the remote user's home. */
 	remoteCwd?: string;
 	connectTimeoutMs?: number;
 	controlPersistSeconds?: number;

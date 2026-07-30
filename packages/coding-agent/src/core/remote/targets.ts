@@ -9,7 +9,7 @@ import {
 
 const TARGET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SSH_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@:%+-]{0,255}$/;
-const REMOTE_CWD_PATTERN = /^\/[A-Za-z0-9._~+@%:/-]*$/;
+const REMOTE_CWD_PATTERN = /^(?:\/[A-Za-z0-9._~+@%:/-]*|[A-Za-z0-9._+@%:-]+(?:\/[A-Za-z0-9._+@%:-]+)*)$/;
 
 export interface ExecutionTargetRegistryOptions {
 	settingsManager?: SettingsManager;
@@ -36,7 +36,9 @@ export function validateExecutionTarget(target: ExecutionTargetConfig): Executio
 		diagnostics.push("Target port must be between 1 and 65535");
 	}
 	if (target.remoteCwd !== undefined && !REMOTE_CWD_PATTERN.test(target.remoteCwd)) {
-		diagnostics.push("remoteCwd must be an absolute POSIX path without shell metacharacters");
+		diagnostics.push(
+			"remoteCwd must be a safe POSIX path relative to the remote home or an absolute path without shell metacharacters",
+		);
 	}
 	if (
 		target.connectTimeoutMs !== undefined &&

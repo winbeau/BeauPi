@@ -5513,15 +5513,6 @@ export class InteractiveMode {
 			scope = selectedScope === projectScopeOption ? "project" : "user";
 		}
 
-		const cwdDescription = existingTarget?.remoteCwd
-			? `current ${JSON.stringify(existingTarget.remoteCwd)}; Enter keeps it; - clears it`
-			: "optional; Enter leaves it unset";
-		const remoteCwdInput = await this.showExtensionInput(`Default remote working directory (${cwdDescription})`);
-		if (remoteCwdInput === undefined) return;
-		const remoteCwdText = remoteCwdInput.trim();
-		const remoteCwd =
-			remoteCwdText === "" ? existingTarget?.remoteCwd : remoteCwdText === "-" ? undefined : remoteCwdText;
-
 		const userDescription = existingTarget?.user
 			? `current ${JSON.stringify(existingTarget.user)}; Enter keeps it; - clears it`
 			: "optional; normally defined in ~/.ssh/config";
@@ -5529,6 +5520,21 @@ export class InteractiveMode {
 		if (userInput === undefined) return;
 		const userText = userInput.trim();
 		const user = userText === "" ? existingTarget?.user : userText === "-" ? undefined : userText;
+
+		const cwdDescription = existingTarget?.remoteCwd
+			? `current ${JSON.stringify(existingTarget.remoteCwd)}; Enter keeps it; - clears it`
+			: "optional; relative to the remote user's ~, or use an absolute path such as /workspace";
+		const remoteCwdInput = await this.showExtensionInput(`Default remote working directory (${cwdDescription})`);
+		if (remoteCwdInput === undefined) return;
+		const remoteCwdText = remoteCwdInput.trim();
+		const remoteCwd =
+			remoteCwdText === ""
+				? existingTarget?.remoteCwd
+				: remoteCwdText === "-" || remoteCwdText === "~" || remoteCwdText === "." || remoteCwdText === "./"
+					? undefined
+					: remoteCwdText.startsWith("~/")
+						? remoteCwdText.slice(2) || undefined
+						: remoteCwdText;
 
 		const portDescription = existingTarget?.port
 			? `current ${existingTarget.port}; Enter keeps it; - clears it`

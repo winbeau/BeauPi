@@ -32,7 +32,7 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as TargetS
 
 describe("InteractiveMode /target-server", () => {
 	it("persists and selects a new target from the interactive fields", async () => {
-		const inputs = ["", "/workspace", "", ""];
+		const inputs = ["", "", "/workspace", ""];
 		const persistTarget = vi.fn();
 		const selectTarget = vi.fn((targetId: string) => ({
 			id: targetId,
@@ -82,6 +82,43 @@ describe("InteractiveMode /target-server", () => {
 			"User settings (available in all projects)",
 			"Project settings (current trusted project)",
 		]);
+	});
+
+	it("stores the SSH user and treats ~ as the remote home directory", async () => {
+		const inputs = ["", "wenbiao_zhao", "~", ""];
+		const persistTarget = vi.fn();
+		const context: TargetServerContext = {
+			session: {
+				isStreaming: false,
+				isCompacting: false,
+				remoteRuntime: {
+					listTargets: () => [],
+					persistTarget,
+					selectTarget: vi.fn((targetId: string) => ({
+						id: targetId,
+						scope: "user" as const,
+						sshAlias: targetId,
+					})),
+				},
+			},
+			settingsManager: { isProjectTrusted: () => true, flush: vi.fn(async () => {}) },
+			showExtensionSelector: vi.fn(async () => "User settings (available in all projects)"),
+			showExtensionInput: vi.fn(async () => inputs.shift()),
+			showWarning: vi.fn(),
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			footer: { invalidate: vi.fn() },
+		};
+
+		await interactiveModePrototype.handleTargetServerCommand.call(context, "h100-server");
+
+		expect(persistTarget).toHaveBeenCalledWith({
+			version: 1,
+			id: "h100-server",
+			scope: "user",
+			sshAlias: "h100-server",
+			user: "wenbiao_zhao",
+		});
 	});
 
 	it("rejects an invalid port before changing settings", async () => {

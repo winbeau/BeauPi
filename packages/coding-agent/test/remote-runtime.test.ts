@@ -85,6 +85,9 @@ describe("M7 execution targets", () => {
 		expect(
 			validateExecutionTarget({ id: "a", scope: "session", sshAlias: "h100-server", remoteCwd: "/workspace" }).ok,
 		).toBe(true);
+		expect(
+			validateExecutionTarget({ id: "a", scope: "session", sshAlias: "h100-server", remoteCwd: "projects/pi" }).ok,
+		).toBe(true);
 		expect(validateExecutionTarget({ id: "a", scope: "session", sshAlias: "ssh h100-server" }).ok).toBe(false);
 		expect(validateExecutionTarget({ id: "a", scope: "project", sshAlias: "host", port: 0 }).ok).toBe(false);
 		expect(validateExecutionTarget({ id: "a", scope: "project", sshAlias: "host", remoteCwd: "/tmp;rm" }).ok).toBe(
