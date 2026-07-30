@@ -120,11 +120,11 @@ function safeId(value: string, label: string): string {
 	return value;
 }
 
-function assertNormalUserCommand(command: string): void {
+function assertNoPrivilegeChange(command: string): void {
 	if (/(^|[;&|\n]\s*|\s)(sudo|su|doas|pkexec|runuser|setpriv|nsenter|chroot|machinectl)(\s|$)/i.test(command)) {
 		throw new RemoteExecutionError({
 			code: "remote_command",
-			message: "Privileged commands and root shells are not supported by M7",
+			message: "Privilege-changing commands are not supported; use the target's configured SSH login identity",
 		});
 	}
 }
@@ -301,7 +301,7 @@ export class RemoteExecutionRuntime {
 				code: "remote_command",
 				message: "remote_exec requires a non-empty command without NUL bytes",
 			});
-		assertNormalUserCommand(command);
+		assertNoPrivilegeChange(command);
 		const target = this.assertTarget(options.targetId);
 		const operationId = commandOperationId();
 		const logPath = logPathFor(this.cwd, this.sessionId, operationId);
@@ -393,7 +393,7 @@ export class RemoteExecutionRuntime {
 	}): Promise<TerminalCreateResult> {
 		const target = this.assertTarget(options.targetId);
 		const terminalId = safeId(options.terminalId ?? `term-${randomUUID().slice(0, 12)}`, "terminalId");
-		if (options.command) assertNormalUserCommand(options.command);
+		if (options.command) assertNoPrivilegeChange(options.command);
 		const operationId = terminalId;
 		const logPath = logPathFor(this.cwd, this.sessionId, operationId);
 		await mkdir(dirname(logPath), { recursive: true });
@@ -473,7 +473,7 @@ export class RemoteExecutionRuntime {
 				operationId: terminalId,
 			});
 		}
-		assertNormalUserCommand(input);
+		assertNoPrivilegeChange(input);
 		const target = this.assertTarget(terminal.targetId);
 		const connection = await this.connect(target.id, signal);
 		const result = await connection.tmuxSend(terminal.paneId, input, { signal });
@@ -505,7 +505,7 @@ export class RemoteExecutionRuntime {
 				operationId: terminalId,
 			});
 		}
-		assertNormalUserCommand(command);
+		assertNoPrivilegeChange(command);
 		const terminal = this.assertTerminal(terminalId);
 		if (!terminal.interactive) {
 			throw new RemoteExecutionError({

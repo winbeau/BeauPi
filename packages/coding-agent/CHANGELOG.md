@@ -45,6 +45,7 @@
 - Fixed explicit clipboard environment overrides from being reclassified as WSL by host kernel detection.
 - Fixed `/skills` collision actions to target the selected Registry entry by ID, and clarified diagnostics for non-updateable local Skill sources.
 - Fixed `/target-server` field ordering and remote working-directory handling so SSH usernames are not confused with `remoteCwd`, relative paths resolve from the remote home, and absolute paths remain supported.
+- Fixed remote execution guidance to allow trusted targets whose configured OpenSSH login identity is `root`, such as provider-managed AutoDL instances, while continuing to block post-login privilege and identity changes.
 
 ### Removed
 

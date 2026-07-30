@@ -83,6 +83,11 @@ export interface RemoteToolDetails {
 	diagnostic?: RemoteDiagnostic;
 }
 
+const CONFIGURED_SSH_IDENTITY_GUIDELINE =
+	"Use the target's configured OpenSSH login identity; trusted provider-managed targets may legitimately resolve to root.";
+const NO_PRIVILEGE_CHANGE_GUIDELINE =
+	"Do not use sudo, su, doas, pkexec, runuser, setpriv, nsenter, chroot, or machinectl to change or switch identities after login.";
+
 const validators = {
 	targetSelect: Compile(targetSelectSchema),
 	remoteExec: Compile(remoteExecSchema),
@@ -307,6 +312,7 @@ function createTargetSelectTool(
 		promptGuidelines: [
 			"Use target_select to set the default target; pass targetId explicitly to address another configured target.",
 			"If a target is missing in interactive mode, ask the user to configure it with /target-server [target-id].",
+			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 			"Never ask for or store SSH private keys, passwords, or tokens.",
 		],
 		parameters: targetSelectSchema,
@@ -344,10 +350,11 @@ function createRemoteExecTool(
 		name: "remote_exec",
 		label: "remote_exec",
 		description:
-			"Execute one validated normal-user command on the default or explicitly requested SSH target and return its exit code. Uses that target's configured remote working directory when set.",
+			"Execute one validated command as the target's configured SSH login identity and return its exit code. Uses that target's configured remote working directory when set.",
 		promptSnippet: "Execute a command on the selected SSH target",
 		promptGuidelines: [
-			"Do not use sudo, su, doas, pkexec, or root shells.",
+			NO_PRIVILEGE_CHANGE_GUIDELINE,
+			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 			"Use target_select to set the default target, or pass targetId explicitly when working with multiple targets.",
 			"Remote command output is truncated by the caller when needed.",
 		],
@@ -398,9 +405,13 @@ function createTerminalCreateTool(
 	return {
 		name: "terminal_create",
 		label: "terminal_create",
-		description: "Create a controlled normal-user tmux session on the default or explicitly requested SSH target.",
+		description:
+			"Create a controlled tmux session as the target's configured SSH login identity on the default or explicitly requested target.",
 		promptSnippet: "Create a remote tmux terminal",
-		promptGuidelines: ["Omit command for an interactive terminal so tmux uses the remote user's default shell."],
+		promptGuidelines: [
+			"Omit command for an interactive terminal so tmux uses the remote user's default shell.",
+			CONFIGURED_SSH_IDENTITY_GUIDELINE,
+		],
 		parameters: terminalCreateSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalCreateInput>("terminal_create", validators.terminalCreate, params);
@@ -461,7 +472,8 @@ function createTerminalBashTool(
 			"Use terminal_bash for normal commands in an existing terminal; treat it like bash running in that terminal's current directory.",
 			"Prefer terminal_bash over terminal_send plus terminal_capture when a command should run to completion and return output.",
 			"Use terminal_send and terminal_capture only for genuinely interactive input or terminal diagnosis.",
-			"Do not use sudo, su, doas, pkexec, or root shells.",
+			NO_PRIVILEGE_CHANGE_GUIDELINE,
+			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 		],
 		parameters: terminalBashSchema,
 		executionMode: "sequential",

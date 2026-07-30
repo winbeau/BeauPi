@@ -162,7 +162,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - tmux capture 使用增量 cursor，完整日志写入文件
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
-- 第一版只允许普通用户执行，不实现 sudo 或任意 root shell
+- 第一版按受信任 Target 的 OpenSSH 配置身份执行，允许 AutoDL 等平台直接提供的 `root` 登录；仍阻止 sudo、su 等登录后提权或身份切换
 - 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
 - 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 

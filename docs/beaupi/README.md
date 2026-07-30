@@ -48,7 +48,7 @@ BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是
 
 1. 原生能力和现有 Extension 机制优先，Skill 只描述知识与流程。
 2. 保留并扩展 Pi Runtime/TUI，前期不重写 Agent Loop。
-3. 默认使用普通用户权限，不以 root 身份运行 Agent。
+3. 本地 Agent 进程默认保持普通用户身份；受信任 SSH Target 按其 OpenSSH 配置的登录身份运行，允许 AutoDL 等平台提供的 `root` 账户，但不允许登录后通过 sudo/su 切换或提升身份。
 4. 多 Agent 默认单写者，并行写入使用 Git Worktree 隔离。
 5. 文档直接生成执行约束，不实现传统 Plan 模式。
 6. 所有失败、联网、Shell 和子 Agent 调用都有预算与可视化。

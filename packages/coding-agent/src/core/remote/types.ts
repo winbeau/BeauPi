@@ -13,6 +13,7 @@ export interface ExecutionTargetConfig {
 	scope: ExecutionTargetScope;
 	/** OpenSSH Host alias. This is never expanded into a hostname by BeauPi. */
 	sshAlias: string;
+	/** Optional OpenSSH login user. Trusted provider-managed targets may use root without authorizing privilege changes. */
 	user?: string;
 	port?: number;
 	/** Default directory used for relative remote paths and tmux sessions; relative values resolve from the remote user's home. */

@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 普通用户模式是默认权限边界；任何 sudo 能力延后到策略系统稳定后实现。
+7. 本地 Agent 进程的普通用户模式是默认权限边界；受信任远程 Target 可使用 OpenSSH 已配置的登录身份（包括平台提供的 `root`），任何登录后 sudo/su 提权能力延后到策略系统稳定后实现。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -418,13 +418,13 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - tmux 增量 capture、日志摘要和完整输出文件
 - 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
 - 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
-- 第一版普通用户模式边界；不实现 sudo 或任意 root shell
+- 第一版使用受信任 Target 的 OpenSSH 登录身份，允许 AutoDL 等平台提供的 `root` 账户；不实现 sudo、su 等登录后提权或身份切换
 
 ### 测试
 
 使用 fake SSH/tmux adapter 覆盖：
 
-- 目标选择、参数验证和信任边界
+- 目标选择、参数验证和信任边界，包括配置为 `root` 的 provider-managed Target
 - 连接建立、复用、超时、关闭和断线
 - 远程命令成功、失败、取消和退出码
 - tmux 创建、Bash 命令注入与等待、发送、增量捕获、状态和关闭

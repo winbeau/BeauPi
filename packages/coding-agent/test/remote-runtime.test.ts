@@ -31,7 +31,7 @@ afterEach(() => {
 	}
 });
 
-function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | false } = {}) {
+function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | false; targetUser?: string } = {}) {
 	const cwd = join(tmpdir(), `beaupi-remote-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(cwd, { recursive: true });
 	cleanup.push(cwd);
@@ -43,6 +43,7 @@ function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | f
 		label: "Fake target",
 		scope: "session" as const,
 		sshAlias: "fake-alias",
+		...(options.targetUser ? { user: options.targetUser } : {}),
 		...(remoteCwd ? { remoteCwd } : {}),
 	};
 	const targets = new ExecutionTargetRegistry({ settingsManager, sessionTargets: [target] });
@@ -109,6 +110,20 @@ describe("M7 execution targets", () => {
 		const entries = setup.sessionManager.getBranch();
 		expect(JSON.stringify(entries)).not.toContain("fake-alias");
 		expect(JSON.stringify(entries)).toContain('"targetId":"fake"');
+	});
+
+	it("allows provider-managed root login targets without allowing identity changes after login", async () => {
+		const setup = createSetup({ targetUser: "root" });
+		expect(validateExecutionTarget(setup.target).ok).toBe(true);
+		expect(setup.runtime.selectTarget("fake").user).toBe("root");
+		await expect(setup.runtime.remoteExec("id -u")).resolves.toMatchObject({ exitCode: 0 });
+		await expect(setup.runtime.terminalCreate({ terminalId: "root-login-terminal" })).resolves.toMatchObject({
+			status: "running",
+			targetId: "fake",
+		});
+		await expect(setup.runtime.remoteExec("su - app")).rejects.toMatchObject({
+			diagnostic: { code: "remote_command" },
+		});
 	});
 
 	it("uses the configured remote workspace and leaves commands unchanged when none is set", async () => {

@@ -59,6 +59,21 @@ async function execute(definition: ReturnType<typeof createRemoteToolDefinitions
 }
 
 describe("M7 remote tools", () => {
+	it("allows configured root login identities while prohibiting post-login identity changes", async () => {
+		const setup = await createSetup();
+		const definitions = Object.values(setup.definitions);
+		const guidelines = definitions.flatMap((definition) => definition.promptGuidelines ?? []);
+		expect(setup.definitions.remote_exec.description).toContain("configured SSH login identity");
+		expect(setup.definitions.terminal_create.description).toContain("configured SSH login identity");
+		expect(guidelines).toContain(
+			"Use the target's configured OpenSSH login identity; trusted provider-managed targets may legitimately resolve to root.",
+		);
+		expect(guidelines).toContain(
+			"Do not use sudo, su, doas, pkexec, runuser, setpriv, nsenter, chroot, or machinectl to change or switch identities after login.",
+		);
+		expect(guidelines.some((guideline) => guideline.includes("root shells"))).toBe(false);
+	});
+
 	it("selects a target and returns structured remote_exec and terminal details", async () => {
 		const setup = await createSetup();
 		const selected = await execute(setup.definitions.target_select, { targetId: "fake" });
