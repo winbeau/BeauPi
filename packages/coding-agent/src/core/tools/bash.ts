@@ -15,6 +15,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import type { PolicyFailureCategory } from "../policy/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -50,6 +51,18 @@ export interface BashToolDetails {
 	exitCode: number | null;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+}
+
+export class BashToolExecutionError extends Error {
+	readonly policyCategory: PolicyFailureCategory;
+	readonly exitCode?: number | null;
+
+	constructor(message: string, policyCategory: PolicyFailureCategory, exitCode?: number | null) {
+		super(message);
+		this.name = "BashToolExecutionError";
+		this.policyCategory = policyCategory;
+		this.exitCode = exitCode;
+	}
 }
 
 /**
@@ -500,11 +513,14 @@ export function createBashToolDefinition(
 					const snapshot = await finishOutput();
 					const { text } = formatOutput(snapshot, "");
 					if (err instanceof Error && err.message === "aborted") {
-						throw new Error(appendStatus(text, "Command aborted"));
+						throw new BashToolExecutionError(appendStatus(text, "Command aborted"), "user_cancelled");
 					}
 					if (err instanceof Error && err.message.startsWith("timeout:")) {
 						const timeoutSecs = err.message.split(":")[1];
-						throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
+						throw new BashToolExecutionError(
+							appendStatus(text, `Command timed out after ${timeoutSecs} seconds`),
+							"timeout",
+						);
 					}
 					throw err;
 				}
@@ -512,7 +528,18 @@ export function createBashToolDefinition(
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0 && exitCode !== null) {
-					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+					const policyCategory: PolicyFailureCategory =
+						exitCode === 127
+							? "missing_dependency"
+							: exitCode === 126 ||
+									/permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/i.test(outputText)
+								? "permission"
+								: "command_exit";
+					throw new BashToolExecutionError(
+						appendStatus(outputText, `Command exited with code ${exitCode}`),
+						policyCategory,
+						exitCode,
+					);
 				}
 				return {
 					content: [{ type: "text", text: outputText }],

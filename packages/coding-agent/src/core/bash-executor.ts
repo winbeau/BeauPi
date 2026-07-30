@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
+import type { PolicyToolDetails } from "./policy/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -39,6 +40,8 @@ export interface BashResult {
 	fullOutputPath?: string;
 	/** Error recorded by higher-level session execution when the backend throws. */
 	error?: string;
+	/** Versioned M10 Policy fact for this user Bash execution. */
+	policy?: PolicyToolDetails;
 }
 
 // ============================================================================

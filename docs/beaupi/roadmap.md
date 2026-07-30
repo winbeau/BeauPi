@@ -8,14 +8,14 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M9 已完成。近期开发推进阶段 11（M10）Policy Engine：
+M0–M10 已完成。近期开发转入阶段 12（M11）多 Agent Workflow：
 
-1. 集中分类重复命令、权限、认证、网络、超时和失败。
-2. 为本地、远程和网络 fallback 建立确定性预算与 block/confirm/replace/pause 结果。
-3. 复用 M9 的稳定交互接口处理 Policy confirm，但不把普通澄清问题与权限确认混为同一结果类型。
-4. Policy Engine 稳定后再推进 Workflow、后台自动唤醒和 sudo。
+1. 在已稳定的 AgentPool、Monitor 和 Policy Runtime 上定义 Workflow DAG 与节点结构化输入输出。
+2. 实现依赖、条件、并发限制和默认单写者策略；需要并行写入时使用 Worktree 隔离。
+3. 将真实节点状态接入现有 Monitor、Task Ledger、Todo、Footer 和统一 Tool renderer。
+4. Workflow 稳定后再推进后台自动唤醒和受控 sudo。
 
-M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；M9 已提供 `ask_user_question` 的完整 TUI、SDK/RPC、Session、Task Ledger 和 AgentPool 边界。模型主动绕过专用 Tool 的通用阻断仍属于 M10 Policy Engine。
+M10 已提供五种确定性 Policy 决策、等价检查签名、失败/fallback 预算、敏感路径与普通用户边界、Search-to-Shell 阻断、TUI/SDK/RPC confirm，以及 Session/Compact/branch/受控子 Agent 一致性。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -213,6 +213,8 @@ M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案
 
 ## 阶段 11：Policy Engine
 
+状态：已完成（2026-07-30）。
+
 - 命令和错误分类
 - 等价操作签名
 - 缺少依赖、权限、认证、网络和超时停止策略
@@ -223,6 +225,8 @@ M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案
 - 明确不增加专用 Git Tools，普通 Git 操作继续走现有 Bash 能力
 
 验收：达到失败或 fallback 预算后 Agent 暂停并报告原因；工作区相关事实未变化时不重复执行等价检查；Policy block/confirm/replace/pause 在本地、远程和网络路径上行为一致。
+
+M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operator/pipeline/redirection/multiline-aware Shell 分类和脱敏 hash 签名；本地/Remote/terminal/Search 统一失败预算；sudo/su 等身份切换阻断；敏感路径、工作区/远程边界和 symlink confirm；专用 Tool replacement 与 Search-to-Shell pause；版本化 TUI/SDK/RPC confirm；Task Ledger/Session/Compact/branch 恢复；以及受控子 Agent `policyRequest`。faux/fake 测试覆盖并发 revision、取消、无 handler、RPC、renderer、暗/亮主题和 40/80/120/160 列。
 
 ## 阶段 12：多 Agent Workflow
 
@@ -317,6 +321,6 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 7. SSH/tmux 远程执行并接入 Monitor Runtime（已完成）
 8. 一个搜索 Provider（已完成）
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
-10. Policy Engine：重复命令、失败预算和等价 fallback 阻断
+10. Policy Engine：重复命令、失败预算和等价 fallback 阻断（已完成）
 
-当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索和询问选择闭环。下一步只推进 Policy Engine，且不增加专用 Git Tools。不要提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。
+当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择和 Policy Engine 闭环。下一步推进 M11 Workflow，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor 和共享 Runtime 生命周期；自动唤醒与 sudo 仍不提前实现。

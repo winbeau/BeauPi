@@ -483,7 +483,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 - 大正文沿用 2,000 行/50 KiB 模型输出上限，完整 Markdown 写入权限受限的临时文件；相同 content hash 在同一任务预算 scope 中只注入一次正文。
 - 搜索级和正文级 `WebCitation` 进入 Tool details、Session 与现有 Task Ledger；Task Ledger 记录调用状态、cache hit、预算、诊断和引用，子 Agent 只向 Coordinator 返回结构化引用，不返回 transcript。
 - M8 预算确定性限制单次结果数、单任务 query/fetch/Provider 尝试、单次 fetch 字节、总输入字符、timeout 和 redirects；达到限制后不继续网络访问，并通过 Tool prompt guideline 禁止 curl/wget/Python/Node/Bash 等价 fallback。
-- M8 不实现通用 Shell Policy Engine。彻底阻止模型主动调用 Bash 网络命令仍属于 M10；当前边界是专用 Tool 内无 Shell fallback、明确诊断和 System Prompt 约束。
+- M8 本身不实现通用 Shell Policy Engine；M10 已在现有 Tool 生命周期中补齐 Bash、Remote 和 terminal 网络 fallback 的强制阻断。
 - fake provider、fake HTTP server、可控时钟和临时目录测试覆盖成功、空结果、参数、排序/去重、缓存、正文提取、hash/截断、错误分类、SSRF、预算、Session 恢复、分支预算重建、子 Agent 隔离/引用传递及 80/120/160 列 renderer。
 
 ---
@@ -554,6 +554,8 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 ## M10：Policy Engine
 
+状态：已完成（2026-07-30）。
+
 ### 目标
 
 把重复命令、失败预算、权限边界和等价 fallback 从模型提示转化为确定性执行策略，并覆盖本地、远程和网络执行。
@@ -573,6 +575,17 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 ### 验收标准
 
 工作区相关事实未变化时不会重复运行等价检查；达到失败或 fallback 预算后 Agent 暂停并给出明确原因；本地、远程和网络路径使用一致的 Policy 决策语义。
+
+### 验收记录（2026-07-30）
+
+- `core/policy/` 提供集中默认预算、保守 Shell/路径/错误分类、稳定脱敏签名和 Session-scoped 串行 Policy Runtime；决策统一为 `allow`、`block`、`confirm`、`replace`、`pause`。
+- Tool registry wrapper 和用户 Bash 共用同一授权/finalize 生命周期；本地 read/grep/find/ls/write/edit、Bash、Remote、terminal、target selection 和 Search facts 都进入现有 Session/Task Ledger。
+- quote、escaped newline、operator、pipeline、redirect、multiline、常见 wrapper/解释器、Git inspect/mutation、敏感路径、远程绝对写入和本地 symlink 边界已有定向分类测试；Policy details 只保留 hash、类别和非敏感摘要。
+- 等价只读检查在目标 revision 未变化时阻断；不透明/修改操作不按文本去重；并发 read/mutation finalize 不回滚 revision；失败、类别和 fallback 预算原子更新，取消不消耗普通失败预算。
+- sudo/su/doas/pkexec 等登录后身份切换直接 block；已配置 Target 本身的 root 登录保持合法。Search Runtime 失败后，curl/wget/Python/Node/Bash/terminal 等价 fallback 强制 pause；专用 Tool replacement 不自动执行。
+- confirm 使用独立 `version: 1` Policy request/result，复用 TUI custom interaction、SDK callback 和 RPC request/response transport；无 handler 立即 pause，受控子 Agent 只返回 `policyRequest`。
+- Tool renderer 和 Task Ledger 支持 blocked/confirm/replace/paused；Session 文件恢复、Compact、branch 切换、extension details replacement、用户 Bash custom facts 和 AgentPool 边界均有 faux/fake 测试。
+- 已单独运行 Policy Runtime、AgentSession、RPC、renderer、AgentPool、Task Ledger 和受影响回归测试；最终 `npm run check` 通过。
 
 ---
 
@@ -712,10 +725,10 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 ## 当前推荐开发入口
 
-M0–M9 已形成连续能力闭环。下一阶段只推进 M10：
+M0–M10 已形成连续能力闭环。下一阶段推进 M11：
 
-1. 复用现有 Tool hooks、Task Ledger、Monitor、Remote/Search Runtime 和 M9 interaction callback，实现统一 Policy Decision。
-2. 先闭环重复命令、失败预算和本地/远程/网络 fallback 的 block/confirm/replace/pause。
-3. 不提前实现 M11 Workflow、M12 自动唤醒或 M13 sudo，也不增加专用 Git Tools。
+1. 在现有 AgentPool、Monitor Runtime、Task Ledger 和 Policy Runtime 上实现 Workflow DAG，不创建第二套调度状态链。
+2. 先闭环节点依赖、条件、并发限制、取消/超时、默认单写者和 Worktree 隔离。
+3. 不提前实现 M12 自动唤醒或 M13 sudo，也不增加专用 Git Tools。
 
-不要创建第二套 Runtime、Session、ResourceLoader、Task Ledger 或 Tool 执行链。M9 的问题 selector、Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。
+继续复用现有 Runtime、Session、ResourceLoader、Task Ledger、Tool 执行链、统一状态符号和 TUI 宽度约束。

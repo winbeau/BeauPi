@@ -8,6 +8,7 @@ import { DocumentRuntime } from "./documents/document-runtime.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import type { MonitorRuntime } from "./monitor/monitor-runtime.ts";
+import { createPolicyConfigProvider, PolicyRuntime } from "./policy/index.ts";
 import {
 	DefaultResourceLoader,
 	type DefaultResourceLoaderOptions,
@@ -44,6 +45,7 @@ export interface CreateAgentSessionServicesOptions {
 	settingsManager?: SettingsManager;
 	modelRuntime?: ModelRuntime;
 	searchRuntime?: SearchRuntime;
+	policyRuntime?: PolicyRuntime;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 	resourceLoaderReloadOptions?: ResourceLoaderReloadOptions;
@@ -84,6 +86,7 @@ export interface AgentSessionServices {
 	resourceLoader: ResourceLoader;
 	documentRuntime: DocumentRuntime;
 	searchRuntime: SearchRuntime;
+	policyRuntime: PolicyRuntime;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
 
@@ -167,6 +170,8 @@ export async function createAgentSessionServices(
 			cacheDir: join(agentDir, "cache", "search"),
 			getConfig: createSearchConfigProvider(settingsManager),
 		});
+	const policyRuntime =
+		options.policyRuntime ?? new PolicyRuntime({ cwd, getConfig: createPolicyConfigProvider(settingsManager) });
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
@@ -204,6 +209,7 @@ export async function createAgentSessionServices(
 		resourceLoader,
 		documentRuntime,
 		searchRuntime,
+		policyRuntime,
 		diagnostics,
 	};
 }
@@ -226,6 +232,7 @@ export async function createAgentSessionFromServices(
 		resourceLoader: options.services.resourceLoader,
 		documentRuntime: options.services.documentRuntime,
 		searchRuntime: options.services.searchRuntime,
+		policyRuntime: options.services.policyRuntime,
 		sessionManager: options.sessionManager,
 		model: options.model,
 		thinkingLevel: options.thinkingLevel,

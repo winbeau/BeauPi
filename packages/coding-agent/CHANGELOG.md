@@ -17,6 +17,7 @@
 - Added the interactive `/target-server` command for creating and updating user/project SSH execution targets, persisting non-secret OpenSSH configuration, and selecting the saved target immediately.
 - Added the BeauPi M8 web research loop with a configurable SearXNG provider, `web_search` and SSRF-safe `web_fetch` Tools, shared query/URL caching, stable citations, content-hash deduplication, deterministic network budgets, Task Ledger evidence, and controlled sub-agent access.
 - Added BeauPi M9 `ask_user_question` with strict bounded schemas, single/multi-select, built-in Other and notes editors, multi-question review, Markdown preview, configurable keybindings, versioned Session/Task Ledger facts, SDK/RPC callbacks, and controlled sub-agent clarification boundaries.
+- Added the M10 session-scoped, branch-aware Policy Runtime with deterministic `allow`/`block`/`confirm`/`replace`/`pause` decisions, conservative Shell/path/error classification, equivalent-check and fallback budgets, sudo/su and Search-to-Shell boundaries, versioned TUI/SDK/RPC confirmations, Task Ledger facts, and controlled sub-agent Policy requests.
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 
 ### Changed
@@ -34,7 +35,7 @@
 - Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
 - Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
 - Changed the default reviewer profile to use an independent 8192-token, 12-turn, 180-second review budget, skip automatic document-contract preflight for child prompts, and reserve `docs_resolve_task` for explicit document-driven audits.
-- Changed the BeauPi roadmap to mark the Claude Code-style `ask_user_question` selector complete and advance the active milestone to the Policy Engine.
+- Changed the BeauPi roadmap to mark the Policy Engine complete and advance the active milestone to multi-agent Workflow.
 
 ### Fixed
 

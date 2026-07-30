@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { PolicyConfirmRequest } from "../../core/policy/index.ts";
 import type { QuestionAnswer, UserQuestion } from "../../core/question.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -258,6 +259,12 @@ export type RpcExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
+			method: "policyConfirm";
+			request: PolicyConfirmRequest;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
@@ -289,6 +296,7 @@ export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; answers: QuestionAnswer[] }
+	| { type: "extension_ui_response"; id: string; policyDecision: "allow_once" }
 	| { type: "extension_ui_response"; id: string; error: string }
 	| { type: "extension_ui_response"; id: string; rejected: true; reason?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };

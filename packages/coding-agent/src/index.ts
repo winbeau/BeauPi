@@ -222,6 +222,7 @@ export type {
 	StagedPackageSource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export * from "./core/policy/index.ts";
 export * from "./core/remote/index.ts";
 export type {
 	DefaultResourceLoaderOptions,
@@ -396,6 +397,7 @@ export {
 	type BashSpawnContext,
 	type BashSpawnHook,
 	type BashToolDetails,
+	BashToolExecutionError,
 	type BashToolInput,
 	type BashToolOptions,
 	createAskUserQuestionToolDefinition,

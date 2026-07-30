@@ -12,6 +12,12 @@ import {
 	type Requirement,
 } from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
+import {
+	getPolicyToolDetails,
+	type PendingPolicyInteraction,
+	POLICY_FACT_ENTRY_TYPE,
+	type PolicyToolDetails,
+} from "../policy/index.ts";
 import type { PendingQuestionInteraction } from "../question.ts";
 import {
 	getSearchRuntimeToolDetails,
@@ -177,6 +183,7 @@ export interface TaskLedgerSnapshot {
 	failures: readonly FailureRecord[];
 	network: readonly NetworkToolRecord[];
 	interactions: readonly TaskInteractionRecord[];
+	policy: readonly PolicyToolDetails[];
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -214,6 +221,18 @@ const TOOL_LABELS = Object.freeze({
 	ask_user_question: "Question",
 	workflow_run: "Workflow",
 	background_start: "Background",
+	target_select: "Target Select",
+	remote_exec: "Remote Exec",
+	remote_bash: "Remote Bash",
+	terminal_create: "Terminal Create",
+	terminal_bash: "Terminal Bash",
+	terminal_send: "Terminal Send",
+	terminal_capture: "Terminal Capture",
+	terminal_status: "Terminal Status",
+	terminal_close: "Terminal Close",
+	remote_read: "Remote Read",
+	remote_write: "Remote Write",
+	remote_edit: "Remote Edit",
 	monitor_attach: "Monitor Attach",
 	monitor_list: "Monitor List",
 	monitor_status: "Monitor Status",
@@ -576,9 +595,11 @@ export class TaskLedger {
 	private readonly failures = new Map<string, FailureRecord>();
 	private readonly networkRecords = new Map<string, NetworkToolRecord>();
 	private readonly interactionRecords = new Map<string, TaskInteractionRecord>();
+	private readonly policyRecords = new Map<string, PolicyToolDetails>();
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
+	private pendingPolicyInteraction: PendingPolicyInteraction | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -598,15 +619,22 @@ export class TaskLedger {
 		this.failures.clear();
 		this.networkRecords.clear();
 		this.interactionRecords.clear();
+		this.policyRecords.clear();
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
+		this.pendingPolicyInteraction = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
 			if (entry.type === "custom" && entry.customType === DOCUMENT_CONTRACT_ENTRY_TYPE) {
 				const details = getDocumentRuntimeToolDetails(entry.data);
 				if (details) this.ingestDocumentRuntimeDetails(`entry:${entry.id}`, details);
+				continue;
+			}
+			if (entry.type === "custom" && entry.customType === POLICY_FACT_ENTRY_TYPE) {
+				const details = getPolicyToolDetails(entry.data);
+				if (details) this.policyRecords.set(details.requestId, structuredClone(details));
 				continue;
 			}
 			if (entry.type !== "message") continue;
@@ -726,6 +754,7 @@ export class TaskLedger {
 		endedAt = Date.now(),
 	): TaskLedgerToolDetails {
 		const id = `shell:${executionId}`;
+		if (result.policy) this.policyRecords.set(result.policy.requestId, structuredClone(result.policy));
 		let record = this.commands.get(id);
 		if (!record) {
 			this.startShell(executionId, command, endedAt);
@@ -767,6 +796,21 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	setPendingPolicyInteraction(pending: PendingPolicyInteraction | undefined): void {
+		if (!pending && !this.pendingPolicyInteraction) return;
+		if (pending && this.pendingPolicyInteraction?.requestId === pending.requestId) return;
+		this.pendingPolicyInteraction = pending ? structuredClone(pending) : undefined;
+		this.revision++;
+	}
+
+	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
+		const records = [...this.policyRecords.values()];
+		for (let index = records.length - 1; index >= 0; index--) {
+			if (records[index]?.toolCallId === toolCallId) return records[index];
+		}
+		return undefined;
+	}
+
 	getToolDetails(toolCallId: string): TaskLedgerToolDetails | undefined {
 		const record = this.commands.get(`tool:${toolCallId}`);
 		if (!record || record.status === "queued" || record.status === "running") return undefined;
@@ -789,6 +833,7 @@ export class TaskLedger {
 		const failures = [...this.failures.values()].map((record) => ({ ...record }));
 		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
 		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
+		const policy = [...this.policyRecords.values()].map((record) => structuredClone(record));
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
@@ -805,6 +850,18 @@ export class TaskLedger {
 				source: "ask_user_question",
 			});
 		}
+		if (this.pendingPolicyInteraction) {
+			todos.push({
+				id: `policy:${this.pendingPolicyInteraction.requestId}`,
+				label: `Policy confirmation: ${this.pendingPolicyInteraction.operation.summary}`,
+				status: "blocked",
+				sequence: -101,
+				updatedAt: Date.parse(this.pendingPolicyInteraction.createdAt) || now,
+				owner: "user",
+				blockedBy: ["policy confirmation"],
+				source: "policy",
+			});
+		}
 		return {
 			taskId: this.taskId,
 			phase: this.phase,
@@ -819,6 +876,7 @@ export class TaskLedger {
 			failures,
 			network,
 			interactions,
+			policy,
 			verification,
 			todos,
 			documentContract,
@@ -920,6 +978,8 @@ export class TaskLedger {
 		}
 		const documentDetails = getDocumentRuntimeToolDetails(details);
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
+		const policyDetails = getPolicyToolDetails(details);
+		if (policyDetails) this.policyRecords.set(policyDetails.requestId, structuredClone(policyDetails));
 		const searchDetails = getSearchRuntimeToolDetails(details);
 		if (searchDetails && (toolName === "web_search" || toolName === "web_fetch")) {
 			this.networkRecords.set(record.id, {
@@ -940,12 +1000,16 @@ export class TaskLedger {
 			toolName === "ask_user_question" ? getQuestionInteractionRecord(details, record.args, endedAt) : undefined;
 		if (interaction) this.interactionRecords.set(interaction.id, interaction);
 		const resultStatus =
-			toolName === "ask_user_question" &&
-			(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
+			policyDetails?.status === "cancelled"
 				? "cancelled"
-				: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
+				: policyDetails && !policyDetails.executed
 					? "failed"
-					: fallbackStatus;
+					: toolName === "ask_user_question" &&
+							(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
+						? "cancelled"
+						: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
+							? "failed"
+							: fallbackStatus;
 		const suppliedFilesRead =
 			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, resultStatus);
 		const suppliedFilesModified =

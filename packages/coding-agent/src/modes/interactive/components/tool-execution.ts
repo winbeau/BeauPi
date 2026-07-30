@@ -3,11 +3,13 @@ import {
 	Container,
 	getCapabilities,
 	Image,
+	Text,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
+import { getPolicyToolDetails, type PolicyAction } from "../../../core/policy/index.ts";
 import { getTaskLedgerToolDetails } from "../../../core/state/task-ledger.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
@@ -200,6 +202,7 @@ export class ToolExecutionComponent extends Container {
 	private readonly convertedImages = new Map<number, { data: string; mimeType: string }>();
 	private hideComponent = false;
 	private forcedState: BeauPiToolState | undefined;
+	private policyAction: PolicyAction | undefined;
 
 	constructor(
 		toolName: string,
@@ -235,7 +238,17 @@ export class ToolExecutionComponent extends Container {
 
 	getDisplayState(): BeauPiToolState {
 		if (this.forcedState) return this.forcedState;
+		if (this.policyAction === "confirm") return "confirm";
 		if (this.result && !this.isPartial) {
+			const policy = getPolicyToolDetails(this.result.details);
+			if (policy && !policy.executed) {
+				if (policy.status === "cancelled") return "cancelled";
+				if (policy.decision.action === "block") return "blocked";
+				if (policy.decision.action === "replace") return "replace";
+				if (policy.decision.action === "pause") return "paused";
+				if (policy.decision.action === "confirm") return "confirm";
+			}
+
 			if (
 				isCancellationResult(this.result) ||
 				this.result.details?.status === "cancelled" ||
@@ -362,10 +375,16 @@ export class ToolExecutionComponent extends Container {
 		isPartial = false,
 	): void {
 		this.forcedState = undefined;
+		this.policyAction = undefined;
 		this.result = result;
 		this.isPartial = isPartial;
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
+	}
+
+	setPolicyAction(action: PolicyAction | undefined): void {
+		this.policyAction = action;
+		this.updateDisplay();
 	}
 
 	markCancelled(message: string): void {
@@ -451,21 +470,35 @@ export class ToolExecutionComponent extends Container {
 			hasContent = callComponent !== undefined;
 
 			if (this.result) {
-				const resultRenderer = this.getResultRenderer();
-				if (!resultRenderer) {
-					resultComponent = this.createResultFallback();
+				const policy = getPolicyToolDetails(this.result.details);
+				if (policy && !policy.executed) {
+					const lines = [
+						policy.decision.reason,
+						policy.decision.replacementTool ? `Replacement: ${policy.decision.replacementTool}` : undefined,
+						policy.decision.suggestion,
+					].filter((line): line is string => Boolean(line));
+					resultComponent = new Text(
+						lines.map((line, index) => theme.fg(index === 0 ? "warning" : "muted", line)).join("\n"),
+						0,
+						0,
+					);
 				} else {
-					try {
-						resultComponent = resultRenderer(
-							{ content: this.result.content as any, details: this.result.details },
-							{ expanded: this.expanded, isPartial: this.isPartial },
-							theme,
-							this.getRenderContext(this.resultRendererComponent),
-						);
-						this.resultRendererComponent = resultComponent;
-					} catch {
-						this.resultRendererComponent = undefined;
+					const resultRenderer = this.getResultRenderer();
+					if (!resultRenderer) {
 						resultComponent = this.createResultFallback();
+					} else {
+						try {
+							resultComponent = resultRenderer(
+								{ content: this.result.content as any, details: this.result.details },
+								{ expanded: this.expanded, isPartial: this.isPartial },
+								theme,
+								this.getRenderContext(this.resultRendererComponent),
+							);
+							this.resultRendererComponent = resultComponent;
+						} catch {
+							this.resultRendererComponent = undefined;
+							resultComponent = this.createResultFallback();
+						}
 					}
 				}
 				hasContent = hasContent || resultComponent !== undefined;

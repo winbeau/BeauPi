@@ -162,9 +162,25 @@ BEAUPI_SEARXNG_ENDPOINT
 
 `web_fetch` 会拒绝 URL credentials、非 HTTP(S) 协议、localhost、loopback、私网、link-local、保留地址和云 metadata 目标，并在每次重定向后重新执行 DNS/IP 安全验证。PDF 提取不属于 M8。
 
-达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，不应改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。专用 Search Runtime 已确定性停止；通用 Bash 网络调用的强制阻断属于 M10 Policy Engine。
+达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，不应改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。M10 Policy Runtime 会在通用 Bash、Remote 或 terminal fallback 执行前返回 `pause`；存在适用的专用 Tool 时返回 `replace`，但不会自动执行 replacement。
 
 Coordinator 和受控 `researcher` 子 Agent 共享同一 Search Runtime/cache。可通过普通 Tool allowlist/denylist 明确启用或禁用 `web_search`、`web_fetch`。
+
+## 执行策略
+
+M10 默认通过现有 Tool 生命周期管理本地文件操作、Bash、Remote、terminal 和 Search。Policy 结果为：
+
+```text
+allow    直接执行
+block    明确禁止，例如 sudo/su 等身份切换或未变化的重复检查
+confirm  敏感路径或执行边界需要一次授权
+replace  应改用已有专用 Tool；不会自动执行
+pause    失败/fallback 预算、Search fallback 或缺少交互通道要求停止
+```
+
+Policy confirm 在 TUI 中显示独立选择框；SDK 使用 `policyHandler`，RPC 使用 `method: "policyConfirm"` 的 `extension_ui_request`。Print/JSON、无 handler SDK 和受控子 Agent 不等待 stdin：前两者立即返回 paused `interaction_required`，子 Agent 将 `policyRequest` 放入 `delegate_task` 结构化结果交给 Coordinator。
+
+Policy fact 使用 `version: 1` details 写入正常 Session/Task Ledger 生命周期。恢复、Compact 和 branch 切换不读取全局隐藏状态，只从当前 branch 重建。已配置 SSH Target 本身可以使用平台提供的 root 登录身份，但本地或登录后 sudo/su/doas/pkexec 仍直接 block。
 
 ## 交互式询问
 
@@ -209,12 +225,11 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi M0–M9 已完成。当前按优先主线推进：
+BeauPi M0–M10 已完成。当前按优先主线推进：
 
-1. M10：实现 Policy Engine、等价 fallback 和失败预算；不增加专用 Git Tools。
-2. M11：在稳定策略边界上实现多 Agent Workflow。
-3. M12：扩展 Monitor Runtime，实现后台任务自动唤醒。
-4. M13：最后实现受控权限能力。
-5. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
+1. M11：在稳定策略边界上实现多 Agent Workflow。
+2. M12：扩展 Monitor Runtime，实现后台任务自动唤醒。
+3. M13：最后实现受控权限能力。
+4. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
 
-M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime 和 M9 Question Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用和生命周期事件与 Coordinator 交互。
+M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime 和 M10 Policy Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、Policy/clarification request 和生命周期事件与 Coordinator 交互。

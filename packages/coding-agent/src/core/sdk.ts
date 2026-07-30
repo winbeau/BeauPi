@@ -14,6 +14,7 @@ import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
+import { createPolicyConfigProvider, type PolicyInteractionHandler, PolicyRuntime } from "./policy/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
@@ -81,6 +82,12 @@ export interface CreateAgentSessionOptions {
 	questionHandler?: QuestionInteractionHandler;
 	/** Inject a session-bound Question Runtime, primarily for deterministic tests and custom hosts. */
 	questionRuntime?: QuestionRuntime;
+	/** In-process handler for Policy confirmations. Without one, confirm decisions pause immediately. */
+	policyHandler?: PolicyInteractionHandler;
+	/** Inject a session-scoped Policy Runtime, primarily for deterministic tests and custom hosts. */
+	policyRuntime?: PolicyRuntime;
+	/** Controlled child sessions never prompt users directly. */
+	policyInteractionMode?: "coordinator" | "controlled";
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -211,6 +218,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (options.synchronizeSearchBudget !== false) {
 		searchRuntime.synchronizeBudget(searchBudgetScopeId, sessionManager.getBranch());
 	}
+	const policyRuntime =
+		options.policyRuntime ??
+		new PolicyRuntime({
+			cwd,
+			getConfig: createPolicyConfigProvider(settingsManager),
+			handler: options.policyHandler,
+			interactionMode: options.policyInteractionMode,
+		});
+	if (options.policyRuntime) policyRuntime.setHandler(options.policyHandler);
+	policyRuntime.bindSession(sessionManager.getSessionId(), sessionManager.getBranch());
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -287,6 +304,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					customTools: options.customTools,
 					searchRuntime,
 					searchBudgetScopeId,
+					policySettings: settingsManager.getPolicySettings(),
 					createSession: (childOptions) => createAgentSession(childOptions),
 				})
 			: undefined;
@@ -507,6 +525,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionStartEvent: options.sessionStartEvent,
 		documentRuntime,
 		questionRuntime,
+		policyRuntime,
 		remoteRuntime,
 	});
 	await session.initializeDocumentRuntime();

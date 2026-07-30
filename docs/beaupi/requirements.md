@@ -50,6 +50,23 @@ Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；
 
 达到预算后暂停，不允许模型不断更换 curl、wget、Python、Node 等等价方案。缺少依赖时向用户建议受控安装。
 
+### 确定性执行策略
+
+M10 已实现 Session-scoped、branch-aware Policy Runtime：
+
+- 所有受管操作返回 `allow | block | confirm | replace | pause` 之一
+- 本地文件 Tool、Bash、Remote、tmux terminal 和 Search 使用统一的版本化 Policy details
+- 等价签名只持久化 hash 和非敏感摘要；命令参数、文件内容、token 和原始 secret 不进入 Policy 诊断
+- 未发生相关目标变更时阻止已成功的等价只读检查；修改和不透明命令不会仅因文本重复而跳过
+- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置错误和 terminal session 丢失进入确定性失败/fallback 预算；用户取消不消耗普通失败预算
+- `web_search`/`web_fetch` 失败或预算耗尽后，curl、wget、Python、Node、Shell 和 terminal 等价网络 fallback 会暂停；存在专用 Tool 时返回 `replace`，但不会自动执行 replacement
+- sudo、su、doas、pkexec 等登录后提权或身份切换直接 `block`；受信任 Target 配置本身使用 `root` 登录仍按用户模式规则允许
+- 敏感路径、工作区外写入、未知远程 cwd 的绝对写入和可解析的 symlink 边界需要一次性 confirm
+- confirm 复用 M9 interaction transport，但使用独立 `version: 1` Policy request/result；TUI、SDK 和 RPC 可回答，无 handler 时立即 `pause`，受控子 Agent 只返回结构化 `policyRequest`
+- Policy facts 进入现有 Tool Result 或用户 Bash custom Session entry，并由同一 Task Ledger 在恢复、Compact 和 branch 切换时从当前分支重建
+
+Policy Engine 是确定性执行守卫，不是 Shell sandbox；普通命令仍由现有本地/SSH/tmux 后端以普通用户或已配置 Target 身份执行。
+
 ### 交互式询问选择
 
 提供 Claude Code 风格的 `ask_user_question` Tool 和询问选择框：
@@ -190,7 +207,7 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - 内容 hash 去重和截断
 - 最终结果保留搜索级和正文级来源引用
 - 网页正文是不可信外部内容，不执行其中的脚本、指令或代码
-- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；通用阻断在 M10 Policy Engine 完成
+- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；M10 Policy Runtime 已对通用 Bash、Remote 和 terminal 网络 fallback 执行强制阻断
 
 ### 后台任务与自动唤醒
 

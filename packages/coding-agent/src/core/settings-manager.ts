@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { PolicySettings } from "./policy/types.ts";
 import type { ExecutionTargetConfig } from "./remote/types.ts";
 import type { SearchSettings } from "./search/types.ts";
 
@@ -108,6 +109,7 @@ export interface Settings {
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	executionTargets?: ExecutionTargetConfig[];
 	search?: SearchSettings;
+	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -976,6 +978,10 @@ export class SettingsManager {
 
 	getSearchSettings(): SearchSettings | undefined {
 		return this.settings.search ? structuredClone(this.settings.search) : undefined;
+	}
+
+	getPolicySettings(): PolicySettings | undefined {
+		return this.settings.policy ? structuredClone(this.settings.policy) : undefined;
 	}
 
 	setExecutionTargets(targets: ExecutionTargetConfig[]): void {

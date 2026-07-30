@@ -107,6 +107,14 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
+import {
+	attachPolicyToolDetails,
+	POLICY_FACT_ENTRY_TYPE,
+	type PolicyInteractionHandler,
+	PolicyRuntime,
+	type PolicyRuntimeEvent,
+	resolvePolicyConfig,
+} from "./policy/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { RemoteExecutionRuntime } from "./remote/runtime.ts";
@@ -195,7 +203,8 @@ export type AgentSessionEvent =
 	  }
 	| { type: "summarization_retry_finished" }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "bash_execution_update"; id?: string; delta: string };
+	| { type: "bash_execution_update"; id?: string; delta: string }
+	| { type: "policy"; event: PolicyRuntimeEvent };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -248,6 +257,8 @@ export interface AgentSessionConfig {
 	agentPool?: AgentPool;
 	/** Session-bound interactive question runtime. */
 	questionRuntime?: QuestionRuntime;
+	/** Session-scoped deterministic Policy Runtime. */
+	policyRuntime?: PolicyRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
 	/** Optional M7 remote runtime. Created here when omitted. */
@@ -338,6 +349,7 @@ export class AgentSession {
 	readonly taskLedger: TaskLedger;
 	readonly documentRuntime: DocumentRuntime;
 	readonly questionRuntime: QuestionRuntime;
+	readonly policyRuntime: PolicyRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -345,6 +357,7 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _unsubscribeQuestionRuntime?: () => void;
+	private _unsubscribePolicyRuntime?: () => void;
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
 	private _pendingPromptPreflights = new Set<Promise<void>>();
@@ -427,6 +440,18 @@ export class AgentSession {
 		this._unsubscribeQuestionRuntime = this.questionRuntime.subscribe((pending) => {
 			this.taskLedger.setPendingInteraction(pending);
 		});
+		this.policyRuntime =
+			config.policyRuntime ??
+			new PolicyRuntime({
+				cwd: config.cwd,
+				getConfig: () => resolvePolicyConfig(undefined),
+				enabled: false,
+			});
+		this.policyRuntime.bindSession(config.sessionManager.getSessionId(), config.sessionManager.getBranch());
+		this._unsubscribePolicyRuntime = this.policyRuntime.subscribe((event) => {
+			this.taskLedger.setPendingPolicyInteraction(event.type === "confirm_pending" ? event.request : undefined);
+			this._emit({ type: "policy", event });
+		});
 		this.documentRuntime =
 			config.documentRuntime ??
 			new DocumentRuntime({
@@ -493,6 +518,10 @@ export class AgentSession {
 
 	setQuestionInteractionHandler(handler: QuestionInteractionHandler | undefined): void {
 		this.questionRuntime.setHandler(handler);
+	}
+
+	setPolicyInteractionHandler(handler: PolicyInteractionHandler | undefined): void {
+		this.policyRuntime.setHandler(handler);
 	}
 
 	/** Validate the branch-restored contract before the first provider request. */
@@ -596,8 +625,26 @@ export class AgentSession {
 			const runner = this._extensionRunner;
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
+			const policyDetails = await this.policyRuntime.finalizeTool({
+				toolCallId: toolCall.id,
+				toolName: toolCall.name,
+				details: result.details,
+				isError,
+				signal: this.agent.signal,
+			});
+			let authoritativeDetails = policyDetails
+				? attachPolicyToolDetails(result.details, policyDetails)
+				: result.details;
+			const policyError =
+				policyDetails !== undefined &&
+				(policyDetails.status === "failed" ||
+					policyDetails.status === "blocked" ||
+					policyDetails.status === "replaced" ||
+					policyDetails.status === "paused");
 			if (!runner.hasHandlers("tool_result")) {
-				return searchDetails?.ok === false ? { isError: true } : undefined;
+				return policyDetails || searchDetails?.ok === false
+					? { details: authoritativeDetails, isError: policyError || searchDetails?.ok === false || isError }
+					: undefined;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -606,23 +653,27 @@ export class AgentSession {
 				toolCallId: toolCall.id,
 				input: args as Record<string, unknown>,
 				content: result.content,
-				details: result.details,
-				isError,
+				details: authoritativeDetails,
+				isError: policyError || searchDetails?.ok === false || isError,
 				usage: result.usage,
 			});
 
 			if (!hookResult) {
-				return searchDetails?.ok === false ? { isError: true } : undefined;
+				return policyDetails || searchDetails?.ok === false
+					? { details: authoritativeDetails, isError: policyError || searchDetails?.ok === false || isError }
+					: undefined;
 			}
 
 			let details = documentDetails
 				? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
 				: hookResult.details;
 			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
+			if (policyDetails) details = attachPolicyToolDetails(details, policyDetails);
+			authoritativeDetails = details;
 			return {
 				content: hookResult.content,
-				details,
-				isError: searchDetails?.ok === false ? true : (hookResult.isError ?? isError),
+				details: authoritativeDetails,
+				isError: policyError || searchDetails?.ok === false ? true : (hookResult.isError ?? isError),
 				usage: hookResult.usage,
 			};
 		};
@@ -752,6 +803,10 @@ export class AgentSession {
 			const documentDetails = this.taskLedger.getDocumentRuntimeDetails(event.message.toolCallId);
 			if (documentDetails) {
 				event.message.details = attachDocumentRuntimeToolDetails(event.message.details, documentDetails);
+			}
+			const policyDetails = this.taskLedger.getPolicyDetails(event.message.toolCallId);
+			if (policyDetails) {
+				event.message.details = attachPolicyToolDetails(event.message.details, policyDetails);
 			}
 		}
 
@@ -992,6 +1047,8 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		this._unsubscribeQuestionRuntime?.();
 		this._unsubscribeQuestionRuntime = undefined;
+		this._unsubscribePolicyRuntime?.();
+		this._unsubscribePolicyRuntime = undefined;
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
 	}
@@ -2756,7 +2813,9 @@ export class AgentSession {
 				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
 		);
 		const runner = this._extensionRunner;
-		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
+		const wrapPolicy = (tool: AgentTool): AgentTool =>
+			this.policyRuntime.wrapTool(tool, () => this.getActiveToolNames());
+		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner).map(wrapPolicy);
 		const wrappedBuiltInTools = wrapRegisteredTools(
 			Array.from(this._baseToolDefinitions.values())
 				.filter((definition) => isAllowedTool(definition.name))
@@ -2765,7 +2824,7 @@ export class AgentSession {
 					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
 				})),
 			runner,
-		);
+		).map(wrapPolicy);
 
 		const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -3034,7 +3093,43 @@ export class AgentSession {
 		const abortController = new AbortController();
 		const executionId = options?.id ?? randomUUID();
 		this._bashAbortControllers.add(abortController);
+		const authorization = await this.policyRuntime.authorizeTool(
+			executionId,
+			"bash",
+			{ command },
+			this.getActiveToolNames(),
+			abortController.signal,
+		);
 		this.taskLedger.startShell(executionId, command);
+		if (!authorization.execute && authorization.details) {
+			const policy = await this.policyRuntime.finalizeTool({
+				toolCallId: executionId,
+				toolName: "bash",
+				details: attachPolicyToolDetails(undefined, authorization.details),
+				isError: authorization.details.status !== "cancelled",
+				signal: abortController.signal,
+			});
+			const output = [
+				authorization.details.decision.reason,
+				authorization.details.decision.replacementTool
+					? `Replacement: ${authorization.details.decision.replacementTool}`
+					: undefined,
+				authorization.details.decision.suggestion,
+			]
+				.filter((part): part is string => Boolean(part))
+				.join("\n");
+			const result: BashResult = {
+				output: output || "Policy did not allow this Bash execution.",
+				exitCode: authorization.details.status === "cancelled" ? undefined : 1,
+				cancelled: authorization.details.status === "cancelled",
+				truncated: false,
+				error: authorization.details.status === "cancelled" ? undefined : output,
+				policy,
+			};
+			this.recordBashResult(command, result, { ...options, executionId });
+			this._bashAbortControllers.delete(abortController);
+			return result;
+		}
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
@@ -3055,9 +3150,32 @@ export class AgentSession {
 				},
 			);
 
-			this.recordBashResult(command, result, { ...options, executionId });
-			return result;
+			const policyCategory =
+				result.exitCode === 127
+					? "missing_dependency"
+					: result.exitCode === 126 ||
+							/permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/i.test(result.output)
+						? "permission"
+						: undefined;
+			const policy = await this.policyRuntime.finalizeTool({
+				toolCallId: executionId,
+				toolName: "bash",
+				details: { exitCode: result.exitCode, policyCategory },
+				isError: result.exitCode !== undefined && result.exitCode !== 0,
+				signal: abortController.signal,
+			});
+			const completed = { ...result, policy };
+			this.recordBashResult(command, completed, { ...options, executionId });
+			return completed;
 		} catch (error) {
+			await this.policyRuntime.noteThrownError(executionId, "bash", error, abortController.signal);
+			const policy = await this.policyRuntime.finalizeTool({
+				toolCallId: executionId,
+				toolName: "bash",
+				details: undefined,
+				isError: true,
+				signal: abortController.signal,
+			});
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			const failure: BashResult = {
 				output: errorMessage,
@@ -3065,6 +3183,7 @@ export class AgentSession {
 				cancelled: abortController.signal.aborted,
 				truncated: false,
 				error: errorMessage,
+				policy,
 			};
 			this.recordBashResult(command, failure, { ...options, executionId });
 			throw error;
@@ -3095,6 +3214,12 @@ export class AgentSession {
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};
+		if (result.policy) {
+			this.sessionManager.appendCustomEntry(
+				POLICY_FACT_ENTRY_TYPE,
+				attachPolicyToolDetails(undefined, result.policy),
+			);
+		}
 
 		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
 		if (this.isStreaming) {
@@ -3350,6 +3475,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
+			this.policyRuntime.rebuild(this.sessionManager.getBranch());
 			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 			const documentContract = await this.documentRuntime.validateCurrentContract();

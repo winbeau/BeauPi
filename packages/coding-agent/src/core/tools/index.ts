@@ -26,6 +26,7 @@ export {
 	type BashSpawnContext,
 	type BashSpawnHook,
 	type BashToolDetails,
+	BashToolExecutionError,
 	type BashToolInput,
 	type BashToolOptions,
 	createBashTool,

@@ -84,6 +84,7 @@ import {
 } from "../../core/model-resolver.ts";
 import { MONITOR_SESSION_ENTRY_TYPE } from "../../core/monitor/index.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import type { PolicyConfirmRequest, PolicyConfirmResponse } from "../../core/policy/index.ts";
 import type { QuestionInteractionRequest, QuestionInteractionResponse } from "../../core/question.ts";
 import {
 	EXECUTION_TARGET_VERSION,
@@ -139,6 +140,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { PolicyConfirmSelectorComponent } from "./components/policy-confirm-selector.ts";
 import { QuestionSelectorComponent } from "./components/question-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -1677,6 +1679,7 @@ export class InteractiveMode {
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
 		this.session.setQuestionInteractionHandler((request, signal) => this.showQuestionInteraction(request, signal));
+		this.session.setPolicyInteractionHandler((request, signal) => this.showPolicyInteraction(request, signal));
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
@@ -2535,6 +2538,30 @@ export class InteractiveMode {
 		}
 	}
 
+	private async showPolicyInteraction(
+		request: PolicyConfirmRequest,
+		signal: AbortSignal | undefined,
+	): Promise<PolicyConfirmResponse> {
+		if (signal?.aborted) return { status: "cancelled" };
+		let abortHandler: (() => void) | undefined;
+		try {
+			return await this.showExtensionCustom<PolicyConfirmResponse>((tui, _theme, keybindings, done) => {
+				abortHandler = () => done({ status: "cancelled" });
+				signal?.addEventListener("abort", abortHandler, { once: true });
+				return new PolicyConfirmSelectorComponent({
+					tui,
+					keybindings,
+					request,
+					onAllowOnce: () => done({ status: "allow_once" }),
+					onReject: () => done({ status: "rejected" }),
+					onCancel: () => done({ status: "cancelled" }),
+				});
+			});
+		} finally {
+			if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+		}
+	}
+
 	private async showQuestionInteraction(
 		request: QuestionInteractionRequest,
 		signal: AbortSignal | undefined,
@@ -3147,6 +3174,15 @@ export class InteractiveMode {
 			case "bash_execution_update":
 				// The bash execution callback handles TUI output rendering.
 				break;
+
+			case "policy": {
+				const component = this.pendingTools.get(
+					event.event.type === "confirm_pending" ? event.event.request.toolCallId : event.event.toolCallId,
+				);
+				component?.setPolicyAction(event.event.type === "confirm_pending" ? "confirm" : undefined);
+				this.ui.requestRender();
+				break;
+			}
 
 			case "tool_execution_start": {
 				let component = this.pendingTools.get(event.toolCallId);

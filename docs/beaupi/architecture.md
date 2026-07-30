@@ -102,6 +102,8 @@ interface AgentTaskResult {
   filesModified: string[];
   checks: AgentTaskCheck[];
   diagnostics: string[];
+  clarificationRequest?: AgentClarificationRequest;
+  policyRequest?: PolicyConfirmRequest;
   lastActivity?: AgentTaskActivity;
   error?: AgentTaskError;
   usage: AgentTaskUsage;
@@ -196,7 +198,7 @@ M9 已落地为 Session-bound `QuestionRuntime`：Tool result 继续走普通 Ag
 
 ## Policy Engine
 
-M10 Policy Engine 复用 M9 的稳定用户交互接口表达 confirm，但 Policy 决策与普通澄清问题仍是不同的结构化事实。
+M10 Policy Engine 已作为现有 AgentSession 的 session-scoped 服务实现。它在 Tool wrapper 执行前授权、在现有 `afterToolCall`/用户 Bash 完成路径中 finalize，并从当前 Session branch 的 Tool Result 或 `beaupi.policy.fact` custom entry 重建；Compact 不复制状态，branch 切换只使用目标分支事实。Policy confirm 复用 M9 的稳定 interaction transport，但 Policy 决策与普通澄清问题仍是不同的版本化结构化事实。
 
 策略结果：
 
@@ -211,14 +213,17 @@ interface PolicyDecision {
 
 主要策略：
 
-- 重复命令检测
-- 等价 fallback 检测
-- Shell 调用预算
-- 网络搜索预算
-- 敏感路径保护
-- 本地与远程执行目标边界
-- sudo 提权约束
-- 已有专用 Tool 的确定性执行边界
+- quote/operator/pipeline/redirection/multiline-aware Shell 分类和 hash-only 等价签名
+- 本地、Remote、terminal、Search 与用户 Bash 的统一失败/类别/fallback 预算
+- 目标 revision 驱动的等价只读检查去重，以及并发 mutation 的单调 revision 更新
+- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置和 session-lost 分类
+- 敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界
+- sudo/su/doas/pkexec 等登录后身份切换 block；受信任 Target 配置的 root 登录不视为 sudo
+- Search 失败后的 Shell/terminal 网络 fallback pause，以及专用 Tool `replace` 但不自动执行
+- TUI、SDK、RPC、无 handler 和受控子 Agent 的独立 `version: 1` confirm request/result
+- Policy details 进入现有 Task Ledger，并渲染 blocked/confirm/replace/paused 状态
+
+Policy Runtime 使用串行授权队列，使并发预算和目标 revision 更新具有确定顺序；原始命令、文件内容、token 和 handler 错误不进入 Policy 持久化诊断。它是执行守卫而不是 Shell sandbox。
 
 BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则；Policy Engine 只对其应用通用的重复命令、失败预算和权限策略。
 
@@ -307,4 +312,4 @@ query/URL cache 位于现有 agentDir 下，使用版本化 JSON、canonical key
 
 `web_fetch` 使用 Undici，并在连接前解析和验证全部 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
 
-预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M8 通过 Tool prompt guideline 阻止模型继续尝试等价 curl/wget/Python/Node/Bash；对通用 Bash 网络调用的强制策略属于 M10 Policy Engine。
+预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M10 Policy Runtime 已将该边界扩展到通用 Bash、Remote 和 terminal：专用 Search 失败或预算耗尽后，curl/wget/Python/Node/Bash 等价网络 fallback 会在执行前 pause。

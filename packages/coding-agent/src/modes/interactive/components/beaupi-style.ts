@@ -11,7 +11,11 @@ export type BeauPiToolState =
 	| "failed"
 	| "cancelled"
 	| "permission"
-	| "permission-waiting";
+	| "permission-waiting"
+	| "blocked"
+	| "confirm"
+	| "replace"
+	| "paused";
 
 export type BeauPiSemanticStatus = "queued" | "running" | "success" | "warning" | "error" | "cancelled" | "permission";
 
@@ -138,9 +142,14 @@ export function semanticStatus(state: BeauPiToolState): BeauPiSemanticStatus {
 		case "completed":
 			return "success";
 		case "failed":
+		case "blocked":
 			return "error";
 		case "permission-waiting":
+		case "confirm":
 			return "permission";
+		case "replace":
+		case "paused":
+			return "warning";
 		default:
 			return state;
 	}

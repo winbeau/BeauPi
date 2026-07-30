@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
@@ -209,6 +209,38 @@ describe("in-process Agent Pool and delegate_task", () => {
 			version: 1,
 			questions: [{ question: "Which target?", options: ["A", "B"] }],
 		});
+	});
+
+	it("returns controlled child Policy confirmations to the Coordinator without prompting the user", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [
+					{
+						id: "policy-child",
+						systemPrompt: "Use structured Policy results",
+						toolAllowlist: ["write"],
+						allowFileModifications: true,
+					},
+				],
+				defaultProfile: "policy-child",
+			},
+		});
+		const sensitivePath = join(harness.tempDir, ".env");
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("write", { path: sensitivePath, content: "blocked" }), {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("Policy confirmation must be resolved by the Coordinator."),
+		]);
+
+		const result = await pool.delegateTask({ task: "Write the sensitive file" });
+		expect(result.policyRequest).toMatchObject({
+			version: 1,
+			toolName: "write",
+			operation: { kind: "sensitive_path" },
+		});
+		expect(result.diagnostics).toContain("Tool write failed");
+		expect(existsSync(sensitivePath)).toBe(false);
 	});
 
 	it("enforces turn and token budgets with structured errors", async () => {

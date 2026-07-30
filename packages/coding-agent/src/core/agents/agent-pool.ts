@@ -7,6 +7,7 @@ import type { AgentSession, AgentSessionEvent } from "../agent-session.ts";
 import type { DocumentCitation } from "../documents/types.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { ModelRuntime } from "../model-runtime.ts";
+import { POLICY_CONFIRM_VERSION, type PolicyConfirmRequest, type PolicySettings } from "../policy/index.ts";
 import type { ResourceLoader } from "../resource-loader.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../sdk.ts";
 import type { SearchRuntime, WebCitation } from "../search/index.ts";
@@ -88,6 +89,7 @@ export interface AgentTaskResult {
 	checks: AgentTaskCheck[];
 	diagnostics: string[];
 	clarificationRequest?: AgentClarificationRequest;
+	policyRequest?: PolicyConfirmRequest;
 	lastActivity?: AgentTaskActivity;
 	error?: AgentTaskError;
 	usage: AgentTaskUsage;
@@ -137,6 +139,7 @@ export interface AgentPoolDependencies {
 	customTools?: readonly ToolDefinition[];
 	searchRuntime: SearchRuntime;
 	searchBudgetScopeId: string;
+	policySettings?: PolicySettings;
 	createSession: CreateChildSession;
 }
 
@@ -395,7 +398,7 @@ export class AgentPool {
 			promptSnippet: "delegate_task: delegate a bounded task to an isolated sub-agent",
 			promptGuidelines: [
 				"Never use delegate_task from a controlled sub-agent.",
-				"When delegate_task returns clarificationRequest, resolve it from existing context or ask the user from the Coordinator; never fabricate a child answer.",
+				"When delegate_task returns clarificationRequest or policyRequest, resolve it from existing context or ask the user from the Coordinator; never fabricate a child answer.",
 			],
 			parameters: DELEGATE_TASK_PARAMETERS,
 			executionMode: "sequential",
@@ -682,6 +685,7 @@ export class AgentPool {
 				settingsManager: SettingsManager.inMemory({
 					compaction: { enabled: false },
 					retry: { enabled: false },
+					policy: this.dependencies.policySettings ? structuredClone(this.dependencies.policySettings) : undefined,
 				}),
 				tools: toolAllowlist,
 				excludeTools: ["delegate_task", "ask_user_question"],
@@ -689,6 +693,7 @@ export class AgentPool {
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
 				synchronizeSearchBudget: false,
+				policyInteractionMode: "controlled",
 				agentPool: false,
 			});
 			child = childResult.session;
@@ -824,6 +829,26 @@ export class AgentPool {
 			if (lastActivity) result.lastActivity = { ...lastActivity };
 			const clarificationRequest = parseClarificationRequest(result.summary);
 			if (clarificationRequest) result.clarificationRequest = clarificationRequest;
+			let policyFact: (typeof snapshot.policy)[number] | undefined;
+			for (let index = snapshot.policy.length - 1; index >= 0; index--) {
+				const fact = snapshot.policy[index];
+				if (fact?.confirmation?.status === "interaction_required" && fact.status === "paused") {
+					policyFact = fact;
+					break;
+				}
+			}
+			if (policyFact) {
+				result.policyRequest = {
+					version: POLICY_CONFIRM_VERSION,
+					requestId: policyFact.requestId,
+					toolCallId: policyFact.toolCallId,
+					toolName: policyFact.operation.toolName,
+					operation: policyFact.operation,
+					reason: policyFact.decision.reason ?? "Policy confirmation is required.",
+					suggestion: policyFact.decision.suggestion,
+					createdAt: policyFact.createdAt,
+				};
+			}
 			result.citations = uniqueCitations([
 				...(snapshot.documentContract?.sourceCitations ?? []),
 				...snapshot.network.flatMap((record) => record.citations),
