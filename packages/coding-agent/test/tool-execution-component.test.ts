@@ -1,9 +1,10 @@
 import { join, resolve } from "node:path";
-import { setCapabilities, Text, type TUI } from "@earendil-works/pi-tui";
+import { setCapabilities, setKeybindings, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
@@ -36,6 +37,11 @@ function createFakeTui(): TUI {
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		setKeybindings(new KeybindingsManager());
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {
@@ -279,6 +285,71 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		expect(updates).toEqual([{ content: [], details: undefined }]);
 		await promise;
+	});
+
+	test("renders Bash calls on one line with animated truncation and a configurable collapsed output hint", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-07-30T00:00:00.000Z"));
+		setKeybindings(new KeybindingsManager({ "app.tools.expand": "alt+x" }));
+		let renderRequests = 0;
+		const tui = {
+			requestRender: () => {
+				renderRequests++;
+			},
+		} as unknown as TUI;
+		const command =
+			"rg -n \"export interface ToolRender|export type ToolRender|interface ToolRender\" packages/coding-agent/src\nnode_modules/@earendil-works -g '*.ts' -g '*.d.ts' | head -20";
+		const tool = createBashToolDefinition(process.cwd(), { exposeSessionEnvironment: false });
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-compact",
+			{ command, timeout: 30 },
+			{},
+			tool,
+			tui,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "first result\nsecond result\nthird result" }],
+				details: { command, exitCode: null },
+				isError: false,
+			},
+			true,
+		);
+
+		const wideLines = component.render(240).map(stripAnsi);
+		const wideCall = wideLines.find((line) => line.includes("Bash(")) ?? "";
+		expect(wideCall).toContain("packages/coding-agent/src node_modules/@earendil-works");
+		expect(wideCall).not.toContain("\n");
+
+		const firstLines = component.render(72);
+		const firstPlainLines = firstLines.map(stripAnsi);
+		const firstCall = firstPlainLines.find((line) => line.includes("Bash(")) ?? "";
+		expect(firstCall).toMatch(/^● Bash\(.+\) · timeout 30s$/);
+		expect(firstPlainLines.join("\n")).toContain("⎿  … (3 lines, alt+x to expand)");
+		expect(firstPlainLines.join("\n")).not.toContain("first result");
+		expect(firstLines.every((line) => visibleWidth(line) <= 72)).toBe(true);
+
+		vi.advanceTimersByTime(120);
+		const secondCall = component
+			.render(72)
+			.map(stripAnsi)
+			.find((line) => line.includes("Bash("));
+		expect(secondCall).not.toBe(firstCall);
+		expect(renderRequests).toBeGreaterThan(0);
+
+		component.setExpanded(true);
+		expect(stripAnsi(component.render(72).join("\n"))).toContain("third result");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "first result\nsecond result\nthird result" }],
+				details: { command, exitCode: 0 },
+				isError: false,
+			},
+			false,
+		);
 	});
 
 	test("bash renderer does not duplicate final full output truncation details", async () => {

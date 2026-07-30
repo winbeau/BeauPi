@@ -31,6 +31,7 @@
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
 - Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
 - Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
+- Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
 - Changed the BeauPi roadmap to mark the Claude Code-style `ask_user_question` selector complete and advance the active milestone to the Policy Engine.
 
 ### Fixed
