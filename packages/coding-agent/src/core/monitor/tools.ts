@@ -188,7 +188,7 @@ function attachTarget(runtime: MonitorRuntime, params: MonitorAttachInput) {
 		case "tool":
 			if (!params.toolCallId) throw new Error("monitor_attach Tool targets require toolCallId");
 			return {
-				target: { kind: "tool" as const, toolCallId: params.toolCallId, logPath },
+				target: { kind: "tool" as const, toolCallId: params.toolCallId, attachment: "explicit" as const, logPath },
 				name: params.name,
 				taskSummary: params.taskSummary,
 				stallTimeoutMs: params.stallTimeoutMs,

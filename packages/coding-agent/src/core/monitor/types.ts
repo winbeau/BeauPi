@@ -49,6 +49,8 @@ export interface ToolMonitorTarget {
 	kind: "tool";
 	toolCallId: string;
 	toolName?: string;
+	/** Explicit monitor_attach or automatic promotion after a long bash run. */
+	attachment?: "explicit" | "long-running";
 	logPath?: string;
 }
 

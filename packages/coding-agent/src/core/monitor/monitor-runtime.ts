@@ -40,6 +40,8 @@ export interface MonitorRuntimeOptions {
 	sessionManager: SessionManager;
 	now?: () => number;
 	stallTimeoutMs?: number;
+	/** Delay before an active bash Tool is automatically promoted into Monitor. */
+	longRunningBashThresholdMs?: number;
 	adapters?: Partial<Record<MonitorKind, MonitorAdapter>>;
 	processAdapter?: MonitorAdapter;
 	agentPool?: AgentPool;
@@ -63,6 +65,15 @@ export interface MonitorLogResult extends IncrementalLogReadResult {
 interface Waiter {
 	resolve: (record: MonitorRecord) => void;
 }
+
+interface PendingToolExecution {
+	toolCallId: string;
+	toolName: string;
+	startedAt: number;
+	lastActivityAt: number;
+}
+
+const DEFAULT_LONG_RUNNING_BASH_THRESHOLD_MS = 10_000;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -215,6 +226,7 @@ export class MonitorRuntime {
 	private readonly sessionManager: SessionManager;
 	private readonly now: () => number;
 	private readonly defaultStallTimeoutMs: number;
+	private readonly longRunningBashThresholdMs: number;
 	private readonly adapters: Map<MonitorKind, MonitorAdapter>;
 	readonly registry = new MonitorRegistry();
 	private readonly restoredRecordIds = new Set<string>();
@@ -223,6 +235,7 @@ export class MonitorRuntime {
 	}
 	private readonly waiters = new Map<string, Set<Waiter>>();
 	private readonly listeners = new Set<MonitorLifecycleEventListener>();
+	private readonly pendingToolExecutions = new Map<string, PendingToolExecution>();
 	private readonly logReader = new IncrementalLogReader();
 	private eventQueue: Promise<void> = Promise.resolve();
 	private pollQueue: Promise<void> = Promise.resolve();
@@ -238,6 +251,10 @@ export class MonitorRuntime {
 		this.sessionManager = options.sessionManager;
 		this.now = options.now ?? (() => Date.now());
 		this.defaultStallTimeoutMs = options.stallTimeoutMs ?? 60_000;
+		this.longRunningBashThresholdMs = Math.max(
+			0,
+			Math.floor(options.longRunningBashThresholdMs ?? DEFAULT_LONG_RUNNING_BASH_THRESHOLD_MS),
+		);
 		const processAdapter = options.processAdapter ?? new NodeProcessMonitorAdapter();
 		this.adapters = new Map<MonitorKind, MonitorAdapter>([
 			["process", processAdapter],
@@ -300,6 +317,7 @@ export class MonitorRuntime {
 	bindAgentSession(binding: MonitorAgentSessionBinding): void {
 		this.sessionUnsubscribe?.();
 		this.poolUnsubscribe?.();
+		this.pendingToolExecutions.clear();
 		this.sessionUnsubscribe = binding.subscribe((event) => this.handleAgentEvent(event, binding.getAbortSignal?.()));
 		if (binding.agentPool) {
 			this.poolUnsubscribe = binding.agentPool.subscribe((event) => this.handleAgentLifecycleEvent(event));
@@ -359,6 +377,7 @@ export class MonitorRuntime {
 		if (this.disposed) return;
 		this.records.clear();
 		this.restoredRecordIds.clear();
+		this.pendingToolExecutions.clear();
 		this.logReader.clear();
 		this.initialized = false;
 		this.restoreRecords(entries);
@@ -368,6 +387,7 @@ export class MonitorRuntime {
 	private async pollOnce(): Promise<void> {
 		if (this.disposed) return;
 		const timestamp = this.now();
+		for (const pending of this.pendingToolExecutions.values()) this.promoteLongRunningBash(pending, timestamp);
 		for (const record of this.records.values()) {
 			if (isMonitorTerminal(record.status)) continue;
 			if (record.timeoutMs !== undefined && timestamp - (record.startedAt ?? record.createdAt) >= record.timeoutMs) {
@@ -539,13 +559,22 @@ export class MonitorRuntime {
 		}
 		this.waiters.clear();
 		this.listeners.clear();
+		this.pendingToolExecutions.clear();
 		this.logReader.clear();
+	}
+
+	private shouldRestoreRecord(record: MonitorRecord): boolean {
+		if (record.kind !== "tool" || record.target.kind !== "tool") return true;
+		if (record.target.attachment === "explicit" || record.target.attachment === "long-running") return true;
+		const legacyAutomaticSummary = `${record.target.toolName ?? "tool"} Tool execution`;
+		if (record.taskSummary !== legacyAutomaticSummary) return true;
+		return record.target.toolName === "bash" && record.durationMs >= this.longRunningBashThresholdMs;
 	}
 
 	private restoreRecords(entries: readonly SessionEntry[]): void {
 		for (const entry of entries) {
 			const record = snapshotFromEntry(entry);
-			if (!record || record.sessionId !== this.sessionId) continue;
+			if (!record || record.sessionId !== this.sessionId || !this.shouldRestoreRecord(record)) continue;
 			this.records.set(record);
 			if (!isMonitorTerminal(record.status)) this.restoredRecordIds.add(record.id);
 		}
@@ -717,23 +746,39 @@ export class MonitorRuntime {
 	private async handleAgentEvent(event: AgentSessionEvent, signal?: AbortSignal): Promise<void> {
 		if (this.disposed) return;
 		if (event.type === "tool_execution_start") {
-			const record = this.attach({
-				target: { kind: "tool", toolCallId: event.toolCallId, toolName: event.toolName },
-				name: event.toolName,
-				taskSummary: `${event.toolName} Tool execution`,
-			});
-			this.transition(this.requireRecord(record.id), "running", "started", {});
+			const record = this.findTool(event.toolCallId);
+			if (record) {
+				this.transition(record, "running", "started", {});
+				return;
+			}
+			if (event.toolName === "bash") {
+				const timestamp = this.now();
+				this.pendingToolExecutions.set(event.toolCallId, {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					startedAt: timestamp,
+					lastActivityAt: timestamp,
+				});
+			}
 			return;
 		}
 		if (event.type === "tool_execution_update") {
-			const record = this.findTool(event.toolCallId);
+			const timestamp = this.now();
+			const pending = this.pendingToolExecutions.get(event.toolCallId);
+			if (pending) pending.lastActivityAt = timestamp;
+			const record =
+				this.findTool(event.toolCallId) ?? (pending ? this.promoteLongRunningBash(pending, timestamp) : undefined);
 			if (!record) return;
-			record.lastActivityAt = this.now();
+			record.lastActivityAt = timestamp;
 			this.transition(record, "healthy", "activity", {});
 			return;
 		}
 		if (event.type === "tool_execution_end") {
-			const record = this.findTool(event.toolCallId);
+			const timestamp = this.now();
+			const pending = this.pendingToolExecutions.get(event.toolCallId);
+			this.pendingToolExecutions.delete(event.toolCallId);
+			const record =
+				this.findTool(event.toolCallId) ?? (pending ? this.promoteLongRunningBash(pending, timestamp) : undefined);
 			if (!record) return;
 			const cancelled = isToolCancelled(event, signal);
 			this.transition(
@@ -741,8 +786,35 @@ export class MonitorRuntime {
 				cancelled ? "cancelled" : event.isError ? "failed" : "completed",
 				cancelled ? "cancelled" : event.isError ? "failed" : "completed",
 				{ exitReason: cancelled ? "cancelled" : event.isError ? "tool_error" : "tool_completed" },
+				timestamp,
 			);
 		}
+	}
+
+	private promoteLongRunningBash(pending: PendingToolExecution, timestamp: number): MonitorRecord | undefined {
+		if (timestamp - pending.startedAt < this.longRunningBashThresholdMs) return this.findTool(pending.toolCallId);
+		const existing = this.findTool(pending.toolCallId);
+		const record =
+			existing ??
+			this.requireRecord(
+				this.attach({
+					target: {
+						kind: "tool",
+						toolCallId: pending.toolCallId,
+						toolName: pending.toolName,
+						attachment: "long-running",
+					},
+					name: pending.toolName,
+					taskSummary: `${pending.toolName} long-running Tool execution`,
+					createdAt: pending.startedAt,
+				}).id,
+			);
+		this.transition(record, "running", "started", {}, pending.startedAt);
+		if (pending.lastActivityAt > record.lastActivityAt) {
+			record.lastActivityAt = pending.lastActivityAt;
+			this.transition(record, "healthy", "activity", {}, pending.lastActivityAt);
+		}
+		return record;
 	}
 
 	private async handleAgentLifecycleEvent(event: AgentLifecycleEvent): Promise<void> {

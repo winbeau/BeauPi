@@ -6,7 +6,14 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import type { AgentLifecycleEvent, AgentPool } from "../src/core/agents/agent-pool.ts";
-import { FakeProcessAdapter, FakeSubAgentAdapter, FakeToolAdapter, MonitorRuntime } from "../src/core/monitor/index.ts";
+import {
+	FakeProcessAdapter,
+	FakeSubAgentAdapter,
+	FakeToolAdapter,
+	MONITOR_RECORD_VERSION,
+	MONITOR_SESSION_ENTRY_TYPE,
+	MonitorRuntime,
+} from "../src/core/monitor/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { createHarness } from "./test-harness.ts";
 
@@ -26,7 +33,15 @@ function createWorkspace(): string {
 	return path;
 }
 
-function createRuntime(options: { clock?: Clock; adapter?: FakeProcessAdapter; sessionManager?: SessionManager } = {}) {
+function createRuntime(
+	options: {
+		clock?: Clock;
+		adapter?: FakeProcessAdapter;
+		sessionManager?: SessionManager;
+		stallTimeoutMs?: number;
+		longRunningBashThresholdMs?: number;
+	} = {},
+) {
 	const clock = options.clock ?? new Clock();
 	const cwd = options.sessionManager?.getCwd() ?? createWorkspace();
 	const sessionManager = options.sessionManager ?? SessionManager.inMemory(cwd);
@@ -37,7 +52,8 @@ function createRuntime(options: { clock?: Clock; adapter?: FakeProcessAdapter; s
 		sessionManager,
 		now: clock.now,
 		processAdapter: adapter,
-		stallTimeoutMs: 100,
+		stallTimeoutMs: options.stallTimeoutMs ?? 100,
+		longRunningBashThresholdMs: options.longRunningBashThresholdMs,
 	});
 	return { clock, cwd, sessionManager, adapter, runtime };
 }
@@ -242,7 +258,7 @@ describe("MonitorRuntime", () => {
 		expect(uncertain.runtime.status(record.id).status).toBe("lost");
 	});
 
-	it("attaches an actual faux-provider Tool execution without a real provider", async () => {
+	it("does not auto-monitor a short ordinary faux-provider Tool execution", async () => {
 		const echoTool: AgentTool = {
 			name: "echo",
 			label: "Echo",
@@ -257,15 +273,14 @@ describe("MonitorRuntime", () => {
 		try {
 			await harness.session.prompt("run echo");
 			const monitors = harness.session.monitorRuntime.list({ kind: "tool" });
-			expect(monitors).toHaveLength(1);
-			expect(monitors[0]?.status).toBe("completed");
+			expect(monitors).toHaveLength(0);
 		} finally {
 			harness.cleanup();
 		}
 	});
 
-	it("consumes Tool and M5 sub-agent lifecycle events through the existing session and pool", async () => {
-		const setup = createRuntime();
+	it("filters ordinary Tools and short bash while monitoring long bash, explicit Tools, and M5 sub-agents", async () => {
+		const setup = createRuntime({ stallTimeoutMs: 60_000, longRunningBashThresholdMs: 10_000 });
 		cleanupPaths.push(setup.cwd);
 		let sessionListener: ((event: AgentSessionEvent) => void) | undefined;
 		let poolListener: ((event: AgentLifecycleEvent) => void) | undefined;
@@ -285,28 +300,82 @@ describe("MonitorRuntime", () => {
 				},
 			} as unknown as AgentPool,
 		});
-		const toolCallId = "tool-1";
-		sessionListener?.({ type: "tool_execution_start", toolCallId, toolName: "bash", args: { command: "sleep 1" } });
-		await setup.runtime.flushEvents();
-		const tool = setup.runtime.list({ kind: "tool" })[0];
-		expect(tool?.status).toBe("running");
-		sessionListener?.({ type: "tool_execution_update", toolCallId, toolName: "bash", args: {}, partialResult: {} });
+
+		for (const toolName of ["read", "edit", "write"]) {
+			const toolCallId = `short-${toolName}`;
+			sessionListener?.({ type: "tool_execution_start", toolCallId, toolName, args: {} });
+			sessionListener?.({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName,
+				result: { details: {} },
+				isError: toolName === "edit",
+			});
+		}
+		const shortBashId = "short-bash";
+		sessionListener?.({
+			type: "tool_execution_start",
+			toolCallId: shortBashId,
+			toolName: "bash",
+			args: { command: "sleep 6" },
+		});
+		setup.clock.advance(6_000);
 		sessionListener?.({
 			type: "tool_execution_end",
-			toolCallId,
+			toolCallId: shortBashId,
+			toolName: "bash",
+			result: { details: {} },
+			isError: true,
+		});
+		await setup.runtime.flushEvents();
+		expect(setup.runtime.list({ kind: "tool" })).toHaveLength(0);
+
+		const longBashId = "long-bash";
+		sessionListener?.({
+			type: "tool_execution_start",
+			toolCallId: longBashId,
+			toolName: "bash",
+			args: { command: "sleep 20" },
+		});
+		setup.clock.advance(10_000);
+		await setup.runtime.poll();
+		expect(setup.runtime.list({ kind: "tool" })[0]).toMatchObject({
+			status: "running",
+			target: { kind: "tool", toolCallId: longBashId, attachment: "long-running" },
+		});
+		sessionListener?.({
+			type: "tool_execution_end",
+			toolCallId: longBashId,
 			toolName: "bash",
 			result: { details: {} },
 			isError: false,
 		});
+
+		const explicitToolId = "explicit-edit";
+		setup.runtime.attach({
+			target: { kind: "tool", toolCallId: explicitToolId, toolName: "edit", attachment: "explicit" },
+			name: "explicit edit",
+		});
+		sessionListener?.({ type: "tool_execution_start", toolCallId: explicitToolId, toolName: "edit", args: {} });
+		sessionListener?.({
+			type: "tool_execution_end",
+			toolCallId: explicitToolId,
+			toolName: "edit",
+			result: { details: {} },
+			isError: false,
+		});
 		await setup.runtime.flushEvents();
-		expect(setup.runtime.list({ kind: "tool" })[0]?.status).toBe("completed");
+		expect(setup.runtime.list({ kind: "tool" })).toMatchObject([
+			{ status: "completed", target: { toolCallId: longBashId } },
+			{ status: "completed", target: { toolCallId: explicitToolId, attachment: "explicit" } },
+		]);
 
 		const taskId = "agent-1";
 		poolListener?.({
 			taskId,
 			profile: "reviewer",
 			taskSummary: "Review changes",
-			timestamp: 1_000,
+			timestamp: setup.clock.now(),
 			type: "started",
 			status: "starting",
 		});
@@ -314,7 +383,7 @@ describe("MonitorRuntime", () => {
 			taskId,
 			profile: "reviewer",
 			taskSummary: "Review changes",
-			timestamp: 1_001,
+			timestamp: setup.clock.now() + 1,
 			type: "running",
 			status: "running",
 		});
@@ -322,7 +391,7 @@ describe("MonitorRuntime", () => {
 			taskId,
 			profile: "reviewer",
 			taskSummary: "Review changes",
-			timestamp: 1_002,
+			timestamp: setup.clock.now() + 2,
 			type: "progress",
 			status: "running",
 			turn: 1,
@@ -332,14 +401,52 @@ describe("MonitorRuntime", () => {
 			taskId,
 			profile: "reviewer",
 			taskSummary: "Review changes",
-			timestamp: 1_003,
+			timestamp: setup.clock.now() + 3,
 			type: "completed",
 			status: "completed",
 		});
 		await setup.runtime.flushEvents();
 		const agent = setup.runtime.list({ kind: "sub-agent" })[0];
 		expect(agent?.status).toBe("completed");
-		expect(setup.runtime.getSummary().completed).toBe(2);
+		expect(setup.runtime.getSummary().completed).toBe(3);
+	});
+
+	it("filters legacy automatic short Tool records during Session restore", async () => {
+		const setup = createRuntime({ longRunningBashThresholdMs: 10_000 });
+		cleanupPaths.push(setup.cwd);
+		const sessionId = setup.sessionManager.getSessionId();
+		const record = (toolCallId: string, toolName: string, durationMs: number) => ({
+			version: 1 as const,
+			id: `legacy-${toolCallId}`,
+			sessionId,
+			target: { kind: "tool" as const, toolCallId, toolName },
+			kind: "tool" as const,
+			name: toolName,
+			taskSummary: `${toolName} Tool execution`,
+			createdAt: 1_000,
+			startedAt: 1_000,
+			completedAt: 1_000 + durationMs,
+			durationMs,
+			lastActivityAt: 1_000 + durationMs,
+			status: "failed" as const,
+			logCursor: 0,
+			diagnostics: [],
+		});
+		setup.sessionManager.appendCustomEntry(MONITOR_SESSION_ENTRY_TYPE, {
+			version: MONITOR_RECORD_VERSION,
+			record: record("legacy-edit", "edit", 0),
+		});
+		setup.sessionManager.appendCustomEntry(MONITOR_SESSION_ENTRY_TYPE, {
+			version: MONITOR_RECORD_VERSION,
+			record: record("legacy-bash", "bash", 12_000),
+		});
+		const restored = new MonitorRuntime({
+			sessionId,
+			cwd: setup.cwd,
+			sessionManager: setup.sessionManager,
+			longRunningBashThresholdMs: 10_000,
+		});
+		expect(restored.list({ kind: "tool" })).toMatchObject([{ target: { toolCallId: "legacy-bash" } }]);
 	});
 
 	it("serializes lifecycle listeners and deduplicates identical status events", async () => {

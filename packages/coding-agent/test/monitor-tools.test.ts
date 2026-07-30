@@ -80,6 +80,19 @@ describe("monitor_* tools", () => {
 		);
 	});
 
+	it("marks Tool targets as explicit attachments", async () => {
+		const setup = createSetup();
+		const result = await executeTool(setup.definitions.monitor_attach, {
+			kind: "tool",
+			toolCallId: "edit-call",
+		});
+		expect(result.details.monitor?.target).toMatchObject({
+			kind: "tool",
+			toolCallId: "edit-call",
+			attachment: "explicit",
+		});
+	});
+
 	it("returns cursor/hash incremental logs and does not repeat unchanged output", async () => {
 		const setup = createSetup();
 		const logPath = join(setup.cwd, "task.log");
