@@ -397,6 +397,8 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 
 ## M7：SSH、tmux 远程执行
 
+状态：已完成（2026-07-30）。
+
 ### 目标
 
 以结构化 Tool 建立稳定的 SSH/tmux 连接能力，并将远程命令和长会话纳入 M6 Monitor Runtime。
@@ -444,6 +446,8 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 ## M8：联网搜索闭环
 
+状态：已完成（2026-07-30）。
+
 ### 目标
 
 提供可验证、有预算、不会无限 fallback 的联网研究能力。
@@ -451,18 +455,32 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 ### 交付物
 
 - 统一 `SearchProvider` 接口
-- 首个可配置搜索 Provider
+- 首个可配置 SearXNG JSON Provider
 - `web_search`
 - `web_fetch`
 - HTML 正文提取和 Markdown 转换
-- URL、查询缓存与内容去重
-- 结果截断和完整内容文件
-- 来源评分与引用
-- 查询、Provider fallback 和 token 预算
+- URL、查询缓存与内容 hash 去重
+- 结果截断和完整内容临时文件
+- 稳定网络引用与保守的第一方来源优先级
+- 查询、fetch、Provider 尝试、字节、字符、重定向和 timeout 预算
 
 ### 验收标准
 
-研究任务优先返回官方来源；Provider 失败达到预算后停止并报告配置问题，不改用多个等价 Shell 命令继续尝试。
+研究任务优先返回与查询主体匹配的第一方候选来源；Provider 失败达到预算后停止并报告配置问题，不改用多个等价 Shell 命令继续尝试。
+
+### 验收记录（2026-07-30）
+
+- `SearchRuntime` 由现有 `AgentSessionServices` 按 cwd 持有，`createAgentSession()`、默认 Tool registry 和 `AgentPool` 复用同一实例；Coordinator 与受控 `researcher` 子 Agent 共享查询/URL 缓存和预算 scope，不复制缓存到 Session branch。
+- `SearchProvider` 固化规范化结果接口；第一版只实现 SearXNG JSON API。endpoint、Provider timeout、结果数、查询/正文 TTL 和全部 M8 预算来自现有 Settings，endpoint/API key 也可由环境变量注入，secret 不进入 Session、Tool details、缓存或诊断。
+- `web_search` 使用 TypeBox/Compile 校验，执行 NFKC 查询规范化、规范 URL 去重、include/exclude domain 过滤和可解释的 query-domain/requested-domain 排序；snippet 明确保留为未验证发现信息。
+- `web_fetch` 只允许 HTTP/HTTPS，拒绝 URL credentials、localhost、loopback、私网、link-local、保留地址和 metadata hostname；DNS 结果被验证并固定到 Undici lookup，每次重定向重新校验，支持 timeout、AbortSignal、响应字节和重定向上限。
+- HTML 使用内置、无脚本执行的正文转换器移除 script/style/nav/header/footer/aside 等噪声并输出 Markdown；text/JSON 使用受控解析。PDF 和其他 content type 返回结构化 unsupported 诊断。
+- 文件缓存使用版本化、原子写入的 query/URL JSON entry，保存 canonical key、source/URL、fetchedAt/expiresAt、content hash 和规范化结果；损坏/过期 entry 安全失效并重建，并发相同请求只访问一次网络。
+- 大正文沿用 2,000 行/50 KiB 模型输出上限，完整 Markdown 写入权限受限的临时文件；相同 content hash 在同一任务预算 scope 中只注入一次正文。
+- 搜索级和正文级 `WebCitation` 进入 Tool details、Session 与现有 Task Ledger；Task Ledger 记录调用状态、cache hit、预算、诊断和引用，子 Agent 只向 Coordinator 返回结构化引用，不返回 transcript。
+- M8 预算确定性限制单次结果数、单任务 query/fetch/Provider 尝试、单次 fetch 字节、总输入字符、timeout 和 redirects；达到限制后不继续网络访问，并通过 Tool prompt guideline 禁止 curl/wget/Python/Node/Bash 等价 fallback。
+- M8 不实现通用 Shell Policy Engine。彻底阻止模型主动调用 Bash 网络命令仍属于 M9；当前边界是专用 Tool 内无 Shell fallback、明确诊断和 System Prompt 约束。
+- fake provider、fake HTTP server、可控时钟和临时目录测试覆盖成功、空结果、参数、排序/去重、缓存、正文提取、hash/截断、错误分类、SSRF、预算、Session 恢复、分支预算重建、子 Agent 隔离/引用传递及 80/120/160 列 renderer。
 
 ---
 
@@ -628,12 +646,10 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 ## 当前推荐开发入口
 
-当前实现任务按以下顺序推进：
+M0–M8 已形成连续能力闭环。下一阶段只推进 M9：
 
-1. 盘点并复用现有 AgentSession、AgentSessionServices、Tool registry、Skill allowlist 和 M1/M2 的状态渲染组件。
-2. M5 `AgentProfile`、Agent Pool 和 `delegate_task` 已完成，覆盖成功、失败、取消、超时和结构化结果。
-3. 完成 M6 Monitor Registry、状态机、增量日志和 `monitor_*` Tool，并接入子 Agent 与 Footer/Tasks Widget。
-4. 完成 M7 Execution Target、SSH ControlMaster、远程 Tool 和 tmux 会话控制，再接入同一 Monitor Runtime。
-5. M5–M7 每个阶段都使用 faux provider、fake process/SSH/tmux adapter 覆盖正常、失败、取消、超时、恢复和安全边界。
+1. 复用现有 Task Ledger、Monitor Runtime、Remote Runtime 和 M8 Search Runtime，定义通用 `PolicyDecision`。
+2. 把等价 Shell/网络 fallback、失败预算和 Git 高频操作从提示约束提升为确定性策略与结构化 Tool。
+3. 不提前实现 M10 Workflow、M11 自动唤醒或 M12 sudo。
 
-不要创建第二套 Runtime、Session 或 ResourceLoader；不要在 M7 前实现 sudo，也不要用自动唤醒代替可验证的 Monitor 状态。Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。
+不要创建第二套 Runtime、Session、ResourceLoader、Task Ledger 或 Tool 执行链。Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。

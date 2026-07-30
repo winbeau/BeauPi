@@ -8,6 +8,7 @@ import type { ToolDefinition } from "../extensions/types.ts";
 import type { ModelRuntime } from "../model-runtime.ts";
 import type { ResourceLoader } from "../resource-loader.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../sdk.ts";
+import type { SearchRuntime, WebCitation } from "../search/index.ts";
 import { SessionManager } from "../session-manager.ts";
 import { SettingsManager } from "../settings-manager.ts";
 import { allToolNames } from "../tools/index.ts";
@@ -52,12 +53,14 @@ export interface AgentTaskBudgetSummary {
 	elapsedMs: number;
 }
 
+export type AgentTaskCitation = DocumentCitation | WebCitation;
+
 export interface AgentTaskResult {
 	taskId: string;
 	profile: string;
 	status: AgentTaskStatus;
 	summary: string;
-	citations: DocumentCitation[];
+	citations: AgentTaskCitation[];
 	references: string[];
 	filesModified: string[];
 	checks: AgentTaskCheck[];
@@ -107,6 +110,8 @@ export interface AgentPoolDependencies {
 	resourceLoader: ResourceLoader;
 	model?: Model<Api>;
 	customTools?: readonly ToolDefinition[];
+	searchRuntime: SearchRuntime;
+	searchBudgetScopeId: string;
 	createSession: CreateChildSession;
 }
 
@@ -557,6 +562,9 @@ export class AgentPool {
 				tools: toolAllowlist,
 				excludeTools: ["delegate_task"],
 				customTools: [...this.customTools],
+				searchRuntime: this.dependencies.searchRuntime,
+				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
+				synchronizeSearchBudget: false,
 				agentPool: false,
 			});
 			child = childResult.session;
@@ -669,10 +677,13 @@ export class AgentPool {
 							: undefined;
 			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, error);
 			result.summary = child.getLastAssistantText() ?? "No summary returned by the child agent.";
-			result.citations = uniqueCitations(snapshot.documentContract?.sourceCitations ?? []);
+			result.citations = uniqueCitations([
+				...(snapshot.documentContract?.sourceCitations ?? []),
+				...snapshot.network.flatMap((record) => record.citations),
+			]);
 			result.references = unique([
 				...snapshot.filesRead.map((file) => file.path),
-				...result.citations.map((citation) => citation.path),
+				...result.citations.map(citationReference),
 			]);
 			result.filesModified = [...snapshot.filesModified];
 			result.checks = makeChecks(child);
@@ -752,9 +763,17 @@ function emptyUsage(): AgentTaskUsage {
 	};
 }
 
-function uniqueCitations(citations: readonly DocumentCitation[]): DocumentCitation[] {
+function isWebCitation(citation: AgentTaskCitation): citation is WebCitation {
+	return "kind" in citation && citation.kind === "web";
+}
+
+function citationReference(citation: AgentTaskCitation): string {
+	return isWebCitation(citation) ? citation.url : citation.path;
+}
+
+function uniqueCitations(citations: readonly AgentTaskCitation[]): AgentTaskCitation[] {
 	const seen = new Set<string>();
-	const result: DocumentCitation[] = [];
+	const result: AgentTaskCitation[] = [];
 	for (const citation of citations) {
 		if (seen.has(citation.id)) continue;
 		seen.add(citation.id);

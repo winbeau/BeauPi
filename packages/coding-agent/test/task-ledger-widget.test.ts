@@ -24,6 +24,7 @@ function createSnapshot(overrides: Partial<TaskLedgerSnapshot> = {}): TaskLedger
 		fileModifications: [],
 		filesModified: ["src/a.ts", "src/b.ts"],
 		failures: [],
+		network: [],
 		verification: { status: "pending", timestamp: 10 },
 		todos: [],
 		...overrides,

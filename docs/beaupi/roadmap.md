@@ -8,13 +8,14 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M5 已完成，近期开发只按以下顺序推进：
+M0–M8 已完成。近期开发只推进阶段 10（M9）Policy Engine 与 Git Tools：
 
-1. 阶段 7：Monitor 监控闭环，统一观察本地进程、Tool 和子 Agent 的状态、增量日志与异常事件。
-2. 阶段 8：SSH/tmux 远程执行，把远程命令和终端会话接入同一 Monitor Runtime。
-3. 后续再推进联网搜索、Policy/Git、多 Agent Workflow 和后台自动唤醒。
+1. 把 M2 已记录的重复命令和失败事实转化为确定性策略。
+2. 覆盖本地 Shell、M7 远程执行和 M8 网络 fallback，不再只依赖提示约束。
+3. 增加结构化 Git inspection/diff/commit Tool。
+4. 后续才推进多 Agent Workflow、后台自动唤醒和 sudo。
 
-M5 的子 Agent 已在当前进程复用 ModelRuntime 和 ResourceLoader 生命周期；Monitor 第一版继续提供低成本状态采集、手动等待和可视化，不提前实现自动触发模型 turn。自动唤醒仍在后台任务阶段完成。SSH/tmux 第一版只使用普通用户权限，sudo 与结构化提权继续延后。
+M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；它不会调用 Shell fallback。模型主动绕过专用 Tool 的通用阻断仍属于 M9 Policy Engine，不在 M8 偷偷实现。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -149,6 +150,8 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 ## 阶段 8：SSH 和 tmux 远程执行
 
+状态：已完成（2026-07-30）。
+
 - 增加 user/project scope 的 Execution Target 配置和信任边界
 - 实现 `target_select` 和 `remote_exec`
 - 复用系统 OpenSSH 配置、SSH Agent 和 known_hosts，不保存私钥或口令
@@ -166,17 +169,17 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 ## 阶段 9：联网搜索
 
-- 实现统一 SearchProvider 接口
-- 首先接入一个 Provider
-- 实现 `web_search`
-- 实现 `web_fetch`
-- 增加 HTML 主体提取和 Markdown 转换
-- 增加 SQLite 缓存
-- 增加来源评分、去重和引用
-- 实现研究预算和 Provider fallback 策略
-- 搜索状态和结果复用阶段 2 的 Search renderer
+状态：已完成（2026-07-30）。
 
-验收：研究结果优先使用官方来源，并保留可验证引用。
+- 已实现稳定 `SearchProvider` 接口，第一版只接入可配置 SearXNG JSON API
+- 已实现 `web_search` 与 `web_fetch`
+- 已实现 HTML 主体提取、Markdown 转换以及 text/JSON 支持；PDF 后置
+- 已实现版本化文件缓存、TTL、原子写入、损坏重建、并发请求去重和 content hash 去重
+- 已实现搜索级/正文级 `WebCitation`、规范 URL 去重和保守的第一方候选优先级
+- 已实现 query/fetch/Provider/字节/字符/timeout/redirect 预算，第一版没有第二 Provider 或 fallback
+- 已接入现有 AgentSessionServices、Tool registry、Task Ledger、AgentPool 和阶段 2 minimal Search renderer
+
+验收：普通研究任务可先搜索、再获取受控正文；重复查询和 URL 命中共享缓存；所有结果保留可验证引用；预算或配置失败后停止，不使用 Shell 网络 fallback。
 
 ## 阶段 10：Policy Engine 与 Git Tools
 
@@ -288,4 +291,4 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 8. 一个搜索 Provider
 9. 重复命令、失败预算和结构化 Git Tools
 
-当前从阶段 6 开始连续完成子 Agent、Monitor、SSH/tmux 三个闭环。除非它们出现确定性安全阻塞，否则不提前铺开 Workflow、自动唤醒或 sudo；后续功能继续复用统一状态符号、gutter、折叠和宽度处理。
+当前已连续完成子 Agent、Monitor、SSH/tmux 和联网搜索闭环。下一步只推进 Policy/Git；不提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。

@@ -18,6 +18,7 @@ import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
+import { createSearchConfigProvider, createSearchToolDefinitions, SearchRuntime } from "./search/index.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { time } from "./timings.ts";
@@ -88,6 +89,12 @@ export interface CreateAgentSessionOptions {
 	sessionStartEvent?: SessionStartEvent;
 	/** Optional cwd-bound Document Runtime, normally supplied by AgentSessionServices. */
 	documentRuntime?: DocumentRuntime;
+	/** Shared M8 Search Runtime, normally supplied by AgentSessionServices. */
+	searchRuntime?: SearchRuntime;
+	/** Budget scope shared by a Coordinator and its controlled child agents. */
+	searchBudgetScopeId?: string;
+	/** Restore search budget/content facts from this Session branch. Disabled for controlled children. */
+	synchronizeSearchBudget?: boolean;
 	/** Enable the BeauPi in-process Agent Pool for this Coordinator session. */
 	agentPool?: AgentPoolConfig | false;
 	/** Inject a session-scoped Monitor Runtime, primarily for deterministic tests. */
@@ -189,6 +196,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+	const searchRuntime =
+		options.searchRuntime ??
+		new SearchRuntime({
+			cacheDir: join(agentDir, "cache", "search"),
+			getConfig: createSearchConfigProvider(settingsManager),
+		});
+	const searchBudgetScopeId = options.searchBudgetScopeId ?? sessionManager.getSessionId();
+	if (options.synchronizeSearchBudget !== false) {
+		searchRuntime.synchronizeBudget(searchBudgetScopeId, sessionManager.getBranch());
+	}
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -263,6 +280,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					resourceLoader,
 					model,
 					customTools: options.customTools,
+					searchRuntime,
+					searchBudgetScopeId,
 					createSession: (childOptions) => createAgentSession(childOptions),
 				})
 			: undefined;
@@ -285,6 +304,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
 	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
+	const searchTools = createSearchToolDefinitions(searchRuntime, {
+		budgetScopeId: searchBudgetScopeId,
+		...(options.synchronizeSearchBudget === false ? {} : { getSessionEntries: () => sessionManager.getBranch() }),
+	});
 	const customTools = [...(options.customTools ?? [])];
 	if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
 	for (const monitorTool of monitorTools) {
@@ -292,6 +315,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 	for (const remoteTool of remoteTools) {
 		if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
+	}
+	for (const searchTool of searchTools) {
+		if (!customTools.some((tool) => tool.name === searchTool.name)) customTools.push(searchTool);
 	}
 	const defaultActiveToolNames: string[] = [
 		"read",
@@ -301,6 +327,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_search",
 		"docs_read",
 		"docs_resolve_task",
+		"web_search",
+		"web_fetch",
 		...(childAgentPool ? ["delegate_task"] : []),
 		"target_select",
 		"remote_exec",

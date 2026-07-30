@@ -12,6 +12,13 @@ import {
 	type Requirement,
 } from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
+import {
+	getSearchRuntimeToolDetails,
+	type SearchBudgetSnapshot,
+	type SearchCacheStatus,
+	type SearchDiagnostic,
+	type WebCitation,
+} from "../search/index.ts";
 import type { SessionEntry } from "../session-manager.ts";
 
 export const TASK_LEDGER_DETAILS_KEY = "taskLedger";
@@ -75,6 +82,20 @@ export interface FailureRecord {
 	commandId: string;
 	toolName: string;
 	status: "failed" | "cancelled";
+	timestamp: number;
+}
+
+export interface NetworkToolRecord {
+	id: string;
+	commandId: string;
+	toolName: "web_search" | "web_fetch";
+	status: "success" | "failed" | "cancelled";
+	provider?: string;
+	cacheStatus: SearchCacheStatus;
+	cacheHit: boolean;
+	citations: WebCitation[];
+	diagnostics: SearchDiagnostic[];
+	budget: SearchBudgetSnapshot;
 	timestamp: number;
 }
 
@@ -144,6 +165,7 @@ export interface TaskLedgerSnapshot {
 	fileModifications: readonly FileModificationRecord[];
 	filesModified: readonly string[];
 	failures: readonly FailureRecord[];
+	network: readonly NetworkToolRecord[];
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -487,6 +509,7 @@ export class TaskLedger {
 	private readonly fileReads = new Map<string, FileReadRecord>();
 	private readonly fileModifications = new Map<string, FileModificationRecord>();
 	private readonly failures = new Map<string, FailureRecord>();
+	private readonly networkRecords = new Map<string, NetworkToolRecord>();
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 
@@ -506,6 +529,7 @@ export class TaskLedger {
 		this.fileReads.clear();
 		this.fileModifications.clear();
 		this.failures.clear();
+		this.networkRecords.clear();
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 
@@ -687,6 +711,7 @@ export class TaskLedger {
 		const fileReads = [...this.fileReads.values()].map((record) => ({ ...record }));
 		const fileModifications = [...this.fileModifications.values()].map((record) => ({ ...record }));
 		const failures = [...this.failures.values()].map((record) => ({ ...record }));
+		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
@@ -702,6 +727,7 @@ export class TaskLedger {
 			fileModifications,
 			filesModified,
 			failures,
+			network,
 			verification,
 			todos: this.buildTodos(commands, filesModified, verification, now),
 			documentContract,
@@ -803,6 +829,22 @@ export class TaskLedger {
 		}
 		const documentDetails = getDocumentRuntimeToolDetails(details);
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
+		const searchDetails = getSearchRuntimeToolDetails(details);
+		if (searchDetails && (toolName === "web_search" || toolName === "web_fetch")) {
+			this.networkRecords.set(record.id, {
+				id: `network:${record.id}`,
+				commandId: record.id,
+				toolName,
+				status: searchDetails.ok ? "success" : fallbackStatus === "cancelled" ? "cancelled" : "failed",
+				provider: searchDetails.provider,
+				cacheStatus: searchDetails.cacheStatus,
+				cacheHit: searchDetails.cacheStatus === "hit",
+				citations: structuredClone(searchDetails.citations),
+				diagnostics: structuredClone(searchDetails.diagnostics),
+				budget: structuredClone(searchDetails.budget),
+				timestamp: metadata?.endedAt ?? endedAt,
+			});
+		}
 		const suppliedFilesRead =
 			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, fallbackStatus);
 		const suppliedFilesModified =

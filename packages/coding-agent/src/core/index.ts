@@ -36,6 +36,7 @@ export {
 	type AgentProgressEvent,
 	type AgentTaskBudgetSummary,
 	type AgentTaskCheck,
+	type AgentTaskCitation,
 	type AgentTaskError,
 	type AgentTaskProgressListener,
 	type AgentTaskResult,
@@ -44,6 +45,7 @@ export {
 	DEFAULT_AGENT_PROFILE,
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_IMPLEMENTER_PROFILE,
+	DEFAULT_RESEARCHER_PROFILE,
 	type DelegateTaskInput,
 	validateAgentPoolConfig,
 	validateAgentProfile,
@@ -114,6 +116,7 @@ export {
 	type ResourceLoaderSkillProjection,
 	type SkillPolicyDiagnosticReason,
 } from "./resource-loader.ts";
+export * from "./search/index.ts";
 export {
 	createSkillAllowlistOverride,
 	formatSkillSource,
@@ -169,6 +172,7 @@ export {
 	isCommitCommand,
 	isGitStatusCommand,
 	isVerificationCommand,
+	type NetworkToolRecord,
 	selectTaskTodos,
 	TASK_LEDGER_DETAILS_KEY,
 	TASK_LEDGER_DETAILS_VERSION,

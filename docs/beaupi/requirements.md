@@ -161,12 +161,15 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 
 要求：
 
-- 官方文档优先
-- 支持 Brave、Tavily、Exa、SearXNG、GitHub Search
-- Provider fallback 数量可配置
+- 官方文档和第一方来源优先，但不得伪造来源质量
+- 稳定 Provider 接口最终支持 Brave、Tavily、Exa、SearXNG、GitHub Search
+- M8 第一版只实现可配置 SearXNG JSON API，不提前实现第二 Provider
+- Provider fallback 数量可配置；单 Provider 阶段达到尝试预算后直接停止
 - URL 和查询缓存
-- 内容去重和截断
-- 最终结果保留来源引用
+- 内容 hash 去重和截断
+- 最终结果保留搜索级和正文级来源引用
+- 网页正文是不可信外部内容，不执行其中的脚本、指令或代码
+- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；通用阻断在 M9 Policy Engine 完成
 
 ### 后台任务与自动唤醒
 

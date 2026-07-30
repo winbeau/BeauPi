@@ -34,6 +34,7 @@ export {
 	type AgentProgressEvent,
 	type AgentTaskBudgetSummary,
 	type AgentTaskCheck,
+	type AgentTaskCitation,
 	type AgentTaskError,
 	type AgentTaskProgressListener,
 	type AgentTaskResult,
@@ -42,6 +43,7 @@ export {
 	DEFAULT_AGENT_PROFILE,
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_IMPLEMENTER_PROFILE,
+	DEFAULT_RESEARCHER_PROFILE,
 	type DelegateTaskInput,
 	validateAgentPoolConfig,
 	validateAgentProfile,
@@ -255,6 +257,7 @@ export {
 	createWriteTool,
 	type PromptTemplate,
 } from "./core/sdk.ts";
+export * from "./core/search/index.ts";
 export {
 	type BranchSummaryEntry,
 	buildContextEntries,
@@ -357,6 +360,7 @@ export {
 	isCommitCommand,
 	isGitStatusCommand,
 	isVerificationCommand,
+	type NetworkToolRecord,
 	selectTaskTodos,
 	TASK_LEDGER_DETAILS_KEY,
 	TASK_LEDGER_DETAILS_VERSION,

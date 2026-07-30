@@ -96,7 +96,7 @@ interface AgentTaskResult {
   profile: string;
   status: "completed" | "failed" | "cancelled" | "timed_out";
   summary: string;
-  citations: DocumentCitation[];
+  citations: Array<DocumentCitation | WebCitation>;
   references: string[];
   filesModified: string[];
   checks: AgentTaskCheck[];
@@ -247,17 +247,31 @@ type PrivilegedAction =
 
 ## 搜索架构
 
+M8 Search Runtime 直接由现有 `AgentSessionServices` 持有：
+
 ```text
-research
-├── web_search
-│   ├── official docs
-│   ├── GitHub Search
-│   └── configured web provider
-├── web_fetch
-│   ├── HTML → Markdown
-│   ├── raw text/JSON
-│   └── PDF text
-└── citation manager
+AgentSessionServices
+└── SearchRuntime
+    ├── SearchProvider
+    │   └── SearXNG JSON（M8 唯一 Provider）
+    ├── SearchCache
+    │   ├── query entries
+    │   └── URL/content entries
+    ├── SearchBudgetManager
+    ├── web_search
+    ├── web_fetch
+    │   ├── URL/DNS/redirect safety validation
+    │   ├── HTML → Markdown
+    │   └── raw text/JSON
+    └── WebCitation
 ```
 
-Provider 失败不会无限 fallback；达到预算后暂停并报告配置建议。
+`SearchProvider` 只暴露规范化请求和结构化结果，后续 Brave、Tavily、Exa 和 GitHub Search 可实现同一接口；M8 不实现第二 Provider，也没有 fallback 链。
+
+query/URL cache 位于现有 agentDir 下，使用版本化 JSON、canonical key、原子写入、TTL、fetchedAt/expiresAt 和 SHA-256 content hash。Coordinator 与受控子 Agent 共享 Runtime/cache，Session branch 只保存 Tool details 和预算事实，不复制缓存正文。
+
+`web_search` 只返回精简结果和搜索级引用。第一方候选优先级只使用显式 include domain 或 query token 与 hostname label 的可解释匹配，不把来源标记成未经验证的“官方”。snippet 始终是未验证发现信息。
+
+`web_fetch` 使用 Undici，并在连接前解析和验证全部 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
+
+预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M8 通过 Tool prompt guideline 阻止模型继续尝试等价 curl/wget/Python/Node/Bash；对通用 Bash 网络调用的强制策略属于 M9 Policy Engine。

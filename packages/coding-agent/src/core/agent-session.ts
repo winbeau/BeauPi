@@ -110,6 +110,7 @@ import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { RemoteExecutionRuntime } from "./remote/runtime.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { attachSearchRuntimeToolDetails, getSearchRuntimeToolDetails } from "./search/index.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
@@ -579,8 +580,9 @@ export class AgentSession {
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 			const runner = this._extensionRunner;
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
+			const searchDetails = getSearchRuntimeToolDetails(result.details);
 			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+				return searchDetails?.ok === false ? { isError: true } : undefined;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -595,15 +597,17 @@ export class AgentSession {
 			});
 
 			if (!hookResult) {
-				return undefined;
+				return searchDetails?.ok === false ? { isError: true } : undefined;
 			}
 
+			let details = documentDetails
+				? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
+				: hookResult.details;
+			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
 			return {
 				content: hookResult.content,
-				details: documentDetails
-					? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
-					: hookResult.details,
-				isError: hookResult.isError ?? isError,
+				details,
+				isError: searchDetails?.ok === false ? true : (hookResult.isError ?? isError),
 				usage: hookResult.usage,
 			};
 		};

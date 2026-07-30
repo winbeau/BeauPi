@@ -15,6 +15,7 @@ import {
 	type ResourceLoaderReloadOptions,
 } from "./resource-loader.ts";
 import { type CreateAgentSessionOptions, type CreateAgentSessionResult, createAgentSession } from "./sdk.ts";
+import { createSearchConfigProvider, SearchRuntime } from "./search/index.ts";
 import type { SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 
@@ -42,6 +43,7 @@ export interface CreateAgentSessionServicesOptions {
 	agentDir?: string;
 	settingsManager?: SettingsManager;
 	modelRuntime?: ModelRuntime;
+	searchRuntime?: SearchRuntime;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 	resourceLoaderReloadOptions?: ResourceLoaderReloadOptions;
@@ -81,6 +83,7 @@ export interface AgentSessionServices {
 	settingsManager: SettingsManager;
 	resourceLoader: ResourceLoader;
 	documentRuntime: DocumentRuntime;
+	searchRuntime: SearchRuntime;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
 
@@ -158,6 +161,12 @@ export async function createAgentSessionServices(
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
 
 	const documentRuntime = new DocumentRuntime({ cwd, agentDir, resourceLoader });
+	const searchRuntime =
+		options.searchRuntime ??
+		new SearchRuntime({
+			cacheDir: join(agentDir, "cache", "search"),
+			getConfig: createSearchConfigProvider(settingsManager),
+		});
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
@@ -194,6 +203,7 @@ export async function createAgentSessionServices(
 		settingsManager,
 		resourceLoader,
 		documentRuntime,
+		searchRuntime,
 		diagnostics,
 	};
 }
@@ -215,6 +225,7 @@ export async function createAgentSessionFromServices(
 		settingsManager: options.services.settingsManager,
 		resourceLoader: options.services.resourceLoader,
 		documentRuntime: options.services.documentRuntime,
+		searchRuntime: options.services.searchRuntime,
 		sessionManager: options.sessionManager,
 		model: options.model,
 		thinkingLevel: options.thinkingLevel,

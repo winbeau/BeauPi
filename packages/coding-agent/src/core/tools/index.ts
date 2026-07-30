@@ -111,7 +111,7 @@ export type ToolName =
 	| "docs_search"
 	| "docs_read"
 	| "docs_resolve_task";
-export const allToolNames: Set<ToolName> = new Set([
+export const allToolNames: Set<string> = new Set([
 	"read",
 	"bash",
 	"edit",
@@ -122,6 +122,8 @@ export const allToolNames: Set<ToolName> = new Set([
 	"docs_search",
 	"docs_read",
 	"docs_resolve_task",
+	"web_search",
+	"web_fetch",
 ]);
 
 export interface ToolsOptions {
