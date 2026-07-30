@@ -14,6 +14,7 @@
 - Added complete `/skills` registry management details, searchable source/scope/path/diagnostic fields, collision-side display, SKILL.md viewing, and explicit disabled actions for non-updateable sources.
 - Added BeauPi M5 in-process sub-agents with isolated `AgentSession` contexts, shared ModelRuntime/Provider/ResourceLoader lifecycles, AgentProfile Tool/Skill/file boundaries and budgets, bounded concurrency/cancellation/timeouts, non-recursive `delegate_task`, structured results, and Monitor-ready lifecycle/progress events.
 - Added the M6 session-scoped MonitorRuntime and MonitorRegistry with deterministic Process/Tool/Sub-Agent records, fake adapters, the reserved SSH/tmux adapter interface, six `monitor_*` Tools, cursor/hash incremental logs, lifecycle event deduplication, and Session restoration loss handling.
+- Added the interactive `/target-server` command for creating and updating user/project SSH execution targets, persisting non-secret OpenSSH configuration, and selecting the saved target immediately.
 
 ### Changed
 

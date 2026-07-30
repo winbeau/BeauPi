@@ -84,6 +84,11 @@ import {
 } from "../../core/model-resolver.ts";
 import { MONITOR_SESSION_ENTRY_TYPE } from "../../core/monitor/index.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import {
+	EXECUTION_TARGET_VERSION,
+	type ExecutionTargetConfig,
+	validateExecutionTarget,
+} from "../../core/remote/index.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -610,6 +615,21 @@ export class InteractiveMode {
 					description: formatLoginProviderCompletionDescription(provider),
 				}));
 			};
+		}
+
+		const targetServerCommand = slashCommands.find((command) => command.name === "target-server");
+		if (targetServerCommand) {
+			targetServerCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null =>
+				createFuzzyAutocompleteItems(
+					this.session.remoteRuntime.listTargets(),
+					prefix,
+					(target) => `${target.id} ${target.sshAlias} ${target.label ?? ""}`,
+					(target) => ({
+						value: target.id,
+						label: target.id,
+						description: `${target.sshAlias} · ${target.scope}`,
+					}),
+				);
 		}
 
 		// Convert prompt templates to SlashCommand format for autocomplete
@@ -2795,6 +2815,16 @@ export class InteractiveMode {
 			if (text === "/trust") {
 				this.showTrustSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/target-server" || text.startsWith("/target-server ")) {
+				const args = text.slice("/target-server".length).trim();
+				this.editor.setText("");
+				if (/\s/.test(args)) {
+					this.showError("Usage: /target-server [target-id]");
+					return;
+				}
+				await this.handleTargetServerCommand(args || undefined);
 				return;
 			}
 			if (text === "/login" || text.startsWith("/login ")) {
@@ -5422,6 +5452,133 @@ export class InteractiveMode {
 	// =========================================================================
 	// Command handlers
 	// =========================================================================
+
+	private async handleTargetServerCommand(targetIdArg?: string): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before changing SSH targets.");
+			return;
+		}
+		if (this.session.isCompacting) {
+			this.showWarning("Wait for compaction to finish before changing SSH targets.");
+			return;
+		}
+
+		const configuredTargets = this.session.remoteRuntime.listTargets();
+		let existingTarget = targetIdArg ? configuredTargets.find((target) => target.id === targetIdArg) : undefined;
+		if (!targetIdArg && configuredTargets.length > 0) {
+			const addTargetOption = "Add a new target";
+			const targetByOption = new Map<string, ExecutionTargetConfig>();
+			const options = [addTargetOption];
+			for (const target of configuredTargets) {
+				const option = `${target.id} · ${target.sshAlias} · ${target.scope}`;
+				targetByOption.set(option, target);
+				options.push(option);
+			}
+			const selected = await this.showExtensionSelector("Configure SSH execution target", options);
+			if (selected === undefined) return;
+			if (selected !== addTargetOption) existingTarget = targetByOption.get(selected);
+		}
+
+		if (existingTarget?.scope === "session") {
+			this.showError("Session-scoped execution targets cannot be updated in settings.");
+			return;
+		}
+
+		let targetId = existingTarget?.id ?? targetIdArg?.trim();
+		if (!targetId) {
+			const value = await this.showExtensionInput("Target id (for example: h100-server)");
+			if (value === undefined) return;
+			targetId = value.trim();
+		}
+		if (!targetId) {
+			this.showError("Target id is required.");
+			return;
+		}
+
+		const defaultAlias = existingTarget?.sshAlias ?? targetId;
+		const aliasInput = await this.showExtensionInput(
+			`OpenSSH Host alias (Enter uses ${JSON.stringify(defaultAlias)})`,
+		);
+		if (aliasInput === undefined) return;
+		const sshAlias = aliasInput.trim() || defaultAlias;
+
+		let scope = existingTarget?.scope;
+		if (!scope) {
+			const userScopeOption = "User settings (available in all projects)";
+			const projectScopeOption = "Project settings (current trusted project)";
+			const scopeOptions = [userScopeOption];
+			if (this.settingsManager.isProjectTrusted()) scopeOptions.push(projectScopeOption);
+			const selectedScope = await this.showExtensionSelector("Save execution target in", scopeOptions);
+			if (selectedScope === undefined) return;
+			scope = selectedScope === projectScopeOption ? "project" : "user";
+		}
+
+		const cwdDescription = existingTarget?.remoteCwd
+			? `current ${JSON.stringify(existingTarget.remoteCwd)}; Enter keeps it; - clears it`
+			: "optional; Enter leaves it unset";
+		const remoteCwdInput = await this.showExtensionInput(`Default remote working directory (${cwdDescription})`);
+		if (remoteCwdInput === undefined) return;
+		const remoteCwdText = remoteCwdInput.trim();
+		const remoteCwd =
+			remoteCwdText === "" ? existingTarget?.remoteCwd : remoteCwdText === "-" ? undefined : remoteCwdText;
+
+		const userDescription = existingTarget?.user
+			? `current ${JSON.stringify(existingTarget.user)}; Enter keeps it; - clears it`
+			: "optional; normally defined in ~/.ssh/config";
+		const userInput = await this.showExtensionInput(`SSH user (${userDescription})`);
+		if (userInput === undefined) return;
+		const userText = userInput.trim();
+		const user = userText === "" ? existingTarget?.user : userText === "-" ? undefined : userText;
+
+		const portDescription = existingTarget?.port
+			? `current ${existingTarget.port}; Enter keeps it; - clears it`
+			: "optional; normally defined in ~/.ssh/config";
+		const portInput = await this.showExtensionInput(`SSH port (${portDescription})`);
+		if (portInput === undefined) return;
+		const portText = portInput.trim();
+		let port = existingTarget?.port;
+		if (portText === "-") {
+			port = undefined;
+		} else if (portText !== "") {
+			port = Number(portText);
+			if (!Number.isInteger(port)) {
+				this.showError("SSH port must be an integer between 1 and 65535.");
+				return;
+			}
+		}
+
+		const target: ExecutionTargetConfig = {
+			...existingTarget,
+			version: EXECUTION_TARGET_VERSION,
+			id: targetId,
+			scope,
+			sshAlias,
+		};
+		if (remoteCwd === undefined) delete target.remoteCwd;
+		else target.remoteCwd = remoteCwd;
+		if (user === undefined) delete target.user;
+		else target.user = user;
+		if (port === undefined) delete target.port;
+		else target.port = port;
+
+		const validation = validateExecutionTarget(target);
+		if (!validation.ok) {
+			this.showError(validation.diagnostics.join("; "));
+			return;
+		}
+
+		try {
+			this.session.remoteRuntime.persistTarget(target);
+			await this.settingsManager.flush();
+			this.session.remoteRuntime.selectTarget(target.id);
+			this.footer.invalidate();
+			this.showStatus(
+				`Saved and selected SSH target ${target.id} (${target.sshAlias}) in ${target.scope} settings.`,
+			);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
 
 	private createSkillRegistryService(): SkillRegistryService {
 		return new SkillRegistryService({

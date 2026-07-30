@@ -197,6 +197,30 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 
 `npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.pi/agent/npm/`; project-scoped npm packages install under `.pi/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
 
+### SSH execution targets
+
+Execution targets are non-secret SSH configuration entries used by the built-in remote and tmux tools. They contain an OpenSSH alias, not private keys, passwords, or tokens.
+
+- Global targets are stored in `~/.beaupi/agent/settings.json` and use `"scope": "user"`.
+- Project targets are stored in `.beaupi/settings.json` and use `"scope": "project"`; the project must be trusted before they are read or written.
+- Use `/target-server` to add or update a target interactively. The command saves the target and selects it for the current session.
+
+```json
+{
+  "executionTargets": [
+    {
+      "id": "h100-server",
+      "label": "H100 server",
+      "scope": "user",
+      "sshAlias": "h100-server",
+      "remoteCwd": "/workspace"
+    }
+  ]
+}
+```
+
+`sshAlias` is resolved by OpenSSH, so existing `~/.ssh/config`, SSH Agent, and `known_hosts` configuration are reused. Do not put credentials in settings.
+
 ### Sessions
 
 | Setting | Type | Default | Description |

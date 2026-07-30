@@ -135,6 +135,7 @@ function createTargetSelectTool(
 		promptSnippet: "Select a trusted SSH execution target",
 		promptGuidelines: [
 			"Select a target before remote_exec or terminal operations.",
+			"If a target is missing in interactive mode, ask the user to configure it with /target-server [target-id].",
 			"Never ask for or store SSH private keys, passwords, or tokens.",
 		],
 		parameters: targetSelectSchema,
