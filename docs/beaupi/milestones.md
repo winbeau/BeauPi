@@ -46,11 +46,12 @@
 | M6 | 建立 Monitor 监控闭环 | Monitor Runtime、状态、增量日志、事件 | M1、M2、M5 |
 | M7 | 建立 SSH/tmux 远程执行 | Execution Target、SSH、tmux、远程 Tool | M3、M6 |
 | M8 | 建立受预算搜索能力 | `web_search`、`web_fetch`、引用与缓存 | M3 |
-| M9 | 建立执行策略与 Git 工具 | Policy Engine、失败预算、Git Tools | M2、M3、M6、M7 |
-| M10 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M9 |
-| M11 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M9 |
-| M12 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M11 |
-| M13 | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | M0–M12 |
+| M9 | 建立交互式询问闭环 | `ask_user_question`、单选/多选、自由输入、review | M1、M2 |
+| M10 | 建立确定性执行策略 | Policy Engine、失败预算、fallback 阻断 | M2、M6、M7、M8、M9 |
+| M11 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M10 |
+| M12 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M10 |
+| M13 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M10、M12 |
+| M14 | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | M0–M13 |
 
 ---
 
@@ -381,7 +382,7 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 
 ### 实现边界
 
-M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动唤醒在 M11 完成，SSH/tmux 在 M7 接入本 Monitor Runtime。
+M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动唤醒在 M12 完成，SSH/tmux 在 M7 接入本 Monitor Runtime。
 
 ### 验收记录（2026-07-29）
 
@@ -479,16 +480,67 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 - 大正文沿用 2,000 行/50 KiB 模型输出上限，完整 Markdown 写入权限受限的临时文件；相同 content hash 在同一任务预算 scope 中只注入一次正文。
 - 搜索级和正文级 `WebCitation` 进入 Tool details、Session 与现有 Task Ledger；Task Ledger 记录调用状态、cache hit、预算、诊断和引用，子 Agent 只向 Coordinator 返回结构化引用，不返回 transcript。
 - M8 预算确定性限制单次结果数、单任务 query/fetch/Provider 尝试、单次 fetch 字节、总输入字符、timeout 和 redirects；达到限制后不继续网络访问，并通过 Tool prompt guideline 禁止 curl/wget/Python/Node/Bash 等价 fallback。
-- M8 不实现通用 Shell Policy Engine。彻底阻止模型主动调用 Bash 网络命令仍属于 M9；当前边界是专用 Tool 内无 Shell fallback、明确诊断和 System Prompt 约束。
+- M8 不实现通用 Shell Policy Engine。彻底阻止模型主动调用 Bash 网络命令仍属于 M10；当前边界是专用 Tool 内无 Shell fallback、明确诊断和 System Prompt 约束。
 - fake provider、fake HTTP server、可控时钟和临时目录测试覆盖成功、空结果、参数、排序/去重、缓存、正文提取、hash/截断、错误分类、SSRF、预算、Session 恢复、分支预算重建、子 Agent 隔离/引用传递及 80/120/160 列 renderer。
 
 ---
 
-## M9：Policy Engine 与 Git Tools
+## M9：Claude Code 风格询问选择框
 
 ### 目标
 
-把重复命令、失败预算、权限边界和高频 Git 操作从模型提示转化为确定性执行策略，并覆盖本地与远程执行。
+让 Agent 在存在真实歧义或需要用户偏好时，通过结构化 Tool 显示 Claude Code 风格的询问选择框，并把用户选择作为当前 Tool call 的确定性结果继续执行。
+
+### 交付物
+
+- `ask_user_question`
+- 1–4 个问题、短 header、2–4 个唯一选项的版本化 schema
+- 单选、多选、自动 `Other` 自由输入和取消
+- 多问题 tab、已回答标记、review/submit
+- 可选单选 Markdown preview、notes 和窄终端降级
+- 现有 keybinding、selector、editor、Tool registry 和 AgentSession 生命周期接入
+- SDK/RPC interaction callback 与无交互通道的 `interaction_required`
+- 当前 Session branch 的 pending/answered/cancelled 事实恢复
+- Coordinator-only 用户交互边界；子 Agent 只返回 clarification request
+
+### 实现参考与边界
+
+参考 `../claude-code/` 的 `AskUserQuestionTool`、`AskUserQuestionPermissionRequest`、`QuestionView`、`QuestionNavigationBar`、`SubmitQuestionsView`、`PreviewQuestionView` 和 `use-multiple-choice-state`，提炼以下行为：
+
+- 单问题单选选择后自动提交
+- 多选不自动推进，显式 Next/Submit
+- 多问题以 header tab 导航，并显示 answered checkbox
+- 普通问题自动提供自由输入
+- preview 问题使用左侧选项、右侧有界预览和 notes
+- 选项、自由输入和 notes 在切题/resize 后保持
+
+不复制 React/Ink 代码、品牌资源或 Plan interview；第一版不包含图片粘贴、HTML preview、Channel relay 或新的 Plan Mode。所有键位必须进入现有可配置 keybinding，不硬编码业务键检查。
+
+### 测试
+
+使用 faux provider 和可控 TUI 覆盖：
+
+- schema 数量、唯一性和长度边界
+- 单问题单选自动提交
+- 多选、Other 输入、多问题导航和 review
+- preview/notes、长文本、CJK、emoji 和 truncation
+- cancel/reject/interaction_required
+- Session resume、Compact 和 branch 切换
+- 子 Agent Tool 隔离
+- 暗色/亮色与 40/80/120/160 列宽度
+- faux Coordinator 收到答案后继续同一任务
+
+### 验收标准
+
+用户可以只用键盘完成单选、多选、Other 输入、多问题 review 和取消；结构化答案回到原 Tool call 后 Agent 继续；TUI 外模式不挂起；所有布局在窄终端下无横向溢出。
+
+---
+
+## M10：Policy Engine
+
+### 目标
+
+把重复命令、失败预算、权限边界和等价 fallback 从模型提示转化为确定性执行策略，并覆盖本地、远程和网络执行。
 
 ### 交付物
 
@@ -496,21 +548,19 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 - 等价操作签名
 - Shell、远程执行、网络和失败预算
 - `PolicyDecision`
-- `project_inspect`
-- `git_snapshot`
-- `git_diff`
-- `git_sync_status`
-- `git_commit`
-- 缓存失效和并发会话检查
+- Session 恢复、分支切换和并发调用下的策略事实一致性
 - 缺少依赖、权限不足、认证失败、限流和超时的停止策略
+- Policy block/confirm/replace/pause 状态接入现有 Tool renderer 和 Task Ledger
+- confirm 复用 M9 的稳定交互接口，但与普通澄清问题保持不同结构化 details
+- 明确不增加专用 Git Tools；普通 Git 操作继续使用现有 Bash 能力和仓库开发规则
 
 ### 验收标准
 
-普通提交流程通过结构化 Git Tool 完成；工作区未变化时不会重复运行等价检查；达到失败预算后 Agent 暂停并给出明确原因。
+工作区相关事实未变化时不会重复运行等价检查；达到失败或 fallback 预算后 Agent 暂停并给出明确原因；本地、远程和网络路径使用一致的 Policy 决策语义。
 
 ---
 
-## M10：多 Agent Workflow
+## M11：多 Agent Workflow
 
 ### 目标
 
@@ -533,7 +583,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 ---
 
-## M11：后台任务与自动唤醒
+## M12：后台任务与自动唤醒
 
 ### 目标
 
@@ -567,7 +617,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 脚本完成后自动触发新的 Agent turn；无日志变化时不调用模型；多个同时完成事件不会并发启动多个 Coordinator turn；本地和远程任务使用同一套 Monitor 状态和日志语义。
 
-## M12：受控权限能力
+## M13：受控权限能力
 
 ### 目标
 
@@ -588,7 +638,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化授权到期后自动恢复用户模式；本地与远程提权均有审计记录。
 
-## M13：发行准备
+## M14：发行准备
 
 ### 目标
 
@@ -648,8 +698,8 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 M0–M8 已形成连续能力闭环。下一阶段只推进 M9：
 
-1. 复用现有 Task Ledger、Monitor Runtime、Remote Runtime 和 M8 Search Runtime，定义通用 `PolicyDecision`。
-2. 把等价 Shell/网络 fallback、失败预算和 Git 高频操作从提示约束提升为确定性策略与结构化 Tool。
-3. 不提前实现 M10 Workflow、M11 自动唤醒或 M12 sudo。
+1. 复用现有 AgentSession、Tool registry、InteractiveMode selector、editor、keybinding 和 minimal Tool renderer，实现 `ask_user_question`。
+2. 先闭环单选、多选、Other、多问题 review、preview、TUI 外 interaction callback 和 Session branch 恢复。
+3. 不提前实现 M10 Policy Engine、M11 Workflow、M12 自动唤醒或 M13 sudo。
 
 不要创建第二套 Runtime、Session、ResourceLoader、Task Ledger 或 Tool 执行链。Write 动态行数、Ctrl+O 展开、Pi 跳动加载图标和已有 TUI 宽度约束继续保留。

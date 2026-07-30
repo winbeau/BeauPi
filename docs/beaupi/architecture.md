@@ -25,7 +25,7 @@ BeauPi CLI / TUI
 │   └── tmux
 │
 ├── Native Tools
-│   ├── Git
+│   ├── Interaction
 │   ├── Documents
 │   ├── Search
 │   ├── Remote/Terminal
@@ -58,6 +58,7 @@ packages/coding-agent/
 │   │   ├── monitor/         # 进程、Tool、子 Agent 和远程目标监控
 │   │   ├── workflow/        # DAG、调度和节点状态
 │   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
+│   │   ├── questions/       # 询问 schema、pending interaction 和结构化答案
 │   │   ├── policy/          # 命令、失败、预算和权限策略
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
@@ -165,7 +166,34 @@ interface ExecutionContract {
 
 Execution Contract 约束 Agent 执行，但不引入独立 Plan Mode。Document Runtime 负责文档内容、索引、引用和 Contract；Task Ledger 保留 requirement/check/completion 的证据状态，但 Tasks Widget 只投影 actionable required check 和 completion criterion，不单独展示文档 Contract 或 Requirement Todo。关键文档 hash 变化后旧 Contract 不再作为有效约束。详见 [Document Runtime 设计](./document-runtime.md)。
 
+## 询问选择框
+
+M9 在现有 AgentSession、Tool registry 和 InteractiveMode selector 生命周期上增加 `ask_user_question`，不创建第二套输入循环或对话 Runtime：
+
+```text
+AgentSession
+└── ask_user_question
+    ├── Question schema validation
+    ├── Pending interaction state
+    ├── Claude-style Question Selector
+    │   ├── single select / multi-select
+    │   ├── Other free-text input
+    │   ├── question tabs and review
+    │   └── optional Markdown preview
+    └── structured answers / annotations
+```
+
+输入限定为 1–4 个唯一问题，每个问题包含不超过 12 个显示字符的 header、2–4 个唯一选项、单选/多选标记和可选 preview。普通问题由 UI 自动提供“其他”自由输入，不允许模型重复构造 `Other` 选项。
+
+单问题单选在选择后直接完成；多问题或多选保留每题状态，通过 tab/左右键切换并在最终 review 后提交。所有按键使用现有可配置 keybinding，Esc 返回结构化 cancelled/rejected 状态。可选 preview 只支持不可信 Markdown 文本，不执行 HTML、脚本或代码；窄终端退化为纵向选项和折叠 preview。
+
+TUI 外模式不能等待不存在的键盘输入：SDK/RPC 可提供 interaction callback，否则 Tool 返回结构化 `interaction_required`。受控子 Agent 默认没有该 Tool，只能把 clarification request 返回 Coordinator，由 Coordinator 决定是否询问用户。
+
+参考 `../claude-code/` 中的 `AskUserQuestionTool`、`AskUserQuestionPermissionRequest`、`QuestionView`、`QuestionNavigationBar`、`SubmitQuestionsView` 和 preview 组件重新实现行为；只提炼交互和布局，不复制 React/Ink 代码或品牌资源。
+
 ## Policy Engine
+
+M10 Policy Engine 复用 M9 的稳定用户交互接口表达 confirm，但 Policy 决策与普通澄清问题仍是不同的结构化事实。
 
 策略结果：
 
@@ -185,9 +213,11 @@ interface PolicyDecision {
 - Shell 调用预算
 - 网络搜索预算
 - 敏感路径保护
-- Git 工作流约束
+- 本地与远程执行目标边界
 - sudo 提权约束
-- 专用 Tool 替代原始 Bash
+- 已有专用 Tool 的确定性执行边界
+
+BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则；Policy Engine 只对其应用通用的重复命令、失败预算和权限策略。
 
 ## State
 
@@ -222,7 +252,7 @@ Monitor Runtime 是本地进程、Tool、子 Agent、SSH 连接和 tmux 会话�
 
 M6 的 Process adapter 只检查 PID、退出码、日志位置/identity/hash 和资源快照；Tool/Sub-Agent adapter 消费现有 `AgentSession`/`AgentPool` 生命周期事件。`starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 是唯一 Monitor 状态，无法确认恢复目标时使用 `lost`，不推断成功。SSH/tmux adapter 只保留接口，M7 才实现连接。
 
-Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列，并复用 Monitor Runtime；进程完成或满足触发条件后，才通过现有 Session 消息机制重新触发 Agent turn。M6 先交付 Monitor，M11 再增加后台自动唤醒。
+Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列，并复用 Monitor Runtime；进程完成或满足触发条件后，才通过现有 Session 消息机制重新触发 Agent turn。M6 先交付 Monitor，M12 再增加后台自动唤醒。
 
 系统区分两种轮询：
 
@@ -274,4 +304,4 @@ query/URL cache 位于现有 agentDir 下，使用版本化 JSON、canonical key
 
 `web_fetch` 使用 Undici，并在连接前解析和验证全部 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
 
-预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M8 通过 Tool prompt guideline 阻止模型继续尝试等价 curl/wget/Python/Node/Bash；对通用 Bash 网络调用的强制策略属于 M9 Policy Engine。
+预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M8 通过 Tool prompt guideline 阻止模型继续尝试等价 curl/wget/Python/Node/Bash；对通用 Bash 网络调用的强制策略属于 M10 Policy Engine。

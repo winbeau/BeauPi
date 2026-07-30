@@ -25,11 +25,11 @@
 
 ### 减少重复命令
 
-- 任务开始时执行一次项目和 Git 检查
-- 文件或 HEAD 未变化时复用缓存
-- commit 前通过一个结构化 Tool 完成最终检查
+- 任务开始时只执行必要的项目和环境检查
+- 相关输入未变化时复用已有确定性事实
 - 阻止短时间内重复的等价命令
-- 原始 `git commit` 由 `git_commit` Tool 替代
+- 达到失败或 fallback 预算后暂停，而不是更换等价命令继续尝试
+- 不增加专用 Git Tools；普通 Git 操作继续使用现有 Bash 能力并遵守仓库开发规则
 
 ### 失败预算
 
@@ -44,6 +44,21 @@
 - 参数错误
 
 达到预算后暂停，不允许模型不断更换 curl、wget、Python、Node 等等价方案。缺少依赖时向用户建议受控安装。
+
+### 交互式询问选择
+
+提供 Claude Code 风格的 `ask_user_question` Tool 和询问选择框：
+
+- 一次支持 1–4 个问题，每个问题包含短 header、明确问题和 2–4 个选项
+- 支持单选和多选；普通问题自动提供自由输入的“其他”入口
+- 多问题使用可恢复的 tab/navigation 状态，并显示已回答标记和最终 review/submit
+- 单问题单选可以选择后直接提交；多选必须显式确认
+- 可选 Markdown preview 只用于单选的代码、布局、配置或图示对比，窄终端自动降级
+- 上下、Tab/左右、Enter、Esc 和外部编辑器操作必须进入现有可配置 keybinding 系统
+- 取消、拒绝和未完成问题返回结构化状态，不伪造答案
+- TUI 外模式必须通过 SDK/RPC 回调处理或明确返回 `interaction_required`，不得无限等待键盘输入
+- Coordinator 是唯一直接询问用户的 Agent；子 Agent 只返回结构化 clarification request
+- Tool result 只保存问题、答案和必要 annotation，不保存独立对话 transcript
 
 ### 执行可视化
 
@@ -107,10 +122,7 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 
 首批工具：
 
-- `project_inspect`
-- `git_snapshot`
-- `git_diff`
-- `git_commit`
+- `ask_user_question`
 - `docs_search`
 - `docs_read`
 - `docs_resolve_task`
@@ -169,7 +181,7 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - 内容 hash 去重和截断
 - 最终结果保留搜索级和正文级来源引用
 - 网页正文是不可信外部内容，不执行其中的脚本、指令或代码
-- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；通用阻断在 M9 Policy Engine 完成
+- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；通用阻断在 M10 Policy Engine 完成
 
 ### 后台任务与自动唤醒
 

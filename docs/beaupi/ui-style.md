@@ -27,6 +27,11 @@ src/components/TaskListV2.tsx
 src/components/AgentProgressLine.tsx
 src/components/BuiltinStatusLine.tsx
 src/components/StatusLine.tsx
+packages/builtin-tools/src/tools/AskUserQuestionTool/AskUserQuestionTool.tsx
+src/components/permissions/AskUserQuestionPermissionRequest/QuestionView.tsx
+src/components/permissions/AskUserQuestionPermissionRequest/QuestionNavigationBar.tsx
+src/components/permissions/AskUserQuestionPermissionRequest/SubmitQuestionsView.tsx
+src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.tsx
 ```
 
 完整开发拆分、文件清单、测试矩阵和验收表见 [Claude Code 风格 TUI 调整计划](./plans/README.md)。
@@ -120,11 +125,53 @@ src/components/StatusLine.tsx
 | `find` | `Find` |
 | `web_search` | `Web Search` |
 | `web_fetch` | `Fetch` |
+| `ask_user_question` | `Question` |
 | `delegate_task` | `Agent` |
 | `workflow_run` | `Workflow` |
 | `background_start` | `Background` |
 
 底层 Tool 名称保持不变，只修改 renderer。
+
+## 询问选择框
+
+M9 增加 Claude Code 风格 `ask_user_question`，作为真实 Tool user-interaction lifecycle，而不是普通通知或伪造 permission 状态。
+
+普通单选：
+
+```text
+Library  ■
+Which date library should we use?
+
+› 1. date-fns
+     Small, modular functions
+  2. Luxon
+     Rich timezone API
+  3. Other
+     Type something…
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+```
+
+多问题：
+
+```text
+←  ☑ Library   ☐ Scope   ✓ Submit  →
+```
+
+规则：
+
+- 一次显示一个问题；顶部 tab 使用短 header、回答复选标记和最终 Submit，宽度不足时优先保留当前 tab 并截断其他 header。
+- 当前选项使用 `›` 和 accent，不使用整块高饱和背景；已选多选项使用 checkbox 和 success 色。
+- 单问题单选选择后直接提交；多问题和多选进入 review/submit。
+- 普通问题自动追加 `Other` 自由输入；进入输入模式后保留光标和外部编辑器入口。
+- 可选 preview 模式在宽终端左侧显示约 30 列选项、右侧显示有界 Markdown preview 和 notes；窄终端改为纵向布局或折叠 preview。
+- preview 以视觉宽度截断，超出高度显示隐藏行数；不执行 HTML、脚本或代码。
+- 问题切换时保持选择、自由输入和 notes，不产生重复 Tool result。
+- 上下、Tab/左右、Enter、Esc 和外部编辑器动作全部通过现有可配置 keybinding，不硬编码业务键检查。
+- 取消、拒绝、interaction required 和已回答状态使用结构化 Tool details；renderer 不从文案推断。
+- 40/80/120/160 列、暗色/亮色、CJK、emoji、长 label/description 和 resize 均不得横向溢出。
+
+BeauPi 不复制参考仓库的 React/Ink 组件；实现复用 Pi TUI 的 selector、editor、Container、Markdown 和 ANSI-aware 宽度 helper。
 
 ## Diff
 

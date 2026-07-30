@@ -8,14 +8,14 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M8 已完成。近期开发只推进阶段 10（M9）Policy Engine 与 Git Tools：
+M0–M8 已完成。近期开发只推进阶段 10（M9）Claude Code 风格询问选择框：
 
-1. 把 M2 已记录的重复命令和失败事实转化为确定性策略。
-2. 覆盖本地 Shell、M7 远程执行和 M8 网络 fallback，不再只依赖提示约束。
-3. 增加结构化 Git inspection/diff/commit Tool。
-4. 后续才推进多 Agent Workflow、后台自动唤醒和 sudo。
+1. 增加结构化 `ask_user_question`，支持 1–4 个问题、单选、多选和自由输入。
+2. 复用现有 AgentSession、Tool registry、InteractiveMode selector、editor 和 keybinding，不创建第二套输入循环。
+3. 对齐 Claude Code 的问题 tab、回答标记、review/submit、可选 Markdown preview 和窄终端降级。
+4. M10 再推进 Policy Engine；之后才是 Workflow、后台自动唤醒和 sudo。
 
-M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；它不会调用 Shell fallback。模型主动绕过专用 Tool 的通用阻断仍属于 M9 Policy Engine，不在 M8 偷偷实现。
+M8 已提供单一 SearXNG Provider、`web_search`、`web_fetch`、共享缓存、引用和严格研究预算；它不会调用 Shell fallback。模型主动绕过专用 Tool 的通用阻断仍属于 M10 Policy Engine，不在 M9 询问选择框阶段提前实现。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -181,23 +181,45 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 验收：普通研究任务可先搜索、再获取受控正文；重复查询和 URL 命中共享缓存；所有结果保留可验证引用；预算或配置失败后停止，不使用 Shell 网络 fallback。
 
-## 阶段 10：Policy Engine 与 Git Tools
+## 阶段 10：Claude Code 风格询问选择框
+
+- 新增结构化 `ask_user_question` Tool，标记为 read-only、requires-user-interaction
+- 输入支持 1–4 个唯一问题；每题包含不超过 12 个显示字符的 header、明确 question 和 2–4 个唯一选项
+- 支持单选、多选和普通问题自动追加的 `Other` 自由输入
+- 单问题单选选择后直接提交；多问题和多选提供 question tabs、已回答标记及最终 review/submit
+- 支持上下导航、Tab/左右切题、Enter 选择、Esc 取消和外部编辑器，并接入现有可配置 keybinding
+- 可选 Markdown preview 仅用于单选的代码、布局、配置和图示对比；宽终端左右布局，窄终端纵向/折叠降级
+- 问题切换和 resize 保持每题选择、自由输入与 notes，不重复生成 Tool result
+- answers、annotations、cancelled/rejected/interaction-required 使用版本化 Tool details，Session 恢复和 branch 切换只重建当前分支事实
+- SDK/RPC 通过 interaction callback 回答；没有交互通道时立即返回 `interaction_required`，不挂起
+- Coordinator 默认可用；受控子 Agent 不直接询问用户，只返回结构化 clarification request
+- 复用现有 selector、editor、Markdown、minimal Tool shell 和 ANSI-aware 宽度 helper，不复制参考仓库 React/Ink 实现
+
+参考实现：
+
+- `../claude-code/packages/builtin-tools/src/tools/AskUserQuestionTool/AskUserQuestionTool.tsx`
+- `../claude-code/src/components/permissions/AskUserQuestionPermissionRequest/AskUserQuestionPermissionRequest.tsx`
+- `QuestionView.tsx`、`QuestionNavigationBar.tsx`、`SubmitQuestionsView.tsx`
+- `PreviewQuestionView.tsx`、`PreviewBox.tsx`、`use-multiple-choice-state.ts`
+
+不纳入 M9 第一版：图片粘贴、Plan interview 专用动作、HTML preview、Channel relay 或新的 Plan Mode。
+
+验收：faux Coordinator 调用 `ask_user_question` 后，用户可以完成单选、多选、Other 输入、多问题切换、review/submit 和取消；结构化答案回到同一 Tool call 后 Agent 继续；TUI 外模式不会挂起；暗色/亮色及 40/80/120/160 列无横向溢出。
+
+## 阶段 11：Policy Engine
 
 - 命令和错误分类
 - 等价操作签名
 - 缺少依赖、权限、认证、网络和超时停止策略
 - Shell、远程执行和网络 fallback 预算
-- `project_inspect`
-- `git_snapshot`
-- `git_diff`
-- `git_sync_status`
-- `git_commit`
-- 缓存失效和并发会话安全检查
+- Session 恢复、分支切换和并发调用下的策略事实一致性
 - Policy block/confirm/replace/pause 状态接入统一 Tool 状态组件
+- confirm 复用阶段 10 的稳定交互接口，但与普通澄清问题保留不同 details
+- 明确不增加专用 Git Tools，普通 Git 操作继续走现有 Bash 能力
 
-验收：达到失败或 fallback 预算后 Agent 暂停并报告原因；普通 commit 流程通过结构化 Git Tool 完成，不重复执行等价检查。
+验收：达到失败或 fallback 预算后 Agent 暂停并报告原因；工作区相关事实未变化时不重复执行等价检查；Policy block/confirm/replace/pause 在本地、远程和网络路径上行为一致。
 
-## 阶段 11：多 Agent Workflow
+## 阶段 12：多 Agent Workflow
 
 - 定义 Workflow YAML/JSON Schema
 - 实现 DAG 调度
@@ -217,7 +239,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 验收：只读节点可以并行；共享工作区写入节点不能并发；Workflow 状态在 TUI 中实时更新。
 
-## 阶段 12：后台任务与自动唤醒
+## 阶段 13：后台任务与自动唤醒
 
 - 在阶段 7 Monitor Runtime 上增加 Background Task Manager，不创建第二套进程监控器
 - 实现 `background_start`、`background_attach`、`background_status`、`background_logs`、`background_wait` 和 `background_cancel`
@@ -230,7 +252,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 验收：模型回合结束后本地或远程脚本继续执行；脚本退出后自动唤醒 Agent；无变化时不调用模型；多个事件不会并发触发 Coordinator turn。
 
-## 阶段 13：权限模式
+## 阶段 14：权限模式
 
 - `/mode user`
 - `/mode sudo once`
@@ -266,7 +288,7 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 
 验收：Provider 可选参数与实际端点不一致时，自动压缩能够安全降级完成；非兼容性请求错误仍立即失败并保留原始原因。
 
-## 阶段 14：发行版
+## 阶段 15：发行版
 
 功能稳定后再进行：
 
@@ -289,6 +311,7 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 6. Monitor Runtime、增量日志和运行状态可视化
 7. SSH/tmux 远程执行并接入 Monitor Runtime
 8. 一个搜索 Provider
-9. 重复命令、失败预算和结构化 Git Tools
+9. Claude Code 风格 `ask_user_question` 询问选择框
+10. Policy Engine：重复命令、失败预算和等价 fallback 阻断
 
-当前已连续完成子 Agent、Monitor、SSH/tmux 和联网搜索闭环。下一步只推进 Policy/Git；不提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。
+当前已连续完成子 Agent、Monitor、SSH/tmux 和联网搜索闭环。下一步只推进询问选择框；之后再推进 Policy Engine，且不增加专用 Git Tools。不要提前铺开 Workflow、自动唤醒或 sudo。后续功能继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger 和共享 Runtime 生命周期。

@@ -764,7 +764,7 @@ export class TaskLedger {
 		const command = getCommandFromArgs(options.toolName, options.args);
 		const signature = command ? createCommandSignature(command) : undefined;
 		const verification = command ? isVerificationCommand(command) : VERIFICATION_TOOL_NAMES.has(options.toolName);
-		const commit = command ? isCommitCommand(command) : options.toolName === "git_commit";
+		const commit = command ? isCommitCommand(command) : false;
 		const record: MutableCommandRecord = {
 			id: options.id,
 			source: options.source,

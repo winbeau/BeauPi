@@ -33,7 +33,7 @@ BeauPi 在 `session_start` 生命周期中启动进程内监控器。任务触�
 
 ## 组件
 
-M6 先交付独立的 Monitor Runtime 和 session-scoped MonitorRegistry，负责目标注册、状态快照、增量日志和生命周期事件；本阶段（M11）只在其上增加后台任务启动、持久化和自动唤醒，不创建第二套进程监控器。M6 的 Runtime 已接入现有 AgentSession、AgentPool 和 Tool 生命周期，但不会自动唤醒 Coordinator turn。
+M6 先交付独立的 Monitor Runtime 和 session-scoped MonitorRegistry，负责目标注册、状态快照、增量日志和生命周期事件；本阶段（M12）只在其上增加后台任务启动、持久化和自动唤醒，不创建第二套进程监控器。M6 的 Runtime 已接入现有 AgentSession、AgentPool 和 Tool 生命周期，但不会自动唤醒 Coordinator turn。
 
 ```text
 Monitor Runtime
@@ -239,7 +239,7 @@ USER | bg:2 | wake:1 | workflow:review | gpt-5.4
 - `MonitorRecord` 使用稳定 monitor ID 和明确状态机，Process/Tool/Sub-Agent 目标共享同一 Registry；SSH/tmux 只有 adapter 接口，不执行远程连接。
 - 增量日志读取使用 cursor/hash，能够识别追加、截断、轮转和目标丢失；无变化时不调用模型，也不重复注入历史内容。
 - Session 恢复只恢复 adapter 能确认的目标，无法确认的非终态目标标记为 `lost`。
-- `monitor_wait` 和 `monitor_stop` 只观察或请求取消，不启动 Coordinator turn；M11 的 `background_*` 和 Wake Queue 继续复用这些接口。
+- `monitor_wait` 和 `monitor_stop` 只观察或请求取消，不启动 Coordinator turn；M12 的 `background_*` 和 Wake Queue 继续复用这些接口。
 
 ## 第一版验收标准
 

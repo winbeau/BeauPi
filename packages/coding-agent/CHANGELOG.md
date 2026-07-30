@@ -29,6 +29,7 @@
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
 - Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
+- Changed the BeauPi roadmap to schedule a Claude Code-style `ask_user_question` selector before the Policy Engine, with single/multi-select, free-text, multi-question review, optional Markdown previews, and non-interactive lifecycle boundaries.
 
 ### Fixed
 
@@ -38,6 +39,10 @@
 - Fixed explicit clipboard environment overrides from being reclassified as WSL by host kernel detection.
 - Fixed `/skills` collision actions to target the selected Registry entry by ID, and clarified diagnostics for non-updateable local Skill sources.
 - Fixed `/target-server` field ordering and remote working-directory handling so SSH usernames are not confused with `remoteCwd`, relative paths resolve from the remote home, and absolute paths remain supported.
+
+### Removed
+
+- Removed reserved dedicated Git Tool handling from the Task Ledger and dropped dedicated Git Tools from the BeauPi roadmap; M9 now focuses only on deterministic execution policy.
 
 ## [0.82.1] - 2026-07-25
 

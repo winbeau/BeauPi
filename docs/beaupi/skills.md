@@ -284,7 +284,6 @@ Skill 可以包含脚本并指示模型执行任意操作，因此导入时必�
 使用 Tool：
 
 - SSH/tmux
-- Git commit
 - Web search/fetch
 - 安装依赖
 - 数据库操作

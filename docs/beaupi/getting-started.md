@@ -162,7 +162,7 @@ BEAUPI_SEARXNG_ENDPOINT
 
 `web_fetch` 会拒绝 URL credentials、非 HTTP(S) 协议、localhost、loopback、私网、link-local、保留地址和云 metadata 目标，并在每次重定向后重新执行 DNS/IP 安全验证。PDF 提取不属于 M8。
 
-达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，不应改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。专用 Search Runtime 已确定性停止；通用 Bash 网络调用的强制阻断属于 M9 Policy Engine。
+达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，不应改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。专用 Search Runtime 已确定性停止；通用 Bash 网络调用的强制阻断属于 M10 Policy Engine。
 
 Coordinator 和受控 `researcher` 子 Agent 共享同一 Search Runtime/cache。可通过普通 Tool allowlist/denylist 明确启用或禁用 `web_search`、`web_fetch`。
 
@@ -184,10 +184,11 @@ npm run check
 
 BeauPi M0–M8 已完成。当前按优先主线推进：
 
-1. M9：实现 Policy Engine、等价 fallback/失败预算和结构化 Git Tools。
-2. M10：在稳定策略边界上实现多 Agent Workflow。
-3. M11：扩展 Monitor Runtime，实现后台任务自动唤醒。
-4. M12：最后实现受控权限能力。
-5. 功能稳定后再决定独立 npm 发行物和二进制方案。
+1. M9：实现 Claude Code 风格 `ask_user_question` 询问选择框。
+2. M10：实现 Policy Engine、等价 fallback 和失败预算；不增加专用 Git Tools。
+3. M11：在稳定策略边界上实现多 Agent Workflow。
+4. M12：扩展 Monitor Runtime，实现后台任务自动唤醒。
+5. M13：最后实现受控权限能力。
+6. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
 
 M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime 和 M8 Search Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用和生命周期事件与 Coordinator 交互。
