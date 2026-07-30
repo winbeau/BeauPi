@@ -196,6 +196,7 @@ describe("TaskLedgerWidget", () => {
 				lastActivityAt: 1,
 				status: "stalled",
 				logCursor: 0,
+				activityLog: [],
 				diagnostics: [],
 			},
 		];
@@ -205,6 +206,38 @@ describe("TaskLedgerWidget", () => {
 			expect(rendered).toContain("Monitor");
 			for (const line of widget.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("renders sub-agent budget failures with turn usage and last Tool", () => {
+		const monitor: MonitorRecord = {
+			version: 1,
+			id: "mon-reviewer",
+			sessionId: "session",
+			target: { kind: "sub-agent", taskId: "review-task", profile: "reviewer" },
+			kind: "sub-agent",
+			name: "Agent(reviewer)",
+			taskSummary: "Review changes",
+			createdAt: 1,
+			startedAt: 1,
+			completedAt: 51_700,
+			durationMs: 51_699,
+			lastActivityAt: 51_700,
+			status: "failed",
+			exitReason: "budget_exhausted",
+			logCursor: 0,
+			activityLog: [],
+			agentTask: {
+				errorCode: "budget_exhausted",
+				turnsUsed: 8,
+				maxTurns: 8,
+				tokensUsed: 1200,
+				maxTokens: 4096,
+				lastToolName: "docs_read",
+			},
+			diagnostics: [],
+		};
+		const rendered = renderPlain(createWidget(createSnapshot(), 45, [monitor]), 120);
+		expect(rendered).toContain("Monitor Agent(reviewer) · budget_exhausted · 8/8 turns · last: docs_read");
 	});
 
 	it("keeps every rendered line within 40, 80, 120, and 160 columns", () => {

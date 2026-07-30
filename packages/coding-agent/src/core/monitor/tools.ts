@@ -127,7 +127,19 @@ function statusColor(status: MonitorStatus): "accent" | "success" | "warning" | 
 	return "dim";
 }
 
+function agentFailureSummary(record: MonitorRecord): string | undefined {
+	if (record.status !== "failed" || !record.agentTask?.errorCode) return undefined;
+	const turns =
+		record.agentTask.maxTurns === undefined
+			? `${record.agentTask.turnsUsed} turns`
+			: `${record.agentTask.turnsUsed}/${record.agentTask.maxTurns} turns`;
+	const last = record.agentTask.lastToolName ? ` · last: ${record.agentTask.lastToolName}` : "";
+	return `${record.agentTask.errorCode} · ${turns}${last}`;
+}
+
 function monitorLine(record: MonitorRecord, theme: Theme, now = Date.now()): string {
+	const failure = agentFailureSummary(record);
+	if (failure) return `${theme.fg("error", "●")} ${record.name} · ${theme.fg("error", failure)}`;
 	const duration = record.durationMs > 0 ? `${(record.durationMs / 1000).toFixed(1)}s` : "0.0s";
 	const activityAge = Math.max(0, now - record.lastActivityAt);
 	const activity = activityAge >= 1000 ? ` · idle ${(activityAge / 1000).toFixed(0)}s` : "";
@@ -135,6 +147,8 @@ function monitorLine(record: MonitorRecord, theme: Theme, now = Date.now()): str
 }
 
 function plainMonitorLine(record: MonitorRecord, now = Date.now()): string {
+	const failure = agentFailureSummary(record);
+	if (failure) return `● ${record.name} · ${failure}`;
 	const duration = record.durationMs > 0 ? `${(record.durationMs / 1000).toFixed(1)}s` : "0.0s";
 	const activityAge = Math.max(0, now - record.lastActivityAt);
 	const activity = activityAge >= 1000 ? ` · idle ${(activityAge / 1000).toFixed(0)}s` : "";
@@ -272,7 +286,8 @@ function createStatusTool(runtime: MonitorRuntime): ToolDefinition<typeof monito
 	return {
 		name: "monitor_status",
 		label: "monitor_status",
-		description: "Read one Monitor record with status, duration, activity, exit reason, resources, and log path.",
+		description:
+			"Read one Monitor record with status, duration, bounded activity events, exit reason, resources, and log path.",
 		promptSnippet: "Inspect one Monitor status snapshot",
 		parameters: monitorStatusSchema,
 		execute: async (_toolCallId, params) => {
@@ -293,7 +308,8 @@ function createLogsTool(runtime: MonitorRuntime): ToolDefinition<typeof monitorL
 	return {
 		name: "monitor_logs",
 		label: "monitor_logs",
-		description: "Read only new Monitor log bytes by cursor/hash, or explicitly request the complete log.",
+		description:
+			"Read only new Monitor file-log bytes or bounded activity events by cursor/hash, or request the complete log.",
 		promptSnippet: "Read incremental Monitor logs without repeating history",
 		parameters: monitorLogsSchema,
 		execute: async (_toolCallId, params) => {

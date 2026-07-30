@@ -2,6 +2,7 @@ import type { AgentLifecycleEvent } from "../agents/agent-pool.ts";
 
 export const MONITOR_RECORD_VERSION = 1;
 export const MONITOR_SESSION_ENTRY_TYPE = "beaupi.monitor.record";
+export const MONITOR_ACTIVITY_LOG_LIMIT = 32;
 
 export type MonitorKind = "process" | "tool" | "sub-agent" | "ssh-tmux";
 
@@ -37,6 +38,30 @@ export interface MonitorResourceSnapshot {
 	memoryBytes?: number;
 	availableMemoryBytes?: number;
 	processCount?: number;
+}
+
+export type MonitorActivityKind = "turn" | "tool" | "agent";
+export type MonitorActivityOutcome = "started" | "succeeded" | "failed";
+
+export interface MonitorActivityEvent {
+	sequence: number;
+	timestamp: number;
+	kind: MonitorActivityKind;
+	turn?: number;
+	toolName?: string;
+	targetPath?: string;
+	outcome: MonitorActivityOutcome;
+	message: string;
+}
+
+export interface MonitorAgentTaskSnapshot {
+	errorCode?: string;
+	turnsUsed: number;
+	maxTurns?: number;
+	tokensUsed: number;
+	maxTokens?: number;
+	lastToolName?: string;
+	lastTargetPath?: string;
 }
 
 export interface ProcessMonitorTarget {
@@ -98,6 +123,8 @@ export interface MonitorRecord {
 	stallTimeoutMs?: number;
 	timeoutMs?: number;
 	lastEventKey?: string;
+	activityLog: MonitorActivityEvent[];
+	agentTask?: MonitorAgentTaskSnapshot;
 	diagnostics: string[];
 }
 
@@ -194,10 +221,10 @@ export function monitorStatusForAgentEvent(event: AgentLifecycleEvent): {
 		case "completed":
 			return { status: "completed", reason: "completed" };
 		case "cancelled":
-			return { status: "cancelled", reason: "cancelled", exitReason: event.error?.message ?? "cancelled" };
+			return { status: "cancelled", reason: "cancelled", exitReason: event.error?.code ?? "cancelled" };
 		case "timed_out":
-			return { status: "failed", reason: "timeout", exitReason: event.error?.message ?? "timed out" };
+			return { status: "failed", reason: "timeout", exitReason: event.error?.code ?? "timed_out" };
 		case "failed":
-			return { status: "failed", reason: "failed", exitReason: event.error?.message ?? "agent failed" };
+			return { status: "failed", reason: "failed", exitReason: event.error?.code ?? "agent_failed" };
 	}
 }

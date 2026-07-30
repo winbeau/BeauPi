@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Agent.shouldStopAfterTurn` so hosts can stop cleanly after a completed turn before another provider request starts.
+
 ## [0.82.1] - 2026-07-25
 
 ## [0.82.0] - 2026-07-24

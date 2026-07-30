@@ -704,6 +704,46 @@ describe("Agent", () => {
 		expect(sawAbortSignal).toBe(true);
 	});
 
+	it("stops cleanly after the current turn before another provider request", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "noop",
+			label: "Noop",
+			description: "Noop tool",
+			parameters: schema,
+			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+		};
+		let requestCount = 0;
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			shouldStopAfterTurn: ({ message }) => message.role === "assistant" && message.stopReason === "toolUse",
+			streamFn: () => {
+				requestCount++;
+				if (requestCount > 1) throw new Error("Unexpected extra provider request");
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message = createAssistantToolUseMessage([
+						{ type: "toolCall", id: "tool-stop", name: "noop", arguments: {} },
+					]);
+					stream.push({ type: "done", reason: "toolUse", message });
+				});
+				return stream;
+			},
+		});
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+
+		await agent.prompt("start");
+
+		expect(requestCount).toBe(1);
+		expect(events.filter((event) => event.type === "turn_start")).toHaveLength(1);
+		expect(events.filter((event) => event.type === "turn_end")).toHaveLength(1);
+		expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+		expect(agent.state.messages.at(-1)?.role).toBe("toolResult");
+	});
+
 	it("forwards sessionId to streamFunction options", async () => {
 		let receivedSessionId: string | undefined;
 		const agent = new Agent({

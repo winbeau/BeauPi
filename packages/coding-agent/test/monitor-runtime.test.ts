@@ -10,6 +10,7 @@ import {
 	FakeProcessAdapter,
 	FakeSubAgentAdapter,
 	FakeToolAdapter,
+	MONITOR_ACTIVITY_LOG_LIMIT,
 	MONITOR_RECORD_VERSION,
 	MONITOR_SESSION_ENTRY_TYPE,
 	MonitorRuntime,
@@ -411,6 +412,97 @@ describe("MonitorRuntime", () => {
 		expect(setup.runtime.getSummary().completed).toBe(3);
 	});
 
+	it("stores bounded sub-agent turn and Tool activity with virtual Monitor logs", async () => {
+		const setup = createRuntime();
+		cleanupPaths.push(setup.cwd);
+		let poolListener: ((event: AgentLifecycleEvent) => void) | undefined;
+		setup.runtime.bindAgentSession({
+			subscribe: () => () => {},
+			agentPool: {
+				subscribe(listener: (event: AgentLifecycleEvent) => void) {
+					poolListener = listener;
+					return () => {
+						poolListener = undefined;
+					};
+				},
+			} as unknown as AgentPool,
+		});
+		const taskId = "agent-activity";
+		const base = {
+			taskId,
+			profile: "reviewer",
+			taskSummary: "Review files",
+			status: "running" as const,
+		};
+		poolListener?.({ ...base, timestamp: 1_000, type: "started", status: "starting" });
+		poolListener?.({ ...base, timestamp: 1_001, type: "running" });
+		for (let turn = 1; turn <= MONITOR_ACTIVITY_LOG_LIMIT + 4; turn++) {
+			poolListener?.({
+				...base,
+				timestamp: 1_001 + turn,
+				type: "progress",
+				turn,
+				outcome: "started",
+				message: `Turn ${turn} started`,
+			});
+		}
+		poolListener?.({
+			...base,
+			timestamp: 1_100,
+			type: "progress",
+			turn: 8,
+			toolName: "docs_read",
+			targetPath: "docs/beaupi/roadmap.md",
+			outcome: "failed",
+			message: "Tool docs_read failed",
+		});
+		poolListener?.({
+			...base,
+			timestamp: 1_101,
+			type: "failed",
+			status: "failed",
+			error: { code: "budget_exhausted", message: "Agent budget was exhausted" },
+			budget: {
+				maxTokens: 4096,
+				maxTurns: 8,
+				timeoutMs: 120_000,
+				tokensUsed: 1200,
+				turnsUsed: 8,
+				elapsedMs: 50_000,
+			},
+			lastActivity: {
+				turn: 8,
+				toolName: "docs_read",
+				targetPath: "docs/beaupi/roadmap.md",
+				outcome: "failed",
+				message: "Tool docs_read failed",
+				timestamp: 1_100,
+			},
+		});
+		await setup.runtime.flushEvents();
+
+		const record = setup.runtime.list({ kind: "sub-agent" })[0]!;
+		expect(record.activityLog).toHaveLength(MONITOR_ACTIVITY_LOG_LIMIT);
+		expect(record.activityLog.at(-2)).toMatchObject({
+			kind: "tool",
+			turn: 8,
+			toolName: "docs_read",
+			targetPath: "docs/beaupi/roadmap.md",
+			outcome: "failed",
+		});
+		expect(record.agentTask).toMatchObject({
+			errorCode: "budget_exhausted",
+			turnsUsed: 8,
+			maxTurns: 8,
+			lastToolName: "docs_read",
+		});
+		const logs = await setup.runtime.logs(record.id, { mode: "full" });
+		expect(logs.missing).toBe(false);
+		expect(logs.truncated).toBe(true);
+		expect(logs.content).toContain("tool · turn 8 · docs_read · docs/beaupi/roadmap.md · failed");
+		expect(logs.content).toContain("budget_exhausted");
+	});
+
 	it("filters legacy automatic short Tool records during Session restore", async () => {
 		const setup = createRuntime({ longRunningBashThresholdMs: 10_000 });
 		cleanupPaths.push(setup.cwd);
@@ -430,6 +522,7 @@ describe("MonitorRuntime", () => {
 			lastActivityAt: 1_000 + durationMs,
 			status: "failed" as const,
 			logCursor: 0,
+			activityLog: [],
 			diagnostics: [],
 		});
 		setup.sessionManager.appendCustomEntry(MONITOR_SESSION_ENTRY_TYPE, {

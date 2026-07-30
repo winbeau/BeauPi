@@ -339,7 +339,9 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 - BeauPi CLI 通过 `agentPool: {}` 启用 Coordinator 的 `delegate_task`；受控子 Agent 始终排除 `delegate_task`，即使 Coordinator 的全局 Tool registry 中存在该 Tool。
 - `delegate_task` 的 Tool 参数使用 TypeBox 校验。Coordinator 只接收包含状态、summary、citations/references、filesModified、checks、diagnostics、error、usage 和 budget 的结构化结果，不接收子 Agent transcript。
 - Agent Pool 使用共享 Runtime 的并发槽位，子 Agent 的 Provider、Tool 和 bash 操作都服从同一 AbortSignal；正常、失败、取消、超时、Provider/Tool 错误均转换为结构化状态。
-- 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态和错误字段发出；started/running/progress 与单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
+- 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态、预算、最后活动和错误字段发出；progress 包含 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
+- 默认 reviewer 已调整为 8192 output tokens、12 turns 和 180 秒；子任务关闭自动 Document Contract preflight，明确范围的简单任务不先扫描项目文档，仍可在显式文档审查时调用 `docs_resolve_task`。
+- turn/token 预算通过 Agent loop 的 turn-end stop hook 在下一次 Provider 请求前结束，不再通过 abort 产生额外的合成 turn，保证 `turnsUsed <= maxTurns`。
 - faux provider 定向测试覆盖成功委派、Profile 选择、Tool/Skill/文件边界、token/轮数预算、超时、取消、Provider/Tool 失败、Coordinator transcript 隔离、递归委派阻断、生命周期事件去重和并发限制。
 
 ---
@@ -387,12 +389,12 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 ### 验收记录（2026-07-29）
 
 - `MonitorRuntime` 持有唯一 session-scoped `MonitorRegistry`，复用现有 `AgentSession`、`AgentPool`、Tool registry、SessionManager 和 ResourceLoader；没有创建第二套 Agent Runtime、Session 或任务账本。
-- `MonitorRecord` 固化稳定 ID、Process/Tool/Sub-Agent/SSH-tmux 目标、任务摘要、时间、运行时长、最后活动、资源快照、退出信息、日志 cursor/hash 和完整日志路径；状态机严格限制为 `starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost`。
+- `MonitorRecord` 固化稳定 ID、Process/Tool/Sub-Agent/SSH-tmux 目标、任务摘要、时间、运行时长、最后活动、资源快照、退出信息、日志 cursor/hash 和完整日志路径；Sub-Agent 额外保存最多 32 条 turn/Tool/目标路径/结果活动事件和预算终态；状态机严格限制为 `starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost`。
 - Node/fake Process adapter、事件驱动 Tool/Sub-Agent adapter 和未实现的 SSH/tmux adapter 接口已接入。M5 `AgentPool` 的生命周期事件直接映射到同一 Monitor record，并支持通过现有 pool 请求取消。
 - `monitor_attach`、`monitor_list`、`monitor_status`、`monitor_logs`、`monitor_wait`、`monitor_stop` 使用 TypeBox/Compile 参数校验并返回结构化 details；等待、停止和日志读取均不启动模型回合。
-- `IncrementalLogReader` 使用 cursor、完整内容 hash、prefix hash 和文件 identity 识别追加、截断、轮转、目标丢失及日志文件不可用，不重复返回历史日志；完整日志路径始终保留在 record/details 中。
+- `IncrementalLogReader` 使用 cursor、完整内容 hash、prefix hash 和文件 identity 识别追加、截断、轮转、目标丢失及日志文件不可用，不重复返回历史日志；没有文件日志的 Sub-Agent 由 `monitor_logs` 使用同一 cursor 语义返回有界活动事件。完整日志路径始终保留在 record/details 中。
 - 生命周期事件按状态/原因/退出事实去重并串行派发；Session 恢复重建当前 branch 的最新 record，Process 只能在 adapter 确认后恢复，无法确认的非终态目标标记为 `lost`，不猜测成功。
-- Monitor 状态接入 Tool renderer、Tasks Widget 和 Footer；测试覆盖 faux provider、fake adapter、可控时钟、状态转换、超时/停滞/丢失、增量日志、事件去重串行化、M5 事件接入和 80/120/160 列宽度。
+- Monitor 状态接入 Tool renderer、Tasks Widget 和 Footer；Sub-Agent 失败直接显示 `budget_exhausted · N/N turns · last: Tool`。测试覆盖 faux provider、fake adapter、可控时钟、状态转换、超时/停滞/丢失、文件/活动增量日志、事件边界、M5 事件接入和 80/120/160 列宽度。
 
 ---
 

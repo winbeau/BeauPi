@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { AgentSession, AgentSessionEvent } from "../agent-session.ts";
 import type { DocumentCitation } from "../documents/types.ts";
@@ -53,6 +54,17 @@ export interface AgentTaskBudgetSummary {
 	elapsedMs: number;
 }
 
+export type AgentTaskActivityOutcome = "started" | "succeeded" | "failed";
+
+export interface AgentTaskActivity {
+	turn: number;
+	toolName?: string;
+	targetPath?: string;
+	outcome: AgentTaskActivityOutcome;
+	message: string;
+	timestamp: number;
+}
+
 export type AgentTaskCitation = DocumentCitation | WebCitation;
 
 export interface AgentClarificationQuestion {
@@ -76,6 +88,7 @@ export interface AgentTaskResult {
 	checks: AgentTaskCheck[];
 	diagnostics: string[];
 	clarificationRequest?: AgentClarificationRequest;
+	lastActivity?: AgentTaskActivity;
 	error?: AgentTaskError;
 	usage: AgentTaskUsage;
 	budget: AgentTaskBudgetSummary;
@@ -90,16 +103,17 @@ export interface AgentLifecycleEvent {
 	status: "starting" | "running" | AgentTaskStatus;
 	turn?: number;
 	toolName?: string;
+	targetPath?: string;
+	outcome?: AgentTaskActivityOutcome;
 	message?: string;
+	budget?: AgentTaskBudgetSummary;
+	lastActivity?: AgentTaskActivity;
 	error?: AgentTaskError;
 }
 
-export interface AgentProgressEvent {
+export interface AgentProgressEvent extends AgentTaskActivity {
 	taskId: string;
 	profile: string;
-	turn: number;
-	toolName?: string;
-	message: string;
 }
 
 export type AgentLifecycleEventListener = (event: AgentLifecycleEvent) => void;
@@ -176,6 +190,35 @@ function taskSummary(task: string): string {
 
 function unique(values: readonly string[]): string[] {
 	return [...new Set(values)];
+}
+
+function targetPathFromArgs(args: unknown): string | undefined {
+	if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+	const record = args as Record<string, unknown>;
+	for (const key of ["path", "file_path", "document", "targetPath", "cwd"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return undefined;
+}
+
+function isAgentTaskResult(value: AgentTaskResult | AgentProgressEvent): value is AgentTaskResult {
+	return "budget" in value;
+}
+
+function agentResultText(result: AgentTaskResult | AgentProgressEvent): string {
+	if (!isAgentTaskResult(result)) {
+		const target = result.targetPath ? ` · ${result.targetPath}` : "";
+		return `${result.message}${target}`;
+	}
+	if (result.status === "completed") return taskSummary(result.summary) || "Completed";
+	const code = result.error?.code ?? result.status;
+	const turns =
+		result.budget.maxTurns === undefined
+			? `${result.budget.turnsUsed} turns`
+			: `${result.budget.turnsUsed}/${result.budget.maxTurns} turns`;
+	const last = result.lastActivity?.toolName ? ` · last: ${result.lastActivity.toolName}` : "";
+	return `${code} · ${turns}${last}`;
 }
 
 function parseClarificationRequest(text: string | undefined): AgentClarificationRequest | undefined {
@@ -364,6 +407,24 @@ export class AgentPool {
 			): Promise<AgentToolResult<AgentTaskResult | AgentProgressEvent>> => {
 				return await this.executeDelegateTool(params, signal, onUpdate);
 			},
+			renderCall: (args, currentTheme) =>
+				new Text(
+					`${currentTheme.fg("toolTitle", currentTheme.bold(`Agent(${args.profile ?? this.defaultProfileId})`))}(${taskSummary(args.task)})`,
+					0,
+					0,
+				),
+			renderResult: (result, _options, currentTheme) => {
+				const details = result.details;
+				const text = agentResultText(details);
+				const color = isAgentTaskResult(details)
+					? details.status === "completed"
+						? "success"
+						: details.status === "cancelled"
+							? "muted"
+							: "error"
+					: "muted";
+				return new Text(currentTheme.fg(color, text), 0, 0);
+			},
 		};
 	}
 
@@ -537,8 +598,18 @@ export class AgentPool {
 		let activeTools = 0;
 		let turns = 0;
 		let outputTokens = 0;
+		let lastActivity: AgentTaskActivity | undefined;
+		const activeToolActivities = new Map<string, { toolName: string; targetPath?: string }>();
 		const diagnostics: string[] = [];
 		const progress = (event: AgentProgressEvent): void => {
+			lastActivity = {
+				turn: event.turn,
+				toolName: event.toolName,
+				targetPath: event.targetPath,
+				outcome: event.outcome,
+				message: event.message,
+				timestamp: event.timestamp,
+			};
 			try {
 				onProgress?.(event);
 			} catch {
@@ -548,11 +619,13 @@ export class AgentPool {
 				taskId,
 				profile: effectiveProfile.id,
 				taskSummary: taskSummary(input.task),
-				timestamp: Date.now(),
+				timestamp: event.timestamp,
 				type: "progress",
 				status: "running",
 				turn: event.turn,
 				toolName: event.toolName,
+				targetPath: event.targetPath,
+				outcome: event.outcome,
 				message: event.message,
 			});
 		};
@@ -636,6 +709,23 @@ export class AgentPool {
 					return originalStream(model, context, { ...options, maxTokens });
 				};
 			}
+			const previousShouldStopAfterTurn = child.agent.shouldStopAfterTurn;
+			child.agent.shouldStopAfterTurn = async (context, childSignal) => {
+				if (await previousShouldStopAfterTurn?.(context, childSignal)) return true;
+				const needsAnotherTurn =
+					context.message.role === "assistant" &&
+					(context.message.stopReason === "toolUse" || context.message.stopReason === "length");
+				if (!needsAnotherTurn) return false;
+				if (effectiveProfile.maxTurns !== undefined && turns >= effectiveProfile.maxTurns) {
+					budgetExceeded = true;
+					return true;
+				}
+				if (effectiveProfile.maxTokens !== undefined && outputTokens >= effectiveProfile.maxTokens) {
+					budgetExceeded = true;
+					return true;
+				}
+				return false;
+			};
 
 			const childEvents = (event: AgentSessionEvent): void => {
 				if (event.type === "agent_start") {
@@ -650,8 +740,17 @@ export class AgentPool {
 					return;
 				}
 				if (event.type === "turn_start") {
+					if (budgetExceeded || timedOut || cancellationRequested) return;
 					turns++;
-					progress({ taskId, profile: effectiveProfile.id, turn: turns, message: `Turn ${turns} started` });
+					const timestamp = Date.now();
+					progress({
+						taskId,
+						profile: effectiveProfile.id,
+						turn: turns,
+						outcome: "started",
+						message: `Turn ${turns} started`,
+						timestamp,
+					});
 					return;
 				}
 				if (event.type === "message_end" && event.message.role === "assistant") {
@@ -660,43 +759,37 @@ export class AgentPool {
 				}
 				if (event.type === "tool_execution_start") {
 					activeTools++;
+					const targetPath = targetPathFromArgs(event.args);
+					activeToolActivities.set(event.toolCallId, { toolName: event.toolName, targetPath });
 					progress({
 						taskId,
 						profile: effectiveProfile.id,
 						turn: turns,
 						toolName: event.toolName,
+						targetPath,
+						outcome: "started",
 						message: `Tool ${event.toolName} started`,
+						timestamp: Date.now(),
 					});
 					return;
 				}
 				if (event.type === "tool_execution_end") {
 					activeTools = Math.max(0, activeTools - 1);
+					const activity = activeToolActivities.get(event.toolCallId);
+					activeToolActivities.delete(event.toolCallId);
 					if (event.isError) diagnostics.push(`Tool ${event.toolName} failed`);
 					progress({
 						taskId,
 						profile: effectiveProfile.id,
 						turn: turns,
 						toolName: event.toolName,
+						targetPath: activity?.targetPath,
+						outcome: event.isError ? "failed" : "succeeded",
 						message: `Tool ${event.toolName} ${event.isError ? "failed" : "completed"}`,
+						timestamp: Date.now(),
 					});
 					if (pendingGracefulCancellation && activeTools === 0) {
 						pendingGracefulCancellation = false;
-						child?.agent.abort();
-					}
-					return;
-				}
-				if (event.type === "turn_end" && event.message.role === "assistant") {
-					const needsAnotherTurn = event.message.stopReason === "toolUse" || event.message.stopReason === "length";
-					if (needsAnotherTurn && effectiveProfile.maxTurns !== undefined && turns >= effectiveProfile.maxTurns) {
-						budgetExceeded = true;
-						child?.agent.abort();
-					}
-					if (
-						needsAnotherTurn &&
-						effectiveProfile.maxTokens !== undefined &&
-						outputTokens >= effectiveProfile.maxTokens
-					) {
-						budgetExceeded = true;
 						child?.agent.abort();
 					}
 				}
@@ -704,7 +797,7 @@ export class AgentPool {
 			unsubscribe = child.subscribe(childEvents);
 			this.activeTasks.set(taskId, { cancel: cancelChild });
 			if (signal?.aborted) cancelChild();
-			await child.prompt(input.task);
+			await child.prompt(input.task, { resolveDocumentContract: false });
 			const usage = usageFromSession(child);
 			const assistant = lastAssistant(child);
 			const snapshot = child.taskLedger.getSnapshot();
@@ -728,6 +821,7 @@ export class AgentPool {
 							: undefined;
 			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, error);
 			result.summary = child.getLastAssistantText() ?? "No summary returned by the child agent.";
+			if (lastActivity) result.lastActivity = { ...lastActivity };
 			const clarificationRequest = parseClarificationRequest(result.summary);
 			if (clarificationRequest) result.clarificationRequest = clarificationRequest;
 			result.citations = uniqueCitations([
@@ -768,6 +862,7 @@ export class AgentPool {
 				errorWithCode(status === "cancelled" ? "cancelled" : "agent_error", asErrorMessage(error)),
 			);
 			result.diagnostics = [...diagnostics];
+			if (lastActivity) result.lastActivity = { ...lastActivity };
 			this.emitTerminal(result, input.task);
 			return result;
 		} finally {
@@ -788,6 +883,8 @@ export class AgentPool {
 			timestamp: Date.now(),
 			type: result.status,
 			status: result.status,
+			budget: result.budget,
+			lastActivity: result.lastActivity,
 			error: result.error,
 		});
 	}

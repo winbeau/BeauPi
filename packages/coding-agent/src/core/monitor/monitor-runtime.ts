@@ -12,8 +12,10 @@ import {
 import { IncrementalLogReader, type IncrementalLogReadResult } from "./log-reader.ts";
 import {
 	isMonitorTerminal,
+	MONITOR_ACTIVITY_LOG_LIMIT,
 	MONITOR_RECORD_VERSION,
 	MONITOR_SESSION_ENTRY_TYPE,
+	type MonitorActivityEvent,
 	type MonitorAdapter,
 	type MonitorAdapterSnapshot,
 	type MonitorEventReason,
@@ -156,6 +158,52 @@ function formatDuration(milliseconds: number): string {
 	return `${minutes}m${remainder.toString().padStart(2, "0")}s`;
 }
 
+function normalizeActivityLog(value: unknown): MonitorActivityEvent[] {
+	if (!Array.isArray(value)) return [];
+	const events: MonitorActivityEvent[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		if (
+			!record ||
+			typeof record.sequence !== "number" ||
+			typeof record.timestamp !== "number" ||
+			(record.kind !== "turn" && record.kind !== "tool" && record.kind !== "agent") ||
+			(record.outcome !== "started" && record.outcome !== "succeeded" && record.outcome !== "failed") ||
+			typeof record.message !== "string"
+		) {
+			continue;
+		}
+		events.push({
+			sequence: record.sequence,
+			timestamp: record.timestamp,
+			kind: record.kind,
+			turn: typeof record.turn === "number" ? record.turn : undefined,
+			toolName: typeof record.toolName === "string" ? record.toolName : undefined,
+			targetPath: typeof record.targetPath === "string" ? record.targetPath : undefined,
+			outcome: record.outcome,
+			message: record.message,
+		});
+	}
+	return events.slice(-MONITOR_ACTIVITY_LOG_LIMIT);
+}
+
+function formatActivityEvent(event: MonitorActivityEvent): string {
+	const context = [
+		event.kind,
+		event.turn === undefined ? undefined : `turn ${event.turn}`,
+		event.toolName,
+		event.targetPath,
+		event.outcome,
+	]
+		.filter((value): value is string => value !== undefined && value !== "")
+		.join(" · ");
+	return `${new Date(event.timestamp).toISOString()} · ${context} · ${event.message}`;
+}
+
+function activityLogHash(events: readonly MonitorActivityEvent[]): string {
+	return createHash("sha256").update(events.map(formatActivityEvent).join("\n")).digest("hex");
+}
+
 function snapshotFromEntry(entry: SessionEntry): MonitorRecord | undefined {
 	if (entry.type !== "custom" || entry.customType !== MONITOR_SESSION_ENTRY_TYPE) return undefined;
 	const data = asRecord(entry.data);
@@ -179,7 +227,7 @@ function snapshotFromEntry(entry: SessionEntry): MonitorRecord | undefined {
 	) {
 		return undefined;
 	}
-	return clone(raw as unknown as MonitorRecord);
+	return clone({ ...raw, activityLog: normalizeActivityLog(raw.activityLog) } as unknown as MonitorRecord);
 }
 
 function isToolCancelled(
@@ -443,6 +491,7 @@ export class MonitorRuntime {
 			logCursor: 0,
 			stallTimeoutMs: input.stallTimeoutMs ?? this.defaultStallTimeoutMs,
 			timeoutMs: input.timeoutMs,
+			activityLog: [],
 			diagnostics: [],
 		};
 		this.records.set(record);
@@ -502,6 +551,39 @@ export class MonitorRuntime {
 	async logs(monitorId: string, options: MonitorLogOptions = {}): Promise<MonitorLogResult> {
 		const record = this.requireRecord(monitorId);
 		const path = record.logPath ?? record.target.logPath;
+		if (!path && record.activityLog.length > 0) {
+			const firstSequence = record.activityLog[0]?.sequence ?? 1;
+			const requestedCursor = options.mode === "full" ? 0 : (options.cursor ?? record.logCursor);
+			const truncated = requestedCursor < firstSequence - 1;
+			const effectiveCursor = truncated ? firstSequence - 1 : requestedCursor;
+			const events =
+				options.mode === "full"
+					? record.activityLog
+					: record.activityLog.filter((event) => event.sequence > effectiveCursor);
+			const content = events.length > 0 ? `${events.map(formatActivityEvent).join("\n")}\n` : "";
+			const cursor = events.at(-1)?.sequence ?? effectiveCursor;
+			const hash = activityLogHash(record.activityLog);
+			if (options.mode !== "full" && (events.length > 0 || truncated)) {
+				record.logCursor = cursor;
+				record.logHash = hash;
+				record.logPrefixHash = hash;
+				if (truncated) this.addDiagnostic(record, "Monitor activity log was truncated by its bounded buffer");
+				this.persist(record);
+			}
+			return {
+				monitor: this.snapshot(record),
+				path: `monitor:${record.id}:activity`,
+				content,
+				cursor,
+				hash,
+				prefixHash: hash,
+				changed: events.length > 0,
+				truncated,
+				rotated: false,
+				missing: false,
+				diagnostic: truncated ? "Monitor activity log was truncated by its bounded buffer" : undefined,
+			};
+		}
 		if (!path) {
 			return {
 				monitor: this.snapshot(record),
@@ -514,7 +596,7 @@ export class MonitorRuntime {
 				truncated: false,
 				rotated: false,
 				missing: true,
-				diagnostic: "Monitor has no log path",
+				diagnostic: "Monitor has no log path or activity events",
 			};
 		}
 		const result = await this.logReader.read({
@@ -605,6 +687,16 @@ export class MonitorRuntime {
 		if (!diagnostic || record.diagnostics.includes(diagnostic)) return false;
 		record.diagnostics.push(diagnostic);
 		return true;
+	}
+
+	private appendActivity(record: MonitorRecord, activity: Omit<MonitorActivityEvent, "sequence">): void {
+		const sequence = (record.activityLog.at(-1)?.sequence ?? 0) + 1;
+		record.activityLog.push({ ...activity, sequence });
+		if (record.activityLog.length > MONITOR_ACTIVITY_LOG_LIMIT) {
+			record.activityLog.splice(0, record.activityLog.length - MONITOR_ACTIVITY_LOG_LIMIT);
+		}
+		record.lastActivityAt = Math.max(record.lastActivityAt, activity.timestamp);
+		this.persist(record);
 	}
 
 	private applyAdapterSnapshot(record: MonitorRecord, snapshot: MonitorAdapterSnapshot, timestamp: number): void {
@@ -826,11 +918,40 @@ export class MonitorRuntime {
 			taskSummary: event.taskSummary,
 		});
 		const record = this.requireRecord(attached.id);
-		if (event.message) {
-			record.lastActivityAt = event.timestamp;
+		if (event.type === "progress" && event.message) {
+			this.appendActivity(record, {
+				timestamp: event.timestamp,
+				kind: event.toolName ? "tool" : "turn",
+				turn: event.turn,
+				toolName: event.toolName,
+				targetPath: event.targetPath,
+				outcome: event.outcome ?? "started",
+				message: event.message,
+			});
 			const adapter = this.adapters.get("sub-agent");
 			if (adapter instanceof SubAgentMonitorAdapter)
 				adapter.setSnapshot(event.taskId, { availability: "confirmed", running: true });
+		}
+		if (event.budget) {
+			record.agentTask = {
+				errorCode: event.error?.code,
+				turnsUsed: event.budget.turnsUsed,
+				maxTurns: event.budget.maxTurns,
+				tokensUsed: event.budget.tokensUsed,
+				maxTokens: event.budget.maxTokens,
+				lastToolName: event.lastActivity?.toolName,
+				lastTargetPath: event.lastActivity?.targetPath,
+			};
+			if (event.error?.message) this.addDiagnostic(record, event.error.message);
+			this.appendActivity(record, {
+				timestamp: event.timestamp,
+				kind: "agent",
+				turn: event.budget.turnsUsed,
+				toolName: event.lastActivity?.toolName,
+				targetPath: event.lastActivity?.targetPath,
+				outcome: event.type === "completed" ? "succeeded" : "failed",
+				message: event.error?.code ?? event.type,
+			});
 		}
 		this.transition(record, mapped.status, mapped.reason, { exitReason: mapped.exitReason }, event.timestamp);
 	}

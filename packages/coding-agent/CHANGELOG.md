@@ -17,6 +17,7 @@
 - Added the interactive `/target-server` command for creating and updating user/project SSH execution targets, persisting non-secret OpenSSH configuration, and selecting the saved target immediately.
 - Added the BeauPi M8 web research loop with a configurable SearXNG provider, `web_search` and SSRF-safe `web_fetch` Tools, shared query/URL caching, stable citations, content-hash deduplication, deterministic network budgets, Task Ledger evidence, and controlled sub-agent access.
 - Added BeauPi M9 `ask_user_question` with strict bounded schemas, single/multi-select, built-in Other and notes editors, multi-question review, Markdown preview, configurable keybindings, versioned Session/Task Ledger facts, SDK/RPC callbacks, and controlled sub-agent clarification boundaries.
+- Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 
 ### Changed
 
@@ -32,10 +33,12 @@
 - Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
 - Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
 - Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
+- Changed the default reviewer profile to use an independent 8192-token, 12-turn, 180-second review budget, skip automatic document-contract preflight for child prompts, and reserve `docs_resolve_task` for explicit document-driven audits.
 - Changed the BeauPi roadmap to mark the Claude Code-style `ask_user_question` selector complete and advance the active milestone to the Policy Engine.
 
 ### Fixed
 
+- Fixed sub-agent turn-budget termination to stop before an extra provider request, preventing `turnsUsed` from exceeding `maxTurns`, and surfaced failures as `budget_exhausted · N/N turns · last: Tool` in Agent and Monitor UI.
 - Fixed Monitor auto-attachment to ignore ordinary Tool executions and short bash calls while retaining long-running bash, sub-agent, SSH/tmux, and explicit `monitor_attach` targets.
 - Fixed generic README guidance, package scripts, and repository policy requirements from being projected as current-task Todos while preserving actionable Execution Contract constraints.
 - Added a status line when the tool output expansion is toggled ([#7180](https://github.com/earendil-works/pi/issues/7180)).

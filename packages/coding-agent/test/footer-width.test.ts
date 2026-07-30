@@ -287,6 +287,7 @@ describe("FooterComponent width handling", () => {
 				lastActivityAt: 1,
 				status: "stalled",
 				logCursor: 0,
+				activityLog: [],
 				diagnostics: [],
 			},
 		];

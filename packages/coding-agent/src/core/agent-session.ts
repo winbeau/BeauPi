@@ -273,6 +273,8 @@ export interface PromptOptions {
 	streamingBehavior?: "steer" | "followUp";
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
 	source?: InputSource;
+	/** Whether to resolve a document execution contract before the provider request. Defaults to true. */
+	resolveDocumentContract?: boolean;
 	/** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
 	preflightResult?: (success: boolean) => void;
 }
@@ -1429,12 +1431,14 @@ export class AgentSession {
 				await this._checkCompaction(lastAssistant, false);
 			}
 
-			// Resolve local document constraints before the provider request. Discovery diagnostics are
-			// surfaced through the ledger/contract; a filesystem race must not block the coding turn.
-			try {
-				await this._resolveDocumentContractForTask(expandedText);
-			} catch {
-				// docs_resolve_task remains available for an explicit retry when discovery races with a file change.
+			// Resolve local document constraints before the provider request. Controlled child tasks can
+			// skip this automatic preflight and still call the document tools explicitly when needed.
+			if (options?.resolveDocumentContract !== false) {
+				try {
+					await this._resolveDocumentContractForTask(expandedText);
+				} catch {
+					// docs_resolve_task remains available for an explicit retry when discovery races with a file change.
+				}
 			}
 
 			// Build messages array (custom message if any, then user message)

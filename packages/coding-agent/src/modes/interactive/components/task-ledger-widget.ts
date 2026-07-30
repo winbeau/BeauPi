@@ -161,6 +161,27 @@ function formatMonitorDuration(milliseconds: number): string {
 
 function renderMonitor(record: MonitorRecord, width: number): string {
 	const prefix = `  ${activityStateSymbol(monitorActivityState(record.status))} `;
+	if (record.status === "failed" && record.agentTask?.errorCode) {
+		const turns =
+			record.agentTask.maxTurns === undefined
+				? `${record.agentTask.turnsUsed} turns`
+				: `${record.agentTask.turnsUsed}/${record.agentTask.maxTurns} turns`;
+		return fitSingleLine(
+			[
+				{ text: prefix, required: true },
+				{ text: theme.fg("dim", "Monitor"), required: true },
+				{ text: record.name, separator: " ", required: true, truncate: true },
+				{ text: theme.fg("error", record.agentTask.errorCode), separator: " · ", required: true },
+				{ text: theme.fg("dim", turns), separator: " · ", priority: 2 },
+				{
+					text: record.agentTask.lastToolName ? theme.fg("dim", `last: ${record.agentTask.lastToolName}`) : "",
+					separator: " · ",
+					priority: 1,
+				},
+			],
+			width,
+		);
+	}
 	return fitSingleLine(
 		[
 			{ text: prefix, required: true },

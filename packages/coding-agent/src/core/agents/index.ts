@@ -7,6 +7,8 @@ export {
 	AgentPool,
 	type AgentPoolDependencies,
 	type AgentProgressEvent,
+	type AgentTaskActivity,
+	type AgentTaskActivityOutcome,
 	type AgentTaskBudgetSummary,
 	type AgentTaskCheck,
 	type AgentTaskCitation,

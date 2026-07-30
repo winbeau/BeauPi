@@ -34,6 +34,8 @@ export {
 	type AgentPoolDependencies,
 	type AgentProfile,
 	type AgentProgressEvent,
+	type AgentTaskActivity,
+	type AgentTaskActivityOutcome,
 	type AgentTaskBudgetSummary,
 	type AgentTaskCheck,
 	type AgentTaskCitation,

@@ -33,10 +33,15 @@ export {
 } from "./tools.ts";
 export {
 	isMonitorTerminal,
+	MONITOR_ACTIVITY_LOG_LIMIT,
 	MONITOR_RECORD_VERSION,
 	MONITOR_SESSION_ENTRY_TYPE,
+	type MonitorActivityEvent,
+	type MonitorActivityKind,
+	type MonitorActivityOutcome,
 	type MonitorAdapter,
 	type MonitorAdapterSnapshot,
+	type MonitorAgentTaskSnapshot,
 	type MonitorEventReason,
 	type MonitorKind,
 	type MonitorLifecycleEvent,

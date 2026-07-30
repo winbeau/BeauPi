@@ -34,14 +34,16 @@ export interface AgentPoolConfig {
 export const DEFAULT_AGENT_PROFILE: AgentProfile = Object.freeze({
 	id: "reviewer",
 	systemPrompt:
-		"You are a controlled BeauPi sub-agent. Work independently on the assigned task. " +
+		"You are a controlled BeauPi review sub-agent. Work independently on the assigned task. " +
+		"For simple or explicitly scoped tasks, inspect only the named targets and do not call docs_resolve_task. " +
+		"Use document resolution only when the task explicitly asks for repository requirements or a broad document-driven audit. " +
 		"Return a concise summary with concrete findings, references, modified files, and checks. " +
 		"Do not delegate to another agent.",
 	toolAllowlist: ["read", "grep", "find", "ls", "docs_search", "docs_read", "docs_resolve_task"],
 	skillAllowlist: { allow: [] },
-	maxTokens: 4096,
-	maxTurns: 8,
-	timeoutMs: 120_000,
+	maxTokens: 8192,
+	maxTurns: 12,
+	timeoutMs: 180_000,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });

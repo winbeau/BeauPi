@@ -1,7 +1,9 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentLifecycleEvent, AgentPoolConfig } from "../src/core/agents/index.ts";
+import { type AgentLifecycleEvent, type AgentPoolConfig, DEFAULT_AGENT_PROFILE } from "../src/core/agents/index.ts";
 import { createExtensionRuntime, defineTool } from "../src/core/extensions/index.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "../src/core/sdk.ts";
@@ -70,6 +72,15 @@ function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
 }
 
 describe("in-process Agent Pool and delegate_task", () => {
+	it("gives the default reviewer an independent review-sized budget", () => {
+		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
+			id: "reviewer",
+			maxTokens: 8192,
+			maxTurns: 12,
+			timeoutMs: 180_000,
+		});
+	});
+
 	it("runs a selected profile and returns only structured data", async () => {
 		const { harness, session, pool } = await createCoordinator({
 			pool: {
@@ -156,6 +167,21 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(seenSystemPrompt).not.toContain("blocked-skill");
 	});
 
+	it("skips automatic document contract resolution for controlled child prompts", async () => {
+		const { harness, pool } = await createCoordinator();
+		writeFileSync(join(harness.tempDir, "AGENTS.md"), "# Child contract\n\n- CHILD_AUTO_CONTRACT_MARKER\n");
+		harness.setResponses([
+			(context) => {
+				expect(context.systemPrompt).not.toContain("CHILD_AUTO_CONTRACT_MARKER");
+				return fauxAssistantMessage("scoped child summary");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Read package.json only" });
+		expect(result.status).toBe("completed");
+		expect(result.references).not.toContain(join(harness.tempDir, "AGENTS.md"));
+	});
+
 	it("returns machine-readable clarification requests without exposing the interactive question tool", async () => {
 		const { harness, pool } = await createCoordinator({
 			pool: {
@@ -222,13 +248,29 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(result.error?.code).toBe("budget_exhausted");
 		expect(result.budget.maxTokens).toBe(3);
 
+		let turnLimitedRequests = 0;
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" }),
+			() => {
+				turnLimitedRequests++;
+				return fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" });
+			},
+			() => {
+				turnLimitedRequests++;
+				return fauxAssistantMessage("unexpected extra turn");
+			},
 		]);
 		const turnLimited = await pool.delegateTask({ task: "Use the turn budget", profile: "turn-limited" });
 		expect(turnLimited.status).toBe("failed");
 		expect(turnLimited.error?.code).toBe("budget_exhausted");
 		expect(turnLimited.budget.maxTurns).toBe(1);
+		expect(turnLimited.budget.turnsUsed).toBe(1);
+		expect(turnLimitedRequests).toBe(1);
+		expect(turnLimited.lastActivity).toMatchObject({
+			turn: 1,
+			toolName: "read",
+			targetPath: "missing",
+			outcome: "failed",
+		});
 	});
 
 	it("propagates provider and ordinary Tool failures structurally", async () => {
