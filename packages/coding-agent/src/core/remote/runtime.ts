@@ -191,8 +191,11 @@ export class RemoteExecutionRuntime {
 	}
 
 	get selectedTarget(): ExecutionTargetConfig | undefined {
-		if (!this.selectedTargetId) return undefined;
-		const target = this.targets.get(this.selectedTargetId);
+		return this.selectedTargetId ? this.getTarget(this.selectedTargetId) : undefined;
+	}
+
+	getTarget(targetId: string): ExecutionTargetConfig | undefined {
+		const target = this.targets.get(targetId);
 		return target ? structuredClone(target) : undefined;
 	}
 
@@ -311,7 +314,7 @@ export class RemoteExecutionRuntime {
 		await this.monitorRuntime.poll();
 		try {
 			const connection = await this.connect(target.id, controller.signal);
-			const result = await connection.execute(command, {
+			const result = await connection.execute(commandInRemoteCwd(command, target), {
 				signal: controller.signal,
 				timeoutMs: options.timeoutMs,
 				onData: (data) => outputChunks.push(Buffer.from(data)),
@@ -641,25 +644,19 @@ export class RemoteExecutionRuntime {
 	}
 
 	private assertTarget(targetId?: string): ExecutionTargetConfig {
-		if (!this.selectedTargetId)
+		const resolvedTargetId = targetId ?? this.selectedTargetId;
+		if (!resolvedTargetId)
 			throw new RemoteExecutionError({
 				code: "target_not_selected",
-				message: "Select a trusted execution target before remote operations",
+				message: "Select a trusted execution target or provide targetId before remote operations",
 			});
-		const selectedId = targetId ?? this.selectedTargetId;
-		if (this.selectedTargetId !== selectedId)
-			throw new RemoteExecutionError({
-				code: "target_mismatch",
-				message: "The requested target is not the selected target",
-				targetId: selectedId,
-			});
-		if (this.targets.getSelected()) this.targets.assertSelected(selectedId);
-		const target = this.targets.get(selectedId);
+		if (targetId === undefined && this.targets.getSelected()) this.targets.assertSelected(resolvedTargetId);
+		const target = this.targets.get(resolvedTargetId);
 		if (!target)
 			throw new RemoteExecutionError({
 				code: "target_not_found",
-				message: `Execution target ${JSON.stringify(selectedId)} is not configured`,
-				targetId: selectedId,
+				message: `Execution target ${JSON.stringify(resolvedTargetId)} is not configured or trusted`,
+				targetId: resolvedTargetId,
 			});
 		return structuredClone(target);
 	}
@@ -676,11 +673,11 @@ export class RemoteExecutionRuntime {
 	}
 
 	private remotePath(localPath: string): string {
-		const target = this.assertTarget();
-		const remoteCwd = target.remoteCwd ?? ".";
+		this.assertTarget();
 		const relativePath = relative(this.cwd, localPath);
-		if (relativePath && !relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath)) {
-			return join(remoteCwd, relativePath).split(sep).join("/");
+		if (!relativePath) return ".";
+		if (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath)) {
+			return relativePath.split(sep).join("/");
 		}
 		return localPath.split(sep).join("/");
 	}
@@ -743,6 +740,10 @@ export class RemoteExecutionRuntime {
 
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function commandInRemoteCwd(command: string, target: ExecutionTargetConfig): string {
+	return target.remoteCwd ? `cd ${shellQuote(target.remoteCwd)} && ${command}` : command;
 }
 
 function redactCommand(command: string): string {

@@ -31,18 +31,19 @@ afterEach(() => {
 	}
 });
 
-function createSetup(options: { projectTrusted?: boolean } = {}) {
+function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | false } = {}) {
 	const cwd = join(tmpdir(), `beaupi-remote-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(cwd, { recursive: true });
 	cleanup.push(cwd);
 	const sessionManager = SessionManager.inMemory(cwd);
 	const settingsManager = SettingsManager.inMemory({}, { projectTrusted: options.projectTrusted ?? true });
+	const remoteCwd = options.remoteCwd === false ? undefined : (options.remoteCwd ?? "/workspace");
 	const target = {
 		id: "fake",
 		label: "Fake target",
 		scope: "session" as const,
 		sshAlias: "fake-alias",
-		remoteCwd: "/workspace",
+		...(remoteCwd ? { remoteCwd } : {}),
 	};
 	const targets = new ExecutionTargetRegistry({ settingsManager, sessionTargets: [target] });
 	const adapter = new FakeSshTmuxAdapter();
@@ -110,16 +111,55 @@ describe("M7 execution targets", () => {
 		expect(JSON.stringify(entries)).toContain('"targetId":"fake"');
 	});
 
+	it("uses the configured remote workspace and leaves commands unchanged when none is set", async () => {
+		const workspace = createSetup();
+		workspace.runtime.selectTarget("fake");
+		await workspace.runtime.remoteExec("pwd");
+		expect(workspace.adapter.commandCalls).toContain("cd '/workspace' && pwd");
+
+		const relativeWorkspace = createSetup({ remoteCwd: "projects/pi" });
+		relativeWorkspace.runtime.selectTarget("fake");
+		await relativeWorkspace.runtime.createReadOperations().access(join(relativeWorkspace.cwd, "src/index.ts"));
+		expect(relativeWorkspace.adapter.commandCalls).toContain("cd 'projects/pi' && test -r -- 'src/index.ts'");
+
+		const home = createSetup({ remoteCwd: false });
+		home.runtime.selectTarget("fake");
+		await home.runtime.remoteExec("pwd");
+		expect(home.adapter.commandCalls).toContain("pwd");
+		expect(home.adapter.commandCalls).not.toContain("cd '.' && pwd");
+	});
+
+	it("keeps separate reusable connections for multiple explicitly addressed targets", async () => {
+		const setup = createSetup();
+		setup.runtime.addSessionTarget({
+			id: "fake-two",
+			scope: "session",
+			sshAlias: "fake-two-alias",
+			remoteCwd: "/srv/project",
+		});
+		const second = await setup.runtime.remoteExec("pwd", { targetId: "fake-two" });
+		expect(second.connectedTargetId).toBe("fake-two");
+		expect(setup.runtime.selectedTarget).toBeUndefined();
+		expect(setup.adapter.commandCalls).toContain("cd '/srv/project' && pwd");
+
+		setup.runtime.selectTarget("fake");
+		await setup.runtime.remoteExec("pwd");
+		await setup.runtime.remoteExec("pwd", { targetId: "fake-two" });
+		expect(setup.adapter.connectCalls).toBe(2);
+		expect(setup.runtime.selectedTarget?.id).toBe("fake");
+	});
+
 	it("reuses a fake SSH connection and maps successful and failed exit codes into Monitor", async () => {
 		const setup = createSetup();
 		setup.runtime.selectTarget("fake");
 		const success = await setup.runtime.remoteExec("printf success");
 		expect(success.exitCode).toBe(0);
 		expect(success.stdout).toBe("ok\n");
+		expect(setup.adapter.commandCalls).toContain("cd '/workspace' && printf success");
 		expect(setup.monitor.status(success.monitorId)).toMatchObject({ status: "completed", exitCode: 0 });
 		const connectionMonitor = setup.monitor.list({ kind: "ssh-tmux", status: "healthy" })[0];
 		expect(connectionMonitor?.target).toMatchObject({ kind: "ssh-tmux", resource: "connection", targetId: "fake" });
-		setup.adapter.setCommandResult("false", { stdout: "nope\n", exitCode: 7 });
+		setup.adapter.setCommandResult("cd '/workspace' && false", { stdout: "nope\n", exitCode: 7 });
 		const failed = await setup.runtime.remoteExec("false");
 		expect(failed.exitCode).toBe(7);
 		expect(failed.diagnostic?.code).toBe("remote_command");
@@ -135,7 +175,7 @@ describe("M7 execution targets", () => {
 		).toBe(true);
 		await setup.runtime.remoteExec("printf after-close");
 		expect(setup.adapter.connectCalls).toBe(2);
-		setup.adapter.setCommandResult("slow", { delayMs: 30 });
+		setup.adapter.setCommandResult("cd '/workspace' && slow", { delayMs: 30 });
 		await expect(setup.runtime.remoteExec("slow", { timeoutMs: 1 })).rejects.toMatchObject({
 			diagnostic: { code: "remote_timeout" },
 		});
@@ -208,6 +248,7 @@ describe("M7 fake tmux lifecycle", () => {
 		const setup = createSetup();
 		setup.runtime.selectTarget("fake");
 		const created = await setup.runtime.terminalCreate({ terminalId: "test-terminal" });
+		expect(setup.adapter.tmuxCreateCalls[0]?.cwd).toBe("/workspace");
 		expect(setup.monitor.status(created.monitorId).status).toBe("healthy");
 		const first = await setup.runtime.terminalCapture(created.terminalId);
 		expect(first.content).toBe("");

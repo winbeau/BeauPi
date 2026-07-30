@@ -71,6 +71,8 @@ describe.skipIf(!realE2e)("M7 real h100-server E2E", () => {
 				monitorId: expect.stringMatching(/^mon-/),
 			});
 			expect(hostname.details.stdout?.trim()).toBe("zhengchen-ubuntu-8xh100-05");
+			const workspace = await executeTool(definitions.remote_exec, { command: "pwd" });
+			expect(workspace.details.stdout?.trim()).toBe("/tmp");
 
 			const failed = await executeTool(definitions.remote_exec, { command: "sh -c 'exit 7'" });
 			expect(failed.details).toMatchObject({
@@ -90,14 +92,19 @@ describe.skipIf(!realE2e)("M7 real h100-server E2E", () => {
 
 			const terminalResult = await executeTool(definitions.terminal_create, {
 				terminalId: `beaupi-m7-${process.pid}`,
-				command: "bash",
 			});
 			expect(terminalResult.details.ok).toBe(true);
 			terminalId = terminalResult.details.terminalId;
 			expect(terminalId).toBeDefined();
 			const first = await executeTool(definitions.terminal_capture, { terminalId });
 			expect(first.details.cursor).toBeGreaterThanOrEqual(0);
-			await executeTool(definitions.terminal_send, { terminalId, input: "printf m7-terminal-output\\n" });
+			await executeTool(definitions.remote_exec, { command: "sleep 2" });
+			await executeTool(definitions.terminal_send, { terminalId, input: "pwd\n" });
+			await executeTool(definitions.remote_exec, { command: "sleep 0.2" });
+			const terminalWorkspace = await executeTool(definitions.terminal_capture, { terminalId });
+			expect(textFrom(terminalWorkspace)).toContain("/tmp");
+			await executeTool(definitions.terminal_send, { terminalId, input: "printf m7-terminal-output\n" });
+			await executeTool(definitions.remote_exec, { command: "sleep 0.2" });
 			const captured = await executeTool(definitions.terminal_capture, { terminalId });
 			expect(textFrom(captured)).toContain("m7-terminal-output");
 			const unchanged = await executeTool(definitions.terminal_capture, { terminalId });

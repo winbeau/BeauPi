@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { createBashToolDefinition } from "../tools/bash.ts";
 import { createEditToolDefinition } from "../tools/edit.ts";
@@ -91,17 +92,28 @@ function toolResult(
 	};
 }
 
-function renderCall(name: string, summary: string): Text {
-	return new Text(`${name}(${summary})`, 0, 0);
+function renderCall(name: string, summary: string, currentTheme: Theme, targetId?: string): Text {
+	const target = targetId ? currentTheme.fg("muted", ` [${targetId}]`) : "";
+	return new Text(`${currentTheme.fg("toolTitle", currentTheme.bold(name))}${target}(${summary})`, 0, 0);
 }
 
-function renderResult(result: AgentToolResult<RemoteToolDetails>): Text {
+function renderOutput(text: string, currentTheme: Theme): string {
+	return text
+		.split("\n")
+		.map((line) => currentTheme.fg("toolOutput", line))
+		.join("\n");
+}
+
+function renderResult(result: AgentToolResult<RemoteToolDetails>, currentTheme: Theme): Text {
 	const details = result.details;
-	if (details.diagnostic) return new Text(`${details.diagnostic.code}: ${details.diagnostic.message}`, 0, 0);
+	const diagnostic = details.diagnostic
+		? currentTheme.fg("error", `${details.diagnostic.code}: ${details.diagnostic.message}`)
+		: "";
 	if (details.operation === "remote_exec") {
 		const output = [details.stdout, details.stderr].filter((value): value is string => Boolean(value)).join("\n");
-		const summary = output || `exit ${details.exitCode ?? 0} · monitor ${details.monitorId ?? "unknown"}`;
-		return new Text(details.logPath ? `${summary}\nFull log: ${details.logPath}` : summary, 0, 0);
+		const content = result.content.map((item) => (item.type === "text" ? item.text : "")).join("");
+		const body = output || (!details.diagnostic ? content || `exit ${details.exitCode ?? 0}` : "");
+		return new Text([diagnostic, body ? renderOutput(body, currentTheme) : ""].filter(Boolean).join("\n"), 0, 0);
 	}
 	const summary = [
 		details.status,
@@ -110,7 +122,17 @@ function renderResult(result: AgentToolResult<RemoteToolDetails>): Text {
 	]
 		.filter(Boolean)
 		.join(" · ");
-	return new Text(summary || result.content.map((item) => (item.type === "text" ? item.text : "")).join(""), 0, 0);
+	return new Text(
+		diagnostic ||
+			(summary
+				? renderOutput(summary, currentTheme)
+				: renderOutput(
+						result.content.map((item) => (item.type === "text" ? item.text : "")).join(""),
+						currentTheme,
+					)),
+		0,
+		0,
+	);
 }
 
 function errorResult(operation: string, error: unknown): AgentToolResult<RemoteToolDetails> {
@@ -134,7 +156,7 @@ function createTargetSelectTool(
 		description: "Select a configured, trusted SSH execution target. Targets contain no credentials.",
 		promptSnippet: "Select a trusted SSH execution target",
 		promptGuidelines: [
-			"Select a target before remote_exec or terminal operations.",
+			"Use target_select to set the default target; pass targetId explicitly to address another configured target.",
 			"If a target is missing in interactive mode, ask the user to configure it with /target-server [target-id].",
 			"Never ask for or store SSH private keys, passwords, or tokens.",
 		],
@@ -154,8 +176,9 @@ function createTargetSelectTool(
 				return result;
 			}
 		},
-		renderCall: (args) => renderCall("Target Select", args.targetId),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) => renderCall("Target Select", args.targetId, currentTheme),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -165,11 +188,12 @@ function createRemoteExecTool(
 	return {
 		name: "remote_exec",
 		label: "remote_exec",
-		description: "Execute one validated normal-user command on the selected SSH target and return its exit code.",
+		description:
+			"Execute one validated normal-user command on the default or explicitly requested SSH target and return its exit code. Uses that target's configured remote working directory when set.",
 		promptSnippet: "Execute a command on the selected SSH target",
 		promptGuidelines: [
 			"Do not use sudo, su, doas, pkexec, or root shells.",
-			"Use target_select first.",
+			"Use target_select to set the default target, or pass targetId explicitly when working with multiple targets.",
 			"Remote command output is truncated by the caller when needed.",
 		],
 		parameters: remoteExecSchema,
@@ -192,7 +216,7 @@ function createRemoteExecTool(
 						exitCode: result.exitCode,
 						monitorId: result.monitorId,
 						logPath: result.logPath,
-						target: runtime.selectedTarget,
+						target: runtime.getTarget(result.connectedTargetId),
 						diagnostic: result.diagnostic,
 					},
 					output || `(no output) · exit ${result.exitCode ?? "cancelled"}`,
@@ -201,8 +225,10 @@ function createRemoteExecTool(
 				return errorResult("remote_exec", error);
 			}
 		},
-		renderCall: (args) => renderCall("Remote Exec", args.command),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) =>
+			renderCall("Remote Exec", args.command, currentTheme, args.targetId ?? runtime.selectedTarget?.id),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -212,8 +238,9 @@ function createTerminalCreateTool(
 	return {
 		name: "terminal_create",
 		label: "terminal_create",
-		description: "Create a controlled normal-user tmux session on the selected SSH target.",
+		description: "Create a controlled normal-user tmux session on the default or explicitly requested SSH target.",
 		promptSnippet: "Create a remote tmux terminal",
+		promptGuidelines: ["Omit command for an interactive terminal so tmux uses the remote user's default shell."],
 		parameters: terminalCreateSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalCreateInput>("terminal_create", validators.terminalCreate, params);
@@ -227,7 +254,7 @@ function createTerminalCreateTool(
 						monitorId: result.monitorId,
 						status: result.status,
 						logPath: result.logPath,
-						target: runtime.selectedTarget,
+						target: runtime.getTarget(result.targetId),
 					},
 					`Created ${result.terminalId} · monitor ${result.monitorId}`,
 				);
@@ -235,8 +262,15 @@ function createTerminalCreateTool(
 				return errorResult("terminal_create", error);
 			}
 		},
-		renderCall: (args) => renderCall("Terminal Create", args.terminalId ?? "tmux"),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) =>
+			renderCall(
+				"Terminal Create",
+				args.terminalId ?? "tmux",
+				currentTheme,
+				args.targetId ?? runtime.selectedTarget?.id,
+			),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -262,8 +296,9 @@ function createTerminalSendTool(
 				return errorResult("terminal_send", error);
 			}
 		},
-		renderCall: (args) => renderCall("Terminal Send", args.terminalId),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) => renderCall("Terminal Send", args.terminalId, currentTheme),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -298,8 +333,9 @@ function createTerminalCaptureTool(
 				return errorResult("terminal_capture", error);
 			}
 		},
-		renderCall: (args) => renderCall("Terminal Capture", args.terminalId),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) => renderCall("Terminal Capture", args.terminalId, currentTheme),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -332,8 +368,9 @@ function createTerminalStatusTool(
 				return errorResult("terminal_status", error);
 			}
 		},
-		renderCall: (args) => renderCall("Terminal Status", args.terminalId),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) => renderCall("Terminal Status", args.terminalId, currentTheme),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 
@@ -360,8 +397,9 @@ function createTerminalCloseTool(
 				return errorResult("terminal_close", error);
 			}
 		},
-		renderCall: (args) => renderCall("Terminal Close", args.terminalId),
-		renderResult: (result) => renderResult(result as AgentToolResult<RemoteToolDetails>),
+		renderCall: (args, currentTheme) => renderCall("Terminal Close", args.terminalId, currentTheme),
+		renderResult: (result, _options, currentTheme) =>
+			renderResult(result as AgentToolResult<RemoteToolDetails>, currentTheme),
 	};
 }
 

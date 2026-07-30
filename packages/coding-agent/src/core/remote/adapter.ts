@@ -199,7 +199,18 @@ class OpenSshConnection implements SshConnection {
 		input: string,
 		commandOptions?: RemoteCommandOptions,
 	): Promise<RemoteCommandResult> {
-		return this.execute(`tmux send-keys -t ${shellQuote(sessionId)} -l ${shellQuote(input)}`, commandOptions);
+		const target = shellQuote(sessionId);
+		const segments = input.split(/\r\n|\r|\n/);
+		const commands: string[] = [];
+		for (let index = 0; index < segments.length; index++) {
+			const segment = segments[index] ?? "";
+			if (segment) commands.push(`tmux send-keys -t ${target} -l ${shellQuote(segment)}`);
+			if (index < segments.length - 1) commands.push(`tmux send-keys -t ${target} Enter`);
+		}
+		return this.execute(
+			commands.length > 0 ? commands.join(" && ") : `tmux send-keys -t ${target} -l ''`,
+			commandOptions,
+		);
 	}
 
 	async tmuxCapture(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -413,7 +424,7 @@ class FakeSshConnection implements SshConnection {
 	}
 
 	async tmuxCreate(options: TmuxCreateOptions, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
-		this.adapter.createFakeTerminal(options.sessionId, options.command);
+		this.adapter.createFakeTerminal(options);
 		return this.execute(`tmux new-session ${options.sessionId}`, commandOptions);
 	}
 
@@ -457,6 +468,7 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 	private readonly stopResults = new Map<string, MonitorStopResult>();
 	connectCalls = 0;
 	commandCalls: string[] = [];
+	tmuxCreateCalls: TmuxCreateOptions[] = [];
 	closeCalls = 0;
 	failConnect?: RemoteExecutionError;
 
@@ -540,8 +552,9 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		return { ...configured, startedAt: Date.now(), completedAt: Date.now() };
 	}
 
-	createFakeTerminal(sessionId: string, command?: string): void {
-		this.terminals.set(sessionId, { output: command ? `${command}\n` : "", exists: true });
+	createFakeTerminal(options: TmuxCreateOptions): void {
+		this.tmuxCreateCalls.push(structuredClone(options));
+		this.terminals.set(options.sessionId, { output: options.command ? `${options.command}\n` : "", exists: true });
 	}
 
 	sendFakeTerminal(sessionId: string, input: string): void {
