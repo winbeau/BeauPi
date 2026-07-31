@@ -42,6 +42,11 @@ export interface TerminalSettings {
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
+export interface TerminalOutputReviewSettings {
+	/** Bare model id follows the active Agent provider first; provider/model fixes the provider. */
+	model?: string; // default: gpt-5.6-luna
+}
+
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
@@ -108,6 +113,7 @@ export interface Settings {
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	executionTargets?: ExecutionTargetConfig[];
+	terminalOutputReview?: TerminalOutputReviewSettings;
 	search?: SearchSettings;
 	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
@@ -974,6 +980,11 @@ export class SettingsManager {
 
 	getExecutionTargets(): ExecutionTargetConfig[] {
 		return structuredClone(this.settings.executionTargets ?? []);
+	}
+
+	getTerminalOutputReviewModel(): string {
+		const configured = this.settings.terminalOutputReview?.model?.trim();
+		return configured || "gpt-5.6-luna";
 	}
 
 	getSearchSettings(): SearchSettings | undefined {

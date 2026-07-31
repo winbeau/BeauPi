@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { Usage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
@@ -10,6 +11,8 @@ import {
 	FakeSshTmuxAdapter,
 	RemoteExecutionError,
 	RemoteExecutionRuntime,
+	type TerminalOutputReviewer,
+	type TerminalReviewInput,
 	validateExecutionTarget,
 } from "../src/core/remote/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -24,6 +27,32 @@ class Clock {
 	}
 }
 
+const reviewUsage: Usage = {
+	input: 12,
+	output: 3,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 15,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+class RecordingTerminalReviewer implements TerminalOutputReviewer {
+	readonly calls: TerminalReviewInput[] = [];
+	throwError = false;
+
+	async review(input: TerminalReviewInput) {
+		this.calls.push(structuredClone(input));
+		if (this.throwError) throw new Error("review unavailable");
+		return {
+			text: "Actionable reviewed result.\n@/incorrect/model/path.log",
+			model: "faux/gpt-5.6-luna",
+			status: "completed" as const,
+			inputTruncated: false,
+			usage: reviewUsage,
+		};
+	}
+}
+
 const cleanup: string[] = [];
 afterEach(() => {
 	for (const path of cleanup.splice(0)) {
@@ -31,7 +60,14 @@ afterEach(() => {
 	}
 });
 
-function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | false; targetUser?: string } = {}) {
+function createSetup(
+	options: {
+		projectTrusted?: boolean;
+		remoteCwd?: string | false;
+		targetUser?: string;
+		outputReviewer?: TerminalOutputReviewer;
+	} = {},
+) {
 	const cwd = join(tmpdir(), `beaupi-remote-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(cwd, { recursive: true });
 	cleanup.push(cwd);
@@ -64,6 +100,7 @@ function createSetup(options: { projectTrusted?: boolean; remoteCwd?: string | f
 		monitorRuntime: monitor,
 		targets,
 		adapter,
+		outputReviewer: options.outputReviewer,
 		now: clock.now,
 	});
 	return { cwd, sessionManager, settingsManager, target, targets, adapter, clock, monitor, runtime };
@@ -231,6 +268,46 @@ describe("M7 execution targets", () => {
 });
 
 describe("M7 faux-provider integration", () => {
+	it("preserves structured terminal failures as error Tool Results in the next provider context", async () => {
+		const tool: AgentTool = {
+			name: "fake_terminal_bash",
+			label: "fake_terminal_bash",
+			description: "Return a structured terminal failure",
+			parameters: Type.Object({}),
+			execute: async () => ({
+				content: [{ type: "text", text: "reviewed failure\n@/tmp/work.log" }],
+				details: {
+					version: 1,
+					operation: "terminal_bash",
+					ok: false,
+					terminalId: "term",
+					monitorId: "mon-term",
+					logPath: "/tmp/work.log",
+					exitCode: 7,
+				},
+				usage: reviewUsage,
+			}),
+		};
+		const harness = await createHarness({
+			baseToolsOverride: { fake_terminal_bash: tool },
+			responses: [{ toolCalls: [{ name: "fake_terminal_bash", args: {} }], stopReason: "toolUse" }, "done"],
+		});
+		try {
+			await harness.session.prompt("run the failing terminal command");
+			const nextContext = harness.faux.contexts[1];
+			const toolResult = nextContext?.messages.find((message) => message.role === "toolResult");
+			expect(toolResult).toMatchObject({
+				role: "toolResult",
+				isError: true,
+				content: [{ type: "text", text: "reviewed failure\n@/tmp/work.log" }],
+				details: expect.objectContaining({ operation: "terminal_bash", ok: false, exitCode: 7 }),
+				usage: reviewUsage,
+			});
+		} finally {
+			harness.cleanup();
+		}
+	});
+
 	it("runs the fake SSH adapter from a faux-provider Tool call", async () => {
 		const setup = createSetup();
 		setup.runtime.selectTarget("fake");
@@ -306,9 +383,67 @@ describe("M7 fake tmux lifecycle", () => {
 		expect(setup.adapter.terminalCommandCalls).toEqual([
 			{ terminalId: created.terminalId, command: "printf terminal-ok" },
 		]);
-		expect(readFileSync(created.logPath, "utf8")).toBe("terminal-ok\n");
+		expect(readFileSync(created.logPath, "utf8")).toContain("command=printf terminal-ok");
+		expect(readFileSync(created.logPath, "utf8")).toContain("terminal-ok");
 		const capture = await setup.runtime.terminalCapture(created.terminalId);
 		expect(capture.content).toBe("");
+	});
+
+	it("reviews failures and outputs over 100 lines while keeping short successes deterministic", async () => {
+		const reviewer = new RecordingTerminalReviewer();
+		const setup = createSetup({ outputReviewer: reviewer });
+		setup.runtime.selectTarget("fake");
+		const created = await setup.runtime.terminalCreate({ terminalId: "review-terminal" });
+
+		setup.adapter.setTerminalCommandResult(created.terminalId, "printf short", {
+			stdout: "short output\n",
+			exitCode: 0,
+		});
+		const short = await setup.runtime.terminalBash(created.terminalId, "printf short");
+		expect(short.review.status).toBe("skipped");
+		expect(reviewer.calls).toHaveLength(0);
+		expect(short.report.split("\n").at(-1)).toBe(`@${created.logPath}`);
+
+		setup.adapter.setTerminalCommandResult(created.terminalId, "false", {
+			stderr: "build failed at src/index.ts:4\n",
+			exitCode: 2,
+		});
+		const failed = await setup.runtime.terminalBash(created.terminalId, "false");
+		expect(failed).toMatchObject({
+			ok: false,
+			exitCode: 2,
+			review: { status: "completed", model: "faux/gpt-5.6-luna" },
+			usage: reviewUsage,
+		});
+		expect(failed.report).not.toContain("/incorrect/model/path.log");
+		expect(failed.report.split("\n").at(-1)).toBe(`@${created.logPath}`);
+		expect(reviewer.calls).toHaveLength(1);
+
+		const longOutput = `${Array.from({ length: 101 }, (_, index) => `line ${index + 1}`).join("\n")}\n`;
+		setup.adapter.setTerminalCommandResult(created.terminalId, "long-output", {
+			stdout: longOutput,
+			exitCode: 0,
+		});
+		const long = await setup.runtime.terminalBash(created.terminalId, "long-output");
+		expect(long.review.status).toBe("completed");
+		expect(reviewer.calls).toHaveLength(2);
+		expect(readFileSync(created.logPath, "utf8")).toContain("line 101");
+	});
+
+	it("falls back deterministically when terminal output review fails", async () => {
+		const reviewer = new RecordingTerminalReviewer();
+		reviewer.throwError = true;
+		const setup = createSetup({ outputReviewer: reviewer });
+		setup.runtime.selectTarget("fake");
+		const created = await setup.runtime.terminalCreate({ terminalId: "review-fallback" });
+		setup.adapter.setTerminalCommandResult(created.terminalId, "false", {
+			stderr: "critical failure\n",
+			exitCode: 1,
+		});
+		const result = await setup.runtime.terminalBash(created.terminalId, "false");
+		expect(result.review).toMatchObject({ status: "fallback", error: "review unavailable" });
+		expect(result.report).toContain("critical failure");
+		expect(result.report.split("\n").at(-1)).toBe(`@${created.logPath}`);
 	});
 
 	it("rejects terminal Bash on fixed-command or busy terminals and maps timeout and cancellation", async () => {
@@ -333,13 +468,13 @@ describe("M7 fake tmux lifecycle", () => {
 		setup.adapter.setTerminalCommandResult(created.terminalId, "sleep timeout", { delayMs: 50 });
 		await expect(
 			setup.runtime.terminalBash(created.terminalId, "sleep timeout", { timeoutMs: 1 }),
-		).rejects.toMatchObject({ diagnostic: { code: "remote_timeout" } });
+		).resolves.toMatchObject({ ok: false, diagnostic: { code: "remote_timeout" } });
 
 		setup.adapter.setTerminalCommandResult(created.terminalId, "sleep cancel", { delayMs: 50 });
 		const controller = new AbortController();
 		const cancelled = setup.runtime.terminalBash(created.terminalId, "sleep cancel", { signal: controller.signal });
 		controller.abort();
-		await expect(cancelled).rejects.toMatchObject({ diagnostic: { code: "remote_cancelled" } });
+		await expect(cancelled).resolves.toMatchObject({ ok: false, diagnostic: { code: "remote_cancelled" } });
 	});
 
 	it("restores an unverifiable remote monitor as lost", async () => {

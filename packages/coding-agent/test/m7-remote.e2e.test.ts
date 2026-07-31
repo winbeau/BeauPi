@@ -26,7 +26,7 @@ function textFrom(result: { content: Array<{ type: string; text?: string }> }): 
 }
 
 describe.skipIf(!realE2e)("M7 real h100-server E2E", () => {
-	it("executes remote commands and a controlled tmux lifecycle through OpenSSH", async () => {
+	it("executes remote commands through OpenSSH and keeps SSH inside a local tmux pane", async () => {
 		const cwd = join(tmpdir(), `beaupi-m7-real-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(cwd, { recursive: true });
 		const sessionManager = SessionManager.inMemory(cwd);
@@ -102,13 +102,25 @@ describe.skipIf(!realE2e)("M7 real h100-server E2E", () => {
 				terminalId,
 				command: "pwd; printf terminal-bash-ok",
 			});
-			expect(textFrom(terminalBash)).toContain("/tmp");
-			expect(textFrom(terminalBash)).toContain("terminal-bash-ok");
+			expect(textFrom(terminalBash)).toMatch(/^Command completed successfully:[\s\S]*\n@.*工作日志\.log$/);
 			expect(terminalBash.details).toMatchObject({
 				operation: "terminal_bash",
 				terminalId,
 				exitCode: 0,
+				review: { status: "skipped" },
 			});
+			expect(readFileSync(terminalBash.details.logPath ?? "", "utf8")).toContain("/tmp");
+			expect(readFileSync(terminalBash.details.logPath ?? "", "utf8")).toContain("terminal-bash-ok");
+			const longTerminalBash = await executeTool(definitions.terminal_bash, {
+				terminalId,
+				command: "seq 1 5000",
+			});
+			expect(longTerminalBash.details).toMatchObject({
+				operation: "terminal_bash",
+				ok: true,
+				review: { status: "fallback" },
+			});
+			expect(readFileSync(longTerminalBash.details.logPath ?? "", "utf8")).toMatch(/\n5000\n--- end ---/);
 			await executeTool(definitions.remote_exec, { command: "sleep 2" });
 			await executeTool(definitions.terminal_send, { terminalId, input: "pwd\n" });
 			await executeTool(definitions.remote_exec, { command: "sleep 0.2" });

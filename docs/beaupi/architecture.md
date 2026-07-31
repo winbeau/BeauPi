@@ -22,7 +22,7 @@ BeauPi CLI / TUI
 ├── Execution Backends
 │   ├── Local WSL
 │   ├── SSH
-│   └── tmux
+│   └── local tmux SSH panes
 │
 ├── Native Tools
 │   ├── Interaction
@@ -244,11 +244,27 @@ M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract�
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
 - Tasks Widget 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
 
+## Remote Terminal transport
+
+M7 Terminal 使用“本地 tmux + pane 内 SSH”，不在远端运行 tmux：
+
+```text
+terminal_create
+└── local tmux session/pane
+    └── exec ssh <trusted target>
+        └── remote login shell
+            └── marker-wrapped terminal_bash command
+```
+
+本地 tmux 负责 session/pane 生命周期、`send-keys`、Ctrl-C、capture 和临时 pane transcript；OpenSSH 继续负责受信任 alias、Agent、known_hosts、ControlMaster 和登录身份。随机 begin/end marker 只属于 transport 协议，不要求 Agent 编写。pane transcript 用于无固定历史行上限地收集当前命令输出，命令完成后只把脱敏内容追加到每 terminal 的 `工作日志.log`；原始 transcript 在 terminal 关闭或 Runtime dispose 时删除。
+
+`TerminalOutputReviewer` 与 transport 解耦。默认实现通过现有 `ModelRuntime` 解析 `terminalOutputReview.model`，在失败或输出超过 100 行时进行一次无 Tool 审阅；不设置独立的模型输出 token 硬限制。Tool Result 只保存审阅文本、结构化状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
+
 ## Monitor 与后台任务
 
-Monitor Runtime 是本地进程、Tool、子 Agent、SSH 连接和 tmux 会话的统一观察层，内部只有一个 session-scoped `MonitorRegistry` 保存 `MonitorRecord`；它不创建 Agent、Session、ResourceLoader 或第二套任务状态系统。Runtime 负责确定性状态、最后活动时间、资源快照、增量日志 cursor/hash、生命周期事件去重和可视化。它不从日志文本猜测业务结论，也不会在无变化时调用模型。
+Monitor Runtime 是本地进程、Tool、子 Agent、SSH 连接和本地 tmux SSH terminal 的统一观察层，内部只有一个 session-scoped `MonitorRegistry` 保存 `MonitorRecord`；它不创建 Agent、Session、ResourceLoader 或第二套任务状态系统。Runtime 负责确定性状态、最后活动时间、资源快照、增量日志 cursor/hash、生命周期事件去重和可视化。它不从日志文本猜测业务结论，也不会在无变化时调用模型。
 
-M6 的 Process adapter 只检查 PID、退出码、日志位置/identity/hash 和资源快照；Tool/Sub-Agent adapter 消费现有 `AgentSession`/`AgentPool` 生命周期事件。`starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 是唯一 Monitor 状态，无法确认恢复目标时使用 `lost`，不推断成功。SSH/tmux adapter 只保留接口，M7 才实现连接。
+M6 的 Process adapter 只检查 PID、退出码、日志位置/identity/hash 和资源快照；Tool/Sub-Agent adapter 消费现有 `AgentSession`/`AgentPool` 生命周期事件。`starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 是唯一 Monitor 状态，无法确认恢复目标时使用 `lost`，不推断成功。M7 SSH/tmux adapter 以本地 tmux session 是否存在和 pane 内 SSH 是否存活作为 terminal 的确定性事实。
 
 Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列，并复用 Monitor Runtime；进程完成或满足触发条件后，才通过现有 Session 消息机制重新触发 Agent turn。M6 先交付 Monitor，M12 再增加后台自动唤醒。
 

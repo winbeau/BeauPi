@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { appendFile, chmod, mkdir, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import type { MonitorAdapterSnapshot } from "../monitor/types.ts";
 import type { SessionManager } from "../session-manager.ts";
@@ -10,6 +11,14 @@ import type { EditOperations } from "../tools/edit.ts";
 import type { ReadOperations } from "../tools/read.ts";
 import type { WriteOperations } from "../tools/write.ts";
 import { OpenSshTmuxAdapter } from "./adapter.ts";
+import {
+	deterministicTerminalReport,
+	lineCount,
+	successfulTerminalReport,
+	type TerminalOutputReviewer,
+	type TerminalReviewInput,
+	withLogPath,
+} from "./output-reviewer.ts";
 import { ExecutionTargetRegistry } from "./targets.ts";
 import {
 	EXECUTION_TARGET_VERSION,
@@ -44,6 +53,7 @@ export interface RemoteExecutionRuntimeOptions {
 	monitorRuntime: MonitorRuntime;
 	targets?: ExecutionTargetRegistry;
 	adapter?: SshTmuxAdapter;
+	outputReviewer?: TerminalOutputReviewer;
 	now?: () => number;
 }
 
@@ -67,6 +77,7 @@ export interface TerminalCreateResult {
 }
 
 export interface TerminalBashResult {
+	ok: boolean;
 	terminalId: string;
 	monitorId: string;
 	command: string;
@@ -74,6 +85,16 @@ export interface TerminalBashResult {
 	stderr: string;
 	exitCode: number | null;
 	logPath: string;
+	durationMs: number;
+	report: string;
+	review: {
+		model?: string;
+		status: "completed" | "fallback" | "skipped";
+		inputTruncated: boolean;
+		error?: string;
+	};
+	usage?: Usage;
+	diagnostic?: RemoteDiagnostic;
 }
 
 export interface TerminalCaptureResult {
@@ -133,8 +154,12 @@ function commandOperationId(): string {
 	return `cmd-${randomUUID()}`;
 }
 
-function logPathFor(cwd: string, sessionId: string, operationId: string): string {
-	return join(cwd, ".beaupi", "remote-logs", sessionId, `${operationId}.log`);
+function remoteCommandLogPath(cwd: string, sessionId: string, operationId: string): string {
+	return resolve(cwd, ".beaupi", "remote-logs", sessionId, `${operationId}.log`);
+}
+
+function terminalLogPath(cwd: string, sessionId: string, terminalId: string): string {
+	return resolve(cwd, ".beaupi", "terminal-logs", sessionId, terminalId, "工作日志.log");
 }
 
 function hashText(value: string): string {
@@ -194,6 +219,7 @@ export class RemoteExecutionRuntime {
 	private readonly connections = new Map<string, Promise<SshConnection>>();
 	private readonly connectionMonitors = new Map<string, string>();
 	private readonly terminals = new Map<string, RemoteTerminalState>();
+	private outputReviewer?: TerminalOutputReviewer;
 	private selectedTargetId?: string;
 
 	constructor(options: RemoteExecutionRuntimeOptions) {
@@ -203,9 +229,15 @@ export class RemoteExecutionRuntime {
 		this.sessionManager = options.sessionManager;
 		this.now = options.now ?? (() => Date.now());
 		this.targets = options.targets ?? new ExecutionTargetRegistry({ settingsManager: options.settingsManager });
-		this.adapter = options.adapter ?? new OpenSshTmuxAdapter({ targets: this.targets });
+		this.adapter =
+			options.adapter ?? new OpenSshTmuxAdapter({ targets: this.targets, sessionNamespace: options.sessionId });
+		this.outputReviewer = options.outputReviewer;
 		this.monitorRuntime.setAdapter("ssh-tmux", this.adapter);
 		this.selectedTargetId = restoredTargetId(options.sessionManager?.getBranch() ?? []);
+	}
+
+	setOutputReviewerIfUnset(reviewer: TerminalOutputReviewer): void {
+		this.outputReviewer ??= reviewer;
 	}
 
 	get selectedTarget(): ExecutionTargetConfig | undefined {
@@ -304,7 +336,7 @@ export class RemoteExecutionRuntime {
 		assertNoPrivilegeChange(command);
 		const target = this.assertTarget(options.targetId);
 		const operationId = commandOperationId();
-		const logPath = logPathFor(this.cwd, this.sessionId, operationId);
+		const logPath = remoteCommandLogPath(this.cwd, this.sessionId, operationId);
 		await mkdir(dirname(logPath), { recursive: true });
 		const monitor = this.monitorRuntime.attach({
 			target: targetMonitorTarget(target.id, "command", operationId, undefined, logPath),
@@ -395,13 +427,14 @@ export class RemoteExecutionRuntime {
 		const terminalId = safeId(options.terminalId ?? `term-${randomUUID().slice(0, 12)}`, "terminalId");
 		if (options.command) assertNoPrivilegeChange(options.command);
 		const operationId = terminalId;
-		const logPath = logPathFor(this.cwd, this.sessionId, operationId);
+		const logPath = terminalLogPath(this.cwd, this.sessionId, terminalId);
 		await mkdir(dirname(logPath), { recursive: true });
-		await writeFile(logPath, "", "utf8");
+		await writeFile(logPath, "", { encoding: "utf8", mode: 0o600 });
+		await chmod(logPath, 0o600);
 		const monitor = this.monitorRuntime.attach({
 			target: targetMonitorTarget(target.id, "terminal", operationId, terminalId, logPath),
 			name: `tmux:${terminalId}`,
-			taskSummary: "Remote tmux terminal",
+			taskSummary: "Local tmux SSH terminal",
 		});
 		const tmuxOptions: TmuxCreateOptions = {
 			sessionId: terminalId,
@@ -418,12 +451,15 @@ export class RemoteExecutionRuntime {
 			if (!status.exists || !status.paneId) {
 				throw new RemoteExecutionError({
 					code: "terminal_session_lost",
-					message: `tmux session ${JSON.stringify(terminalId)} did not expose a controllable pane`,
+					message: `Local tmux session ${JSON.stringify(terminalId)} did not expose a controllable pane`,
 					targetId: target.id,
 					operationId: terminalId,
 				});
 			}
 			await this.initializeTerminalLog(monitor.id, logPath);
+			const initialCapture = await connection
+				.tmuxCapture(status.paneId, { signal: options.signal, timeoutMs: 2_000 })
+				.catch(() => undefined);
 			this.terminals.set(terminalId, {
 				terminalId,
 				targetId: target.id,
@@ -433,7 +469,7 @@ export class RemoteExecutionRuntime {
 				shellCommand: status.currentCommand,
 				interactive: options.command === undefined,
 				busy: false,
-				lastCapture: "",
+				lastCapture: initialCapture?.exitCode === 0 ? initialCapture.stdout : "",
 				captureCursor: 0,
 			});
 			this.setMonitorSnapshot(monitor.id, {
@@ -522,69 +558,137 @@ export class RemoteExecutionRuntime {
 			});
 		}
 		const target = this.assertTarget(terminal.targetId);
-		const connection = await this.connect(target.id, options.signal);
-		const status = await connection.tmuxStatus(terminal.paneId, { signal: options.signal });
-		if (!status.exists) {
-			throw new RemoteExecutionError({
-				code: "terminal_session_lost",
-				message: `tmux pane for terminal ${JSON.stringify(terminalId)} no longer exists`,
-				targetId: target.id,
-				operationId: terminalId,
-			});
-		}
-		if (terminal.shellCommand && status.currentCommand && status.currentCommand !== terminal.shellCommand) {
-			throw new RemoteExecutionError({
-				code: "terminal_busy",
-				message: `Terminal ${JSON.stringify(terminalId)} is currently running ${JSON.stringify(status.currentCommand)}`,
-				targetId: target.id,
-				operationId: terminalId,
-			});
-		}
-		terminal.busy = true;
+		const startedAt = this.now();
 		const outputChunks: Buffer[] = [];
+		let connection: SshConnection | undefined;
+		let stdout = "";
+		let stderr = "";
+		let exitCode: number | null = null;
+		let diagnostic: RemoteDiagnostic | undefined;
+		terminal.busy = true;
 		try {
+			connection = await this.connect(target.id, options.signal);
+			const status = await connection.tmuxStatus(terminal.paneId, { signal: options.signal });
+			if (!status.exists) {
+				throw new RemoteExecutionError({
+					code: "terminal_session_lost",
+					message: `Local tmux pane for terminal ${JSON.stringify(terminalId)} no longer exists`,
+					targetId: target.id,
+					operationId: terminalId,
+				});
+			}
+			if (terminal.shellCommand && status.currentCommand && status.currentCommand !== terminal.shellCommand) {
+				throw new RemoteExecutionError({
+					code: "terminal_busy",
+					message: `Terminal ${JSON.stringify(terminalId)} is currently running ${JSON.stringify(status.currentCommand)}`,
+					targetId: target.id,
+					operationId: terminalId,
+				});
+			}
 			const result = await connection.tmuxExecute(terminal.paneId, command, {
 				signal: options.signal,
 				timeoutMs: options.timeoutMs,
-				onData: (data) => outputChunks.push(Buffer.from(data)),
+				onData: (data) => {
+					outputChunks.push(Buffer.from(data));
+					options.onData?.(data);
+				},
 			});
-			const stdout = redactOutput(result.stdout);
-			const stderr = redactOutput(result.stderr);
-			if (stdout) options.onData?.(Buffer.from(stdout, "utf8"));
-			if (stderr) options.onData?.(Buffer.from(stderr, "utf8"));
-			await this.recordTerminalCommandOutput(terminal, connection, `${stdout}${stderr}`);
-			return {
-				terminalId,
-				monitorId: terminal.monitorId,
-				command: redactCommand(command),
-				stdout,
-				stderr,
-				exitCode: result.exitCode,
-				logPath: terminal.logPath,
-			};
-		} catch (error) {
-			const diagnostic = diagnosticForError(error, target.id, terminalId);
-			const partialOutput = redactOutput(Buffer.concat(outputChunks).toString("utf8"));
-			if (partialOutput) options.onData?.(Buffer.from(partialOutput, "utf8"));
-			if (diagnostic.code === "terminal_session_lost" || diagnostic.code === "ssh_disconnected") {
-				if (partialOutput) await appendFile(terminal.logPath, partialOutput, "utf8");
-				this.setMonitorSnapshot(terminal.monitorId, {
-					availability: "missing",
-					exitReason: diagnostic.code,
-					diagnostics: [diagnostic.message],
-					logPath: terminal.logPath,
-				});
-				await this.monitorRuntime.poll();
-				if (diagnostic.code === "ssh_disconnected") {
-					await this.markConnectionLost(target.id, diagnostic.message);
-				}
-			} else {
-				await this.recordTerminalCommandOutput(terminal, connection, partialOutput);
+			stdout = result.stdout;
+			stderr = result.stderr;
+			exitCode = result.exitCode;
+			if (result.exitCode !== 0) {
+				diagnostic = {
+					code: "remote_command",
+					message: `Terminal command exited with code ${result.exitCode ?? "unknown"}`,
+					targetId: target.id,
+					operationId: terminalId,
+					exitCode: result.exitCode,
+				};
 			}
-			throw new RemoteExecutionError(diagnostic);
+		} catch (error) {
+			diagnostic = diagnosticForError(error, target.id, terminalId);
+			const partialOutput = Buffer.concat(outputChunks).toString("utf8");
+			stdout = partialOutput;
+			stderr = "";
+			exitCode = diagnostic.exitCode ?? null;
+			if (diagnostic.code === "ssh_disconnected") await this.markConnectionLost(target.id, diagnostic.message);
 		} finally {
 			terminal.busy = false;
 		}
+		const completedAt = this.now();
+		stdout = redactOutput(stdout);
+		stderr = redactOutput(stderr);
+		const output = `${stdout}${stderr}`;
+		await this.recordTerminalCommandOutput(terminal, connection, {
+			command,
+			output,
+			exitCode,
+			diagnostic,
+			startedAt,
+			completedAt,
+		});
+		const reviewInput: TerminalReviewInput = {
+			command: redactCommand(command),
+			output,
+			exitCode,
+			diagnosticCode: diagnostic?.code,
+			diagnosticMessage: diagnostic?.message,
+			durationMs: Math.max(0, completedAt - startedAt),
+			logPath: terminal.logPath,
+		};
+		const shouldReview =
+			diagnostic?.code !== "remote_cancelled" &&
+			(diagnostic !== undefined || exitCode !== 0 || lineCount(output) > 100);
+		let report: string;
+		let review: TerminalBashResult["review"];
+		let usage: Usage | undefined;
+		if (shouldReview && this.outputReviewer) {
+			try {
+				const reviewed = await this.outputReviewer.review(reviewInput, options.signal);
+				report = withLogPath(reviewed.text, terminal.logPath);
+				review = {
+					model: reviewed.model,
+					status: reviewed.status,
+					inputTruncated: reviewed.inputTruncated,
+					error: reviewed.error,
+				};
+				usage = reviewed.usage;
+			} catch (error) {
+				const fallback = deterministicTerminalReport(reviewInput);
+				report = fallback.text;
+				review = {
+					status: "fallback",
+					inputTruncated: fallback.inputTruncated,
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		} else if (shouldReview) {
+			const fallback = deterministicTerminalReport(reviewInput);
+			report = fallback.text;
+			review = { status: "fallback", inputTruncated: fallback.inputTruncated };
+		} else if (diagnostic) {
+			const fallback = deterministicTerminalReport(reviewInput);
+			report = fallback.text;
+			review = { status: "skipped", inputTruncated: fallback.inputTruncated };
+		} else {
+			report = successfulTerminalReport(redactCommand(command), terminal.logPath);
+			review = { status: "skipped", inputTruncated: false };
+		}
+		return {
+			ok: diagnostic === undefined && exitCode === 0,
+			terminalId,
+			monitorId: terminal.monitorId,
+			command: redactCommand(command),
+			stdout,
+			stderr,
+			exitCode,
+			logPath: terminal.logPath,
+			durationMs: reviewInput.durationMs,
+			report,
+			review,
+			usage,
+			diagnostic,
+		};
 	}
 
 	async terminalCapture(terminalId: string, signal?: AbortSignal, cursor?: number): Promise<TerminalCaptureResult> {
@@ -816,28 +920,62 @@ export class RemoteExecutionRuntime {
 
 	private async recordTerminalCommandOutput(
 		terminal: RemoteTerminalState,
-		connection: SshConnection,
-		output: string,
+		connection: SshConnection | undefined,
+		record: {
+			command: string;
+			output: string;
+			exitCode: number | null;
+			diagnostic?: RemoteDiagnostic;
+			startedAt: number;
+			completedAt: number;
+		},
 	): Promise<void> {
-		if (output) {
-			await appendFile(terminal.logPath, output, "utf8");
-			terminal.captureCursor += Buffer.byteLength(output, "utf8");
+		const output = record.output ? `${record.output}${record.output.endsWith("\n") ? "" : "\n"}` : "(no output)\n";
+		const block = [
+			`[${new Date(record.startedAt).toISOString()}] terminal=${terminal.terminalId} target=${terminal.targetId}`,
+			`command=${redactCommand(record.command)}`,
+			`exit=${record.diagnostic?.code ?? record.exitCode ?? "unknown"} durationMs=${Math.max(0, record.completedAt - record.startedAt)}`,
+			"--- output ---",
+			output.trimEnd(),
+			"--- end ---",
+			"",
+		].join("\n");
+		await appendFile(terminal.logPath, block, "utf8");
+		terminal.captureCursor += Buffer.byteLength(block, "utf8");
+		let exists = connection !== undefined;
+		if (connection) {
+			await delay(25);
+			try {
+				const capture = await connection.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 });
+				if (capture.exitCode === 0) terminal.lastCapture = capture.stdout;
+				const status = await connection.tmuxStatus(terminal.paneId, { timeoutMs: 2_000 });
+				exists = status.exists;
+			} catch {
+				exists = false;
+			}
 		}
-		await delay(25);
-		try {
-			const capture = await connection.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 });
-			if (capture.exitCode === 0) terminal.lastCapture = capture.stdout;
-		} catch {
-			// The command result remains authoritative if prompt synchronization fails.
-		}
-		if (output) await this.monitorRuntime.logs(terminal.monitorId);
-		this.setMonitorSnapshot(terminal.monitorId, {
-			availability: "confirmed",
-			running: true,
-			healthy: true,
-			lastActivityAt: this.now(),
-			logPath: terminal.logPath,
-		});
+		await this.monitorRuntime.logs(terminal.monitorId);
+		const lost =
+			record.diagnostic?.code === "ssh_disconnected" ||
+			record.diagnostic?.code === "terminal_session_lost" ||
+			!exists;
+		this.setMonitorSnapshot(
+			terminal.monitorId,
+			lost
+				? {
+						availability: "missing",
+						exitReason: record.diagnostic?.code ?? "tmux_session_missing",
+						diagnostics: record.diagnostic ? [record.diagnostic.message] : undefined,
+						logPath: terminal.logPath,
+					}
+				: {
+						availability: "confirmed",
+						running: true,
+						healthy: true,
+						lastActivityAt: this.now(),
+						logPath: terminal.logPath,
+					},
+		);
 		await this.monitorRuntime.poll();
 	}
 
@@ -854,7 +992,7 @@ export class RemoteExecutionRuntime {
 
 	private async initializeTerminalLog(monitorId: string, logPath: string): Promise<void> {
 		await mkdir(dirname(logPath), { recursive: true });
-		await writeFile(logPath, "", "utf8");
+		await chmod(logPath, 0o600);
 		this.setMonitorSnapshot(monitorId, { availability: "confirmed", running: true, healthy: true, logPath });
 	}
 
@@ -889,7 +1027,7 @@ export class RemoteExecutionRuntime {
 	): RemoteExecutionError {
 		return new RemoteExecutionError({
 			code,
-			message: `tmux operation failed: ${redactOutput(result.stderr) || "remote tmux returned a non-zero exit code"}`,
+			message: `tmux operation failed: ${redactOutput(result.stderr) || "local tmux returned a non-zero exit code"}`,
 			targetId,
 			operationId,
 			exitCode: result.exitCode,
@@ -906,7 +1044,9 @@ function commandInRemoteCwd(command: string, target: ExecutionTargetConfig): str
 }
 
 function redactCommand(command: string): string {
-	return command.replace(/(password|passphrase|token|secret)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]");
+	return command
+		.replace(/(password|passphrase|token|secret|authorization|identityfile)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]")
+		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
 }
 
 function redactOutput(output: string): string {
@@ -920,12 +1060,13 @@ function diagnosticForError(error: unknown, targetId: string, operationId: strin
 	if (error instanceof RemoteExecutionError)
 		return {
 			...error.diagnostic,
+			message: redactOutput(error.diagnostic.message),
 			targetId: error.diagnostic.targetId ?? targetId,
 			operationId: error.diagnostic.operationId ?? operationId,
 		};
 	return {
 		code: "ssh_connection",
-		message: error instanceof Error ? error.message : "Remote operation failed",
+		message: redactOutput(error instanceof Error ? error.message : "Remote operation failed"),
 		targetId,
 		operationId,
 		retryable: true,

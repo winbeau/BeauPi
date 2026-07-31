@@ -95,6 +95,8 @@ export interface TmuxStatus {
 	paneId?: string;
 	currentCommand?: string;
 	lastActivityAt?: number;
+	dead?: boolean;
+	exitCode?: number;
 }
 
 export interface SshConnection {

@@ -114,7 +114,10 @@ describe("M7 remote tools", () => {
 			terminalId: "tool-terminal",
 			exitCode: 0,
 		});
-		expect(terminalBash.content).toEqual([{ type: "text", text: "terminal-tool-ok\n" }]);
+		expect(terminalBash.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringMatching(/^Command completed successfully:[\s\S]*\n@.*工作日志\.log$/),
+		});
 		const capture = await execute(setup.definitions.terminal_capture, { terminalId: "tool-terminal" });
 		expect(capture.details).toMatchObject({
 			operation: "terminal_capture",
@@ -300,9 +303,21 @@ describe("M7 remote tools", () => {
 		expect(bash).toBeDefined();
 		await execute(setup.definitions.terminal_create, { terminalId: "failed-terminal" });
 		setup.adapter.setTerminalCommandResult("failed-terminal", "false", { stderr: "failed\n", exitCode: 7 });
-		await expect(
-			execute(setup.definitions.terminal_bash, { terminalId: "failed-terminal", command: "false" }),
-		).rejects.toThrow(/failed[\s\S]*code 7/);
+		const terminalFailure = await execute(setup.definitions.terminal_bash, {
+			terminalId: "failed-terminal",
+			command: "false",
+		});
+		expect(terminalFailure.details).toMatchObject({
+			operation: "terminal_bash",
+			ok: false,
+			exitCode: 7,
+			diagnostic: { code: "remote_command" },
+			review: { status: "fallback" },
+		});
+		expect(terminalFailure.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringMatching(/failed[\s\S]*@.*工作日志\.log$/),
+		});
 		const read = setup.runtime.createReadOperations();
 		setup.adapter.setCommandResult("cd '/workspace' && cat -- 'hello.txt'", {
 			stdout: "hello\n",

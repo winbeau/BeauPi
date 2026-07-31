@@ -7,6 +7,13 @@ export {
 	shellQuote,
 } from "./adapter.ts";
 export {
+	deterministicTerminalReport,
+	LunaTerminalOutputReviewer,
+	type TerminalOutputReviewer,
+	type TerminalReviewInput,
+	type TerminalReviewResult,
+} from "./output-reviewer.ts";
+export {
 	incrementalCapture,
 	type RemoteExecResult,
 	RemoteExecutionRuntime,
@@ -26,6 +33,7 @@ export {
 } from "./targets.ts";
 export {
 	createRemoteToolDefinitions,
+	getRemoteToolDetails,
 	type RemoteToolDetails,
 	remoteExecSchema,
 	type TerminalBashToolDetails,

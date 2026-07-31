@@ -10,7 +10,7 @@ import { createEditToolDefinition } from "../tools/edit.ts";
 import { createReadToolDefinition } from "../tools/read.ts";
 import { createWriteToolDefinition } from "../tools/write.ts";
 import type { RemoteExecutionRuntime } from "./runtime.ts";
-import { type ExecutionTargetConfig, type RemoteDiagnostic, RemoteExecutionError } from "./types.ts";
+import type { ExecutionTargetConfig, RemoteDiagnostic } from "./types.ts";
 
 const targetSelectSchema = Type.Object({
 	targetId: Type.String({ minLength: 1, description: "Configured execution target id" }),
@@ -51,10 +51,20 @@ type TerminalStatusInput = Static<typeof terminalStatusSchema>;
 type TerminalCloseInput = Static<typeof terminalCloseSchema>;
 
 export interface TerminalBashToolDetails extends BashToolDetails {
+	version: 1;
 	operation: "terminal_bash";
+	ok: boolean;
 	terminalId: string;
-	monitorId?: string;
-	logPath?: string;
+	monitorId: string;
+	logPath: string;
+	durationMs: number;
+	diagnostic?: RemoteDiagnostic;
+	review: {
+		model?: string;
+		status: "completed" | "fallback" | "skipped";
+		inputTruncated: boolean;
+		error?: string;
+	};
 }
 
 type TerminalBashRenderState = {
@@ -81,6 +91,14 @@ export interface RemoteToolDetails {
 	status?: string;
 	exists?: boolean;
 	diagnostic?: RemoteDiagnostic;
+}
+
+export function getRemoteToolDetails(value: unknown): { operation: string; ok: boolean } | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	return typeof record.operation === "string" && typeof record.ok === "boolean"
+		? { operation: record.operation, ok: record.ok }
+		: undefined;
 }
 
 const CONFIGURED_SSH_IDENTITY_GUIDELINE =
@@ -406,8 +424,8 @@ function createTerminalCreateTool(
 		name: "terminal_create",
 		label: "terminal_create",
 		description:
-			"Create a controlled tmux session as the target's configured SSH login identity on the default or explicitly requested target.",
-		promptSnippet: "Create a remote tmux terminal",
+			"Create a controlled local tmux session whose pane runs SSH as the target's configured SSH login identity.",
+		promptSnippet: "Create a local tmux SSH terminal",
 		promptGuidelines: [
 			"Omit command for an interactive terminal so tmux uses the remote user's default shell.",
 			CONFIGURED_SSH_IDENTITY_GUIDELINE,
@@ -457,7 +475,7 @@ function createTerminalCreateTool(
 
 function createTerminalBashTool(
 	runtime: RemoteExecutionRuntime,
-): ToolDefinition<typeof terminalBashSchema, TerminalBashToolDetails | undefined, TerminalBashRenderState> {
+): ToolDefinition<typeof terminalBashSchema, TerminalBashToolDetails, TerminalBashRenderState> {
 	const bashRenderer = createBashToolDefinition(runtime.cwd, {
 		operations: runtime.createBashOperations(),
 		exposeSessionEnvironment: false,
@@ -466,69 +484,40 @@ function createTerminalBashTool(
 		name: "terminal_bash",
 		label: "terminal_bash",
 		description:
-			"Execute a Bash command through an existing remote tmux terminal. The command inherits that terminal's current directory and exported environment, waits for completion, and uses Bash-compatible output, timeout, cancellation, truncation, and exit-code behavior.",
-		promptSnippet: "Execute a command in an existing remote tmux terminal",
+			"Execute a Bash command through an existing local tmux terminal whose pane runs SSH. The command inherits the remote shell's current directory and exported environment, returns a concise reviewed report, and saves complete output to the work log.",
+		promptSnippet: "Execute a command in an existing local tmux SSH terminal",
 		promptGuidelines: [
-			"Use terminal_bash for normal commands in an existing terminal; treat it like bash running in that terminal's current directory.",
-			"Prefer terminal_bash over terminal_send plus terminal_capture when a command should run to completion and return output.",
-			"Use terminal_send and terminal_capture only for genuinely interactive input or terminal diagnosis.",
+			"Use terminal_bash for normal commands in an existing terminal; do not follow it with terminal_status or terminal_capture just to understand the result.",
+			"When the working directory is known, use one concise command such as cd <workdir> && <command>; do not add a preliminary pwd.",
+			"Only use terminal_send and terminal_capture for genuinely interactive input or terminal diagnosis.",
+			"Do not add explanatory echo commands, repeated status probes, sleeps, extra capture calls, or nested bash -lc wrappers.",
 			NO_PRIVILEGE_CHANGE_GUIDELINE,
 			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 		],
 		parameters: terminalBashSchema,
 		executionMode: "sequential",
-		execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalBashInput>("terminal_bash", validators.terminalBash, params);
-			let terminalResult: Awaited<ReturnType<RemoteExecutionRuntime["terminalBash"]>> | undefined;
-			const executor = createBashToolDefinition(runtime.cwd, {
-				exposeSessionEnvironment: false,
-				operations: {
-					exec: async (command, _cwd, options) => {
-						try {
-							terminalResult = await runtime.terminalBash(params.terminalId, command, {
-								signal: options.signal,
-								timeoutMs: options.timeout ? options.timeout * 1000 : undefined,
-								onData: options.onData,
-							});
-							return { exitCode: terminalResult.exitCode };
-						} catch (error) {
-							if (error instanceof RemoteExecutionError && error.diagnostic.code === "remote_cancelled") {
-								throw new Error("aborted");
-							}
-							if (error instanceof RemoteExecutionError && error.diagnostic.code === "remote_timeout") {
-								throw new Error(`timeout:${options.timeout ?? params.timeout ?? 0}`);
-							}
-							throw error;
-						}
-					},
-				},
-			});
-			const result = await executor.execute(
-				toolCallId,
-				{ command: params.command, timeout: params.timeout },
+			const result = await runtime.terminalBash(params.terminalId, params.command, {
 				signal,
-				onUpdate
-					? (update) =>
-							onUpdate({
-								...update,
-								details: update.details
-									? { ...update.details, operation: "terminal_bash", terminalId: params.terminalId }
-									: undefined,
-							})
-					: undefined,
-				ctx,
-			);
+				timeoutMs: params.timeout ? params.timeout * 1000 : undefined,
+			});
 			return {
-				...result,
-				details: result.details
-					? {
-							...result.details,
-							operation: "terminal_bash",
-							terminalId: params.terminalId,
-							monitorId: terminalResult?.monitorId,
-							logPath: terminalResult?.logPath,
-						}
-					: undefined,
+				content: [{ type: "text", text: result.report }],
+				details: {
+					version: 1,
+					operation: "terminal_bash",
+					ok: result.ok,
+					command: result.command,
+					exitCode: result.exitCode,
+					terminalId: result.terminalId,
+					monitorId: result.monitorId,
+					logPath: result.logPath,
+					durationMs: result.durationMs,
+					diagnostic: result.diagnostic,
+					review: result.review,
+				},
+				usage: result.usage,
 			};
 		},
 		renderCall: (args, currentTheme, context) => {
@@ -546,7 +535,7 @@ function createTerminalBashTool(
 		},
 		renderResult: (result, options, currentTheme, context) =>
 			bashRenderer.renderResult?.(
-				result as AgentToolResult<BashToolDetails | undefined>,
+				result as AgentToolResult<BashToolDetails>,
 				options,
 				currentTheme,
 				context as never,
@@ -560,8 +549,9 @@ function createTerminalSendTool(
 	return {
 		name: "terminal_send",
 		label: "terminal_send",
-		description: "Send literal input to an existing remote tmux session for genuinely interactive terminal control.",
-		promptSnippet: "Send interactive input to a remote tmux terminal",
+		description:
+			"Send literal input to an existing local tmux pane whose process is SSH for genuinely interactive terminal control.",
+		promptSnippet: "Send interactive input to a local tmux SSH terminal",
 		promptGuidelines: [
 			"Do not use terminal_send plus terminal_capture for ordinary commands; use terminal_bash instead.",
 		],
@@ -604,8 +594,8 @@ function createTerminalCaptureTool(
 		name: "terminal_capture",
 		label: "terminal_capture",
 		description:
-			"Capture only new output from a remote tmux terminal using a cursor; complete output remains in the log file.",
-		promptSnippet: "Read incremental output from a remote tmux terminal",
+			"Capture only new output from a local tmux SSH terminal using a cursor; complete output remains in the work log.",
+		promptSnippet: "Read incremental output from a local tmux SSH terminal",
 		parameters: terminalCaptureSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalCaptureInput>("terminal_capture", validators.terminalCapture, params);
@@ -652,8 +642,8 @@ function createTerminalStatusTool(
 	return {
 		name: "terminal_status",
 		label: "terminal_status",
-		description: "Read deterministic tmux existence and Monitor status for a remote terminal.",
-		promptSnippet: "Check a remote tmux terminal status",
+		description: "Read deterministic local tmux existence and Monitor status for a terminal.",
+		promptSnippet: "Check a local tmux SSH terminal status",
 		parameters: terminalStatusSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalStatusInput>("terminal_status", validators.terminalStatus, params);
@@ -694,8 +684,8 @@ function createTerminalCloseTool(
 		name: "terminal_close",
 		label: "terminal_close",
 		description:
-			"Close a remote tmux terminal and its Monitor lifecycle without closing the SSH target unless requested separately.",
-		promptSnippet: "Close a remote tmux terminal",
+			"Close a local tmux SSH terminal and its Monitor lifecycle without closing the SSH target unless requested separately.",
+		promptSnippet: "Close a local tmux SSH terminal",
 		parameters: terminalCloseSchema,
 		execute: async (_toolCallId, params, signal) => {
 			validate<TerminalCloseInput>("terminal_close", validators.terminalClose, params);

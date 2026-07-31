@@ -414,8 +414,11 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - SSH ControlMaster 连接复用、连接超时和明确关闭
 - 远程 read/write/edit/bash Operation adapter
 - `terminal_create`、`terminal_bash`、`terminal_send`、`terminal_capture`、`terminal_status`、`terminal_close`
-- `terminal_bash` 在现有 pane 当前目录和导出环境中执行普通 Bash 命令，等待完成并返回输出/退出码；send/capture 保留给交互式控制和诊断
-- tmux 增量 capture、日志摘要和完整输出文件
+- 本地 tmux pane 内直接运行 SSH，远端不再要求 tmux；所有 terminal 输入由本地 tmux 注入
+- `terminal_bash` 在现有远端 shell 当前目录和导出环境中执行普通 Bash 命令，一次调用等待完成；send/capture 保留给交互式控制和诊断
+- 每 terminal 的完整脱敏 `工作日志.log`、增量 capture、随机 marker/退出码协议和关闭时清理的本地 pane transcript
+- 可配置 `TerminalOutputReviewer`：失败或输出超过 100 行时审阅，短成功命令走确定性摘要，最后一行固定为 `@绝对日志路径`
+- 非零退出、超时、取消和断线保留 Tool details、usage、Monitor 关联和正确 `isError`
 - 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
 - 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
 - 第一版使用受信任 Target 的 OpenSSH 登录身份，允许 AutoDL 等平台提供的 `root` 账户；不实现 sudo、su 等登录后提权或身份切换
@@ -427,8 +430,10 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - 目标选择、参数验证和信任边界，包括配置为 `root` 的 provider-managed Target
 - 连接建立、复用、超时、关闭和断线
 - 远程命令成功、失败、取消和退出码
-- tmux 创建、Bash 命令注入与等待、发送、增量捕获、状态和关闭
-- 远程长日志 cursor、摘要和完整文件路径
+- 本地 tmux 创建、pane 内 SSH readiness、Bash marker 注入与等待、发送、增量捕获、状态和关闭
+- 远程 cwd/export 持久化，远端无 tmux 依赖
+- 失败和超过 100 行时的 fake reviewer、模型失败 fallback、usage 和强制 `@日志路径`
+- 长日志 cursor、完整工作日志和无 pane history 截断的 transcript 收集
 - Monitor 状态与远程会话生命周期一致
 - 不保存认证秘密，不把完整历史日志注入上下文
 
@@ -444,7 +449,15 @@ ssh h100-server 'hostname && curl -fsSL --max-time 20 -o /dev/null -w "http_code
 
 ### 验收标准
 
-Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并创建、控制和关闭 tmux 会话；普通命令可直接使用 `terminal_bash` 在现有 terminal 当前目录执行并等待结果，无需手动组合 send/capture；断线、超时和会话丢失状态可见；长日志默认增量展示。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内创建、控制和关闭 SSH terminal；普通命令可直接使用一次 `terminal_bash` 在现有远端 shell 当前目录执行，无需手动组合 send/capture/status；断线、超时、非零退出和会话丢失状态可见；完整输出进入工作日志，主上下文只接收审阅摘要。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+
+### 补充验收记录（2026-07-31）
+
+- Terminal transport 已从“SSH 到远端 tmux”改为“本地 tmux pane 内运行 SSH”，并通过真实 `h100-server` E2E 验证 cwd、命令执行、增量 capture、连接重建、关闭和 5,000 行完整日志。
+- `terminal_bash` 使用本地 transcript 和 marker/退出码协议，完整脱敏输出按 terminal 追加到 `.beaupi/terminal-logs/.../工作日志.log`；临时 transcript 在关闭/dispose 时清理。
+- `terminalOutputReview.model` 默认 `gpt-5.6-luna`，裸 model id 优先跟随当前 Agent provider；失败或输出超过 100 行才审阅，未设置额外 `maxTokens` 硬限制。
+- Tool Result 最后一行由代码强制为 `@绝对日志路径`；模型失败使用确定性 fallback，review usage 进入 Tool Result/Session 使用统计。
+- AgentSession 根据 Remote details 的 `ok` 设置 `isError`，非零退出、超时和断线不再因通用异常路径丢失 terminal/monitor/log/review details。
 
 ---
 

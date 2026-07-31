@@ -221,6 +221,26 @@ Execution targets are non-secret SSH configuration entries used by the built-in 
 
 `sshAlias` is resolved by OpenSSH, so existing `~/.ssh/config`, SSH Agent, and `known_hosts` configuration are reused. `remoteCwd` may be a safe relative POSIX path resolved from the remote user's `~`, or an absolute POSIX path such as `/workspace`. Do not put credentials in settings.
 
+Persistent terminals use a local tmux session whose pane runs SSH. The remote target does not need tmux. Each terminal appends redacted command output to `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`.
+
+### Terminal output review
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `terminalOutputReview.model` | string | `"gpt-5.6-luna"` | Small model used to review failed `terminal_bash` calls or successful calls whose output exceeds 100 lines |
+
+A bare model ID first resolves under the active Agent provider, then under another configured provider. Use `provider/model-id` to fix the provider. Review requests use the model's normal output capacity; BeauPi does not impose a separate `maxTokens` limit.
+
+```json
+{
+  "terminalOutputReview": {
+    "model": "opencode/gpt-5.6-luna"
+  }
+}
+```
+
+The Tool Result contains only the concise review or deterministic fallback. Its final non-empty line is always `@<absolute-work-log-path>` and is added by code rather than trusted to the model.
+
 ### Sessions
 
 | Setting | Type | Default | Description |

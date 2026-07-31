@@ -335,6 +335,17 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("terminal output review", () => {
+		it("defaults to Luna and accepts a provider-qualified model", () => {
+			expect(SettingsManager.inMemory().getTerminalOutputReviewModel()).toBe("gpt-5.6-luna");
+			expect(
+				SettingsManager.inMemory({
+					terminalOutputReview: { model: "opencode/gpt-5.6-luna" },
+				}).getTerminalOutputReviewModel(),
+			).toBe("opencode/gpt-5.6-luna");
+		});
+	});
+
 	describe("httpIdleTimeoutMs", () => {
 		it("should default to 5 minutes", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

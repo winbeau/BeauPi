@@ -158,15 +158,17 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 支持 SSH ControlMaster 连接复用、连接超时和明确关闭
 - 增加远程 read/write/edit/bash Operation adapter
 - 实现 `terminal_create`、`terminal_bash`、`terminal_send`、`terminal_capture`、`terminal_status` 和 `terminal_close`
-- `terminal_bash` 将普通命令注入现有 pane，在 terminal 当前目录和导出环境中等待执行完成并返回 Bash 风格输出与退出码；普通命令不再手动组合 send/capture
-- tmux capture 使用增量 cursor，完整日志写入文件
+- `terminal_create` 在本机创建 tmux，pane 内直接运行 SSH；远端不依赖 tmux
+- `terminal_bash` 将普通命令通过本地 `tmux send-keys` 注入现有 SSH shell，在 terminal 当前目录和导出环境中等待执行完成；普通命令不再手动组合 send/capture
+- 每 terminal 将完整脱敏输出追加到 `工作日志.log`；失败或超过 100 行的输出由可配置小模型审阅，Tool Result 最后一行固定为 `@绝对日志路径`
+- tmux capture 使用增量 cursor；非零退出、超时和断线保留结构化 details、usage 和 `isError`
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
 - 第一版按受信任 Target 的 OpenSSH 配置身份执行，允许 AutoDL 等平台直接提供的 `root` 登录；能够明确解析为直接执行的 sudo/su/doas/pkexec 登录后身份切换只由 Policy 分类并显示 advisory，不由 Policy 阻断
 - 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
 - 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 
-验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并控制 tmux 会话；普通 tmux 命令通过 `terminal_bash` 在现有 terminal 当前目录执行并等待结果，交互式场景才使用 send/capture；断线、超时和会话丢失状态可见；长日志不会整体污染上下文；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内保持 SSH terminal；普通命令通过一次 `terminal_bash` 在现有远端 shell 当前目录执行，交互式场景才使用 send/capture；断线、超时、非零退出和会话丢失保留结构化状态；完整日志落盘且主上下文只接收审阅摘要和 `@日志路径`；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ## 阶段 9：联网搜索
 

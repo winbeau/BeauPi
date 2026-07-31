@@ -117,7 +117,9 @@ import {
 } from "./policy/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
+import { LunaTerminalOutputReviewer } from "./remote/output-reviewer.ts";
 import { RemoteExecutionRuntime } from "./remote/runtime.ts";
+import { getRemoteToolDetails } from "./remote/tools.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { attachSearchRuntimeToolDetails, getSearchRuntimeToolDetails } from "./search/index.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
@@ -485,6 +487,13 @@ export class AgentSession {
 				settingsManager: config.settingsManager,
 				monitorRuntime: this.monitorRuntime,
 			});
+		this.remoteRuntime.setOutputReviewerIfUnset(
+			new LunaTerminalOutputReviewer({
+				modelRuntime: this._modelRuntime,
+				getModelSetting: () => this.settingsManager.getTerminalOutputReviewModel(),
+				getPreferredProvider: () => this.agent.state.model?.provider,
+			}),
+		);
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
@@ -628,11 +637,13 @@ export class AgentSession {
 			const runner = this._extensionRunner;
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
+			const remoteDetails = getRemoteToolDetails(result.details);
+			const runtimeError = searchDetails?.ok === false || remoteDetails?.ok === false;
 			const policyDetails = await this.policyRuntime.finalizeTool({
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
 				details: result.details,
-				isError,
+				isError: runtimeError || isError,
 				signal: this.agent.signal,
 			});
 			let authoritativeDetails = policyDetails
@@ -644,9 +655,10 @@ export class AgentSession {
 					policyDetails.status === "blocked" ||
 					policyDetails.status === "replaced" ||
 					policyDetails.status === "paused");
+			const authoritativeError = policyError || runtimeError || isError;
 			if (!runner.hasHandlers("tool_result")) {
-				return policyDetails || searchDetails?.ok === false
-					? { details: authoritativeDetails, isError: policyError || searchDetails?.ok === false || isError }
+				return policyDetails || runtimeError
+					? { details: authoritativeDetails, isError: authoritativeError }
 					: undefined;
 			}
 
@@ -657,13 +669,13 @@ export class AgentSession {
 				input: args as Record<string, unknown>,
 				content: result.content,
 				details: authoritativeDetails,
-				isError: policyError || searchDetails?.ok === false || isError,
+				isError: authoritativeError,
 				usage: result.usage,
 			});
 
 			if (!hookResult) {
-				return policyDetails || searchDetails?.ok === false
-					? { details: authoritativeDetails, isError: policyError || searchDetails?.ok === false || isError }
+				return policyDetails || runtimeError
+					? { details: authoritativeDetails, isError: authoritativeError }
 					: undefined;
 			}
 
@@ -676,7 +688,7 @@ export class AgentSession {
 			return {
 				content: hookResult.content,
 				details: authoritativeDetails,
-				isError: policyError || searchDetails?.ok === false ? true : (hookResult.isError ?? isError),
+				isError: policyError || runtimeError ? true : (hookResult.isError ?? isError),
 				usage: hookResult.usage,
 			};
 		};
