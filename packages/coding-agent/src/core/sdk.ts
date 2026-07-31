@@ -7,6 +7,7 @@ import { AgentSession } from "./agent-session.ts";
 import { AgentPool } from "./agents/agent-pool.ts";
 import type { AgentPoolConfig } from "./agents/agent-profile.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
+import { BackgroundTaskManager, createBackgroundToolDefinitions } from "./background/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { DocumentRuntime } from "./documents/document-runtime.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
@@ -116,6 +117,8 @@ export interface CreateAgentSessionOptions {
 	remoteRuntime?: RemoteExecutionRuntime;
 	/** Inject a session-scoped M11 Workflow Runtime, primarily for deterministic tests. */
 	workflowRuntime?: WorkflowRuntime;
+	/** Inject a session-scoped M12 Background Task Manager, primarily for deterministic tests. */
+	backgroundRuntime?: BackgroundTaskManager;
 }
 
 /** Result from createAgentSession */
@@ -316,6 +319,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			agentPool: childAgentPool,
 		});
+	const backgroundRuntime =
+		options.backgroundRuntime ??
+		new BackgroundTaskManager({
+			sessionId: sessionManager.getSessionId(),
+			cwd,
+			sessionManager,
+			monitorRuntime,
+			agentPool: childAgentPool,
+		});
 	const workflowRuntime =
 		options.workflowRuntime ??
 		(childAgentPool
@@ -336,6 +348,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			monitorRuntime,
 		});
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
+	const backgroundTools = createBackgroundToolDefinitions(backgroundRuntime);
 	const workflowTools = workflowRuntime ? createWorkflowToolDefinitions(workflowRuntime) : [];
 	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
 	const searchTools = createSearchToolDefinitions(searchRuntime, {
@@ -348,6 +361,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
 		for (const monitorTool of monitorTools) {
 			if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
+		}
+		for (const backgroundTool of backgroundTools) {
+			if (!customTools.some((tool) => tool.name === backgroundTool.name)) customTools.push(backgroundTool);
 		}
 		for (const workflowTool of workflowTools) {
 			if (!customTools.some((tool) => tool.name === workflowTool.name)) customTools.push(workflowTool);
@@ -379,6 +395,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"terminal_capture",
 		"terminal_status",
 		"terminal_close",
+		"background_start",
+		"background_attach",
+		"background_status",
+		"background_logs",
+		"background_wait",
+		"background_cancel",
 		"remote_read",
 		"remote_write",
 		"remote_edit",
@@ -534,6 +556,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRuntime,
 		agentPool: childAgentPool,
 		monitorRuntime,
+		backgroundRuntime,
 		workflowRuntime,
 		initialActiveToolNames,
 		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,

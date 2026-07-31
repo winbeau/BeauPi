@@ -151,6 +151,12 @@ export const allToolNames: Set<string> = new Set([
 	"ask_user_question",
 	"web_search",
 	"web_fetch",
+	"background_start",
+	"background_attach",
+	"background_status",
+	"background_logs",
+	"background_wait",
+	"background_cancel",
 ]);
 
 export interface ToolsOptions {

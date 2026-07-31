@@ -672,6 +672,17 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 脚本完成后自动触发新的 Agent turn；无日志变化时不调用模型；多个同时完成事件不会并发启动多个 Coordinator turn；本地和远程任务使用同一套 Monitor 状态和日志语义。
 
+### 验收记录
+
+- `core/background/` 提供版本化 Task/Trigger/WakeEvent/ProgressReview、严格 Tool/Store schema、session-scoped Manager、runner-owned Process adapter、Trigger Evaluator 和 Wake Queue；MonitorRecord 继续是目标状态唯一来源。
+- `background_start/attach/status/logs/wait/cancel` 默认注册；start/wait 立即返回，logs 使用现有 cursor/hash/rotation/truncation 语义，cancel 对本地进程执行有界 TERM→KILL，并与 `monitor_status/logs/wait/stop` 观察同一 monitorId。
+- completed/failed/timeout/stalled/error-pattern/progress-review 以 task/reason/status/log hash 去重；多事件合并，Coordinator 空闲时通过现有 custom message 触发 turn，忙碌时进入 follow-up，不创建第二个 Agent loop。
+- Progress Reviewer 共享 AgentPool/ModelRuntime，只接收目标、上次摘要、新日志、运行时和资源，具有最小间隔、最大次数、输入字符、输出 token 和 wall-clock timeout；hash 无变化时零调用，失败不改变任务终态。
+- custom entries 保存 task、trigger、Wake Queue、消费 key 和 review budget；Compact/resume/branch 只恢复当前分支，未确认目标为 `lost`，已消费事件不重复。
+- Task Ledger、Todo、Footer、Tool renderer 和 Background renderer 已接入；测试覆盖真实短本地进程、fake process/remote、faux idle wake/busy follow-up/reviewer、进程组取消、恢复/branch 和暗/亮 40/80/120/160 列。
+
+状态：已完成。
+
 ## M13：受控权限能力
 
 ### 目标

@@ -288,6 +288,24 @@ Background Task Manager 管理长进程、状态轮询、日志增量和唤醒�
 
 唤醒事件必须去重并串行处理，避免同一任务同时触发多个 Agent turn。详细设计见 [后台任务与自动唤醒](./background-tasks.md)。
 
+M12 已按该边界落地：
+
+```text
+AgentSession
+├── MonitorRuntime / MonitorRegistry       # 目标状态唯一来源
+├── BackgroundTaskManager                  # task/trigger/wake/review 消费事实
+│   ├── BackgroundProcessAdapter           # 保留 runner-owned child exit facts
+│   ├── adaptive scheduler                 # 只调用 Monitor poll/logs
+│   ├── deterministic Trigger Evaluator
+│   ├── serialized Wake Queue
+│   └── AgentPool Progress Reviewer        # optional, bounded, read-only
+└── sendCustomMessage()
+    ├── idle: triggerTurn
+    └── busy: followUp
+```
+
+Background store 使用 `beaupi.background.snapshot` 版本化 custom entry。Task 本身不保存独立进程状态；Tool details、Task Ledger、Todo、Footer 和 renderer 都从 Manager snapshot 中引用同一 MonitorRecord。branch rebuild 顺序为 Task Ledger/Policy 重建、Workflow 取消、Monitor rebuild、Background rebuild、Workflow rebuild；Session dispose 先停止 Background wake/scheduler，再销毁 Monitor。
+
 ## 权限边界
 
 BeauPi 不以 root 身份启动。Sudo 模式只开放结构化操作，例如：

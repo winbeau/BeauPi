@@ -241,6 +241,35 @@ USER | bg:2 | wake:1 | workflow:review | gpt-5.4
 - Session 恢复只恢复 adapter 能确认的目标，无法确认的非终态目标标记为 `lost`。
 - `monitor_wait` 和 `monitor_stop` 只观察或请求取消，不启动 Coordinator turn；M12 的 `background_*` 和 Wake Queue 继续复用这些接口。
 
+## M12 实现状态
+
+M12 已在现有 Monitor Runtime 上实现 `BackgroundTaskManager`，并没有创建第二套进程状态库或 Agent loop。
+
+### 事实与存储
+
+- `BackgroundTaskV1` 只保存 taskId、monitorId、命令元数据、触发器、日志消费 cursor/hash、Wake/Reviewer 预算和诊断；状态、PID、target、退出码、资源和完整日志路径从 `MonitorRecord` 读取。
+- `beaupi.background.snapshot` 是当前 Session branch 的版本化 custom entry，保存任务、WakeEvent、消费 key 和 review budget。解析严格拒绝未知版本/不完整结构。
+- `AgentSession` 构造、Monitor initialize、branch rebuild、Compact/resume 和 dispose 均复用同一 Manager；切换分支时旧 wake delivery 失效，只恢复目标分支事实。
+
+### 执行与触发
+
+- `background_start` 使用 executable + args、独立 0600 日志和 detached process group，spawn 后立即返回；Process adapter 保留 child exit code，避免 PID 消失后误判 `completed`。
+- `background_attach` 只接管 Process 或 SSH/tmux Monitor target，并要求已有 adapter 确认；fake remote 不需要真实 SSH server。
+- `background_status`/`logs` 不调用模型；logs 支持 tail/errors/summary/full、cursor/hash、截断和轮转，Tool details 只带增量元数据与日志引用，不复制完整日志。
+- `background_wait` 只登记等待目标；completed、failed、timeout、stalled、error-pattern、progress-review 事件经 task/status/log hash 去重后进入串行 Wake Queue。
+- 空闲 Coordinator 使用现有 `sendCustomMessage(..., { triggerTurn: true })`，忙碌 Coordinator 使用 `{ deliverAs: "followUp" }`；多个事件合并成一个结构化后台消息，用户 steering/follow-up 优先级仍由 AgentSession 保持。
+- `background_cancel` 复用 Monitor stop；本地先向进程组发送 TERM，经过有界 grace 后使用既有 process-tree KILL。重复取消返回稳定终态。
+
+### Progress Reviewer
+
+Reviewer 默认关闭。启用后只接收任务目标、上次摘要、新日志片段、运行时间和资源快照，复用现有 AgentPool/ModelRuntime 的只读 reviewer Profile，严格解析 `<progress_review>`，限制最小间隔、最大次数、输入字符、输出 token 和 wall-clock。日志 hash 未变化时不会调用模型；Reviewer 失败只写诊断，不让后台任务失败。
+
+### TUI 与测试
+
+Task Ledger 投影 waiting/running/completed/attention，Footer 显示 `bg` 与 `wake` 聚合，Background renderer 显示状态符号、持续时间、最后活动、诊断和完整日志路径但不渲染完整日志。覆盖 beaupi-dark/light 与 40/80/120/160 列。
+
+定向测试使用 `test/suite/harness.ts`、faux provider、fake Monitor/remote adapter、短本地进程和可控轮询入口；覆盖 start 跨 turn、idle wake、busy follow-up、事件合并/去重、review budget、取消、restore/lost、branch、Task Ledger、Tool details 和 renderer。
+
 ## 第一版验收标准
 
 1. `background_start` 启动脚本并立即返回。
@@ -250,3 +279,5 @@ USER | bg:2 | wake:1 | workflow:review | gpt-5.4
 5. 日志使用增量读取，不重复发送历史内容。
 6. 默认进程轮询不调用模型。
 7. 模型进度复查有明确间隔、次数和输入预算。
+
+状态：已完成（daemon、IPC、桌面通知和 M13 sudo 不在第一版）。

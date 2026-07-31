@@ -179,6 +179,12 @@ const RESERVED_TOOL_NAMES = new Set([
 	"workflow_run",
 	"workflow_status",
 	"workflow_cancel",
+	"background_start",
+	"background_attach",
+	"background_status",
+	"background_logs",
+	"background_wait",
+	"background_cancel",
 ]);
 
 function errorWithCode(code: string, message: string): AgentTaskError {
@@ -707,7 +713,19 @@ export class AgentPool {
 					policy: this.dependencies.policySettings ? structuredClone(this.dependencies.policySettings) : undefined,
 				}),
 				tools: toolAllowlist,
-				excludeTools: ["delegate_task", "ask_user_question", "workflow_run", "workflow_status", "workflow_cancel"],
+				excludeTools: [
+					"delegate_task",
+					"ask_user_question",
+					"workflow_run",
+					"workflow_status",
+					"workflow_cancel",
+					"background_start",
+					"background_attach",
+					"background_status",
+					"background_logs",
+					"background_wait",
+					"background_cancel",
+				],
 				customTools: [...this.customTools],
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,

@@ -346,6 +346,13 @@ export class MonitorRuntime {
 		return this.records.size;
 	}
 
+	/** Read the installed adapter so a higher-level runtime can extend observation without copying the registry. */
+	getAdapter(kind: MonitorKind): MonitorAdapter {
+		const adapter = this.adapters.get(kind);
+		if (!adapter) throw new Error(`Monitor adapter unavailable for ${kind}`);
+		return adapter;
+	}
+
 	/** Replace one adapter before or during M7 runtime binding without creating another registry. */
 	setAdapter(kind: MonitorKind, adapter: MonitorAdapter): void {
 		if (adapter.kind !== kind)

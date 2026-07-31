@@ -267,6 +267,8 @@ M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置
 
 验收：模型回合结束后本地或远程脚本继续执行；脚本退出后自动唤醒 Agent；无变化时不调用模型；多个事件不会并发触发 Coordinator turn。
 
+状态：已完成。M12 在单一 Monitor Registry 上实现 BackgroundTaskManager、runner-owned process exit facts、六个默认 Tool、自适应纯代码轮询、确定性 Trigger Evaluator、串行 Wake Queue、AgentSession idle/follow-up 注入、受预算 AgentPool Progress Reviewer、Session custom entry 恢复、Task Ledger/Todo/Footer 和暗/亮宽度安全 renderer。本地短进程、进程组 TERM→KILL、fake remote Monitor、faux Coordinator/reviewer、resume/lost/consumed/branch 路径均有定向测试；第一版不包含 daemon、IPC、通知或 sudo。
+
 ## 阶段 14：权限模式
 
 - `/mode user`

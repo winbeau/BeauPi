@@ -54,6 +54,7 @@ export {
 	validateAgentPoolConfig,
 	validateAgentProfile,
 } from "./agents/index.ts";
+export * from "./background/index.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
 export * from "./documents/index.ts";

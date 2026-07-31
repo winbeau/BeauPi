@@ -53,6 +53,13 @@ import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import type { AgentPool } from "./agents/agent-pool.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import {
+	attachBackgroundToolDetails,
+	BACKGROUND_WAKE_MESSAGE_TYPE,
+	BackgroundTaskManager,
+	formatBackgroundWakeMessage,
+	getBackgroundToolDetails,
+} from "./background/index.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
@@ -266,6 +273,8 @@ export interface AgentSessionConfig {
 	policyRuntime?: PolicyRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
+	/** Optional session-scoped M12 Background Task Manager. Created here when omitted. */
+	backgroundRuntime?: BackgroundTaskManager;
 	/** Optional M7 remote runtime. Created here when omitted. */
 	remoteRuntime?: RemoteExecutionRuntime;
 	/** Optional M11 Workflow Runtime. Present for Coordinator sessions with an Agent Pool. */
@@ -366,6 +375,7 @@ export class AgentSession {
 	private _unsubscribeQuestionRuntime?: () => void;
 	private _unsubscribePolicyRuntime?: () => void;
 	private _unsubscribeWorkflowRuntime?: () => void;
+	private _unsubscribeBackgroundRuntime?: () => void;
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
 	private _pendingPromptPreflights = new Set<Promise<void>>();
@@ -423,6 +433,7 @@ export class AgentSession {
 	private _modelRuntime: ModelRuntime;
 	private _agentPool?: AgentPool;
 	readonly monitorRuntime: MonitorRuntime;
+	readonly backgroundRuntime: BackgroundTaskManager;
 	readonly remoteRuntime: RemoteExecutionRuntime;
 	readonly workflowRuntime?: WorkflowRuntime;
 
@@ -483,6 +494,34 @@ export class AgentSession {
 				sessionManager: config.sessionManager,
 				agentPool: this._agentPool,
 			});
+		this.backgroundRuntime =
+			config.backgroundRuntime ??
+			new BackgroundTaskManager({
+				sessionId: config.sessionManager.getSessionId(),
+				cwd: config.cwd,
+				sessionManager: config.sessionManager,
+				monitorRuntime: this.monitorRuntime,
+				agentPool: this._agentPool,
+			});
+		this.taskLedger.setBackgroundSnapshot(this.backgroundRuntime.getSnapshot());
+		this._unsubscribeBackgroundRuntime = this.backgroundRuntime.subscribe((snapshot) => {
+			this.taskLedger.setBackgroundSnapshot(snapshot);
+		});
+		this.backgroundRuntime.bindWakeHost({
+			isBusy: () => this.isStreaming,
+			hasPendingUserMessages: () => this.pendingMessageCount > 0,
+			deliver: async (delivery, mode) => {
+				await this.sendCustomMessage(
+					{
+						customType: BACKGROUND_WAKE_MESSAGE_TYPE,
+						content: formatBackgroundWakeMessage(delivery),
+						display: true,
+						details: delivery,
+					},
+					mode === "trigger" ? { triggerTurn: true } : { deliverAs: "followUp" },
+				);
+			},
+		});
 		this.workflowRuntime = config.workflowRuntime;
 		if (this.workflowRuntime) {
 			this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
@@ -557,6 +596,7 @@ export class AgentSession {
 
 	async initializeMonitorRuntime(): Promise<void> {
 		await this.monitorRuntime.initialize();
+		await this.backgroundRuntime.initialize();
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -651,8 +691,12 @@ export class AgentSession {
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
 			const remoteDetails = getRemoteToolDetails(result.details);
 			const workflowDetails = getWorkflowToolDetails(result.details);
+			const backgroundDetails = getBackgroundToolDetails(result.details);
 			const runtimeError =
-				searchDetails?.ok === false || remoteDetails?.ok === false || workflowDetails?.ok === false;
+				searchDetails?.ok === false ||
+				remoteDetails?.ok === false ||
+				workflowDetails?.ok === false ||
+				backgroundDetails?.ok === false;
 			const policyDetails = await this.policyRuntime.finalizeTool({
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
@@ -698,6 +742,7 @@ export class AgentSession {
 				: hookResult.details;
 			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
 			if (workflowDetails) details = attachWorkflowToolDetails(details, workflowDetails);
+			if (backgroundDetails) details = attachBackgroundToolDetails(details, backgroundDetails);
 			if (policyDetails) details = attachPolicyToolDetails(details, policyDetails);
 			authoritativeDetails = details;
 			return {
@@ -842,6 +887,9 @@ export class AgentSession {
 			if (workflowDetails) {
 				event.message.details = attachWorkflowToolDetails(event.message.details, workflowDetails);
 			}
+			const backgroundDetails = this.taskLedger.getBackgroundDetails(event.message.toolCallId);
+			if (backgroundDetails)
+				event.message.details = attachBackgroundToolDetails(event.message.details, backgroundDetails);
 		}
 
 		// Notify all listeners
@@ -1070,6 +1118,7 @@ export class AgentSession {
 			this.agent.abort();
 			void this.remoteRuntime.dispose();
 			void this.workflowRuntime?.dispose();
+			this.backgroundRuntime.dispose();
 			this.monitorRuntime.dispose();
 			this._agentPool?.dispose();
 		} catch {
@@ -1086,6 +1135,8 @@ export class AgentSession {
 		this._unsubscribePolicyRuntime = undefined;
 		this._unsubscribeWorkflowRuntime?.();
 		this._unsubscribeWorkflowRuntime = undefined;
+		this._unsubscribeBackgroundRuntime?.();
+		this._unsubscribeBackgroundRuntime = undefined;
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
 	}
@@ -3487,7 +3538,9 @@ export class AgentSession {
 			this.policyRuntime.rebuild(this.sessionManager.getBranch());
 			await this.workflowRuntime?.cancelActiveWorkflows();
 			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
+			await this.backgroundRuntime.rebuild(this.sessionManager.getBranch());
 			await this.workflowRuntime?.rebuild(this.sessionManager.getBranch());
+			this.taskLedger.setBackgroundSnapshot(this.backgroundRuntime.getSnapshot());
 			if (this.workflowRuntime) this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 			const documentContract = await this.documentRuntime.validateCurrentContract();

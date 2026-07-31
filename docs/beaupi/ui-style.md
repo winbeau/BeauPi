@@ -533,6 +533,23 @@ M2 已接入：
 - Footer 当前 phase、修改文件数和验证状态
 - 40/80/120/160 列及暗色/亮色主题下无横向溢出
 
+## Background Tasks Renderer
+
+M12 增加 `BackgroundTaskComponent`，只接收版本化 `BackgroundTaskSnapshotV1[]` 与 `BackgroundSummaryV1`，不访问或控制 Runtime。它复用统一 activity symbol、状态色、`fitSingleLine()` 和 Tool gutter：
+
+```text
+Background Tasks · 2 running · wake 1
+● bg-42  npm run test  running · 04:12 · idle 18s
+✓ bg-17  npm run build  completed · 01:48
+! bg-03  npm run dev  stalled · diagnostic: no activity
+  log: /workspace/.beaupi/background-logs/session/bg-03.log
+```
+
+- running/healthy、completed、failed、cancelled、stalled、lost 均有结构化状态表达。
+- 显示持续时间、最后活动年龄、Wake 数量、简短诊断和完整日志路径；不渲染完整日志。
+- Task Ledger 抑制 Background-owned Monitor 重复行；Todo/Footer 只投影同一 snapshot 的等待、运行、完成和 attention 聚合。
+- `beaupi-dark`、`beaupi-light` 与 40/80/120/160 列均使用 ANSI-aware 宽度约束，无横向溢出。
+
 ## 验收标准
 
 1. 保留 Pi 原加载动画。

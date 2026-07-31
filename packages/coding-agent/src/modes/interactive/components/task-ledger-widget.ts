@@ -214,7 +214,10 @@ export class TaskLedgerWidget implements Component {
 		if (availableWidth === 0) return [];
 		const snapshot = this.session.taskLedger.getSnapshot();
 		const monitorRuntime = this.session.monitorRuntime;
-		const monitorRecords = monitorRuntime?.list({ includeTerminal: true }) ?? [];
+		const backgroundMonitorIds = new Set(snapshot.background?.tasks.map((task) => task.monitorId) ?? []);
+		const monitorRecords = (monitorRuntime?.list({ includeTerminal: true }) ?? []).filter(
+			(record) => !backgroundMonitorIds.has(record.id),
+		);
 		if (snapshot.todos.length === 0 && monitorRecords.length === 0) return [];
 		const rows = terminalRows(this.tui);
 		const todoLimit = taskTodoLimit(rows);
@@ -224,6 +227,7 @@ export class TaskLedgerWidget implements Component {
 		const attentionWorkflows = snapshot.workflows.filter(
 			(workflow) => workflow.status === "failed" || workflow.status === "lost",
 		).length;
+		const backgroundSummary = snapshot.background?.summary;
 		const header = fitSingleLine(
 			[
 				{ text: theme.bold("Tasks"), required: true },
@@ -246,6 +250,19 @@ export class TaskLedgerWidget implements Component {
 							? theme.fg(
 									attentionWorkflows > 0 ? "warning" : "accent",
 									`workflows ${runningWorkflows} running${attentionWorkflows > 0 ? ` · ${attentionWorkflows} attention` : ""}`,
+								)
+							: "",
+					separator: " · ",
+					priority: 2,
+				},
+				{
+					text:
+						backgroundSummary && backgroundSummary.total > 0
+							? theme.fg(
+									backgroundSummary.failed + backgroundSummary.stalled + backgroundSummary.lost > 0
+										? "warning"
+										: "accent",
+									`background ${backgroundSummary.running} running${backgroundSummary.wakeQueued > 0 ? ` · wake ${backgroundSummary.wakeQueued}` : ""}`,
 								)
 							: "",
 					separator: " · ",

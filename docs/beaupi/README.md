@@ -43,6 +43,20 @@ M5–M11 已交付七个可直接使用的能力闭环：
 
 下一步是 M12 后台任务自动唤醒。M11 直接复用了现有 AgentPool、AgentSession、Tool registry、MonitorRuntime、Task Ledger 和 Session/Compact/branch 生命周期，没有创建第二套执行、监控、持久化或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。结构化 sudo 继续后置。
 
+## M12 实现状态
+
+M12 已接入现有 `MonitorRuntime`、`AgentSession`、`AgentPool`、Session custom entries、Task Ledger 和 BeauPi TUI：
+
+- `BackgroundTaskManager` 只保存任务与唤醒事实，任务状态、PID/target、资源和日志仍来自已有 `MonitorRecord`。
+- `background_start` 使用 executable + args、独立日志和 runner-owned process adapter，启动后立即返回；`background_attach` 可接管已被 Process 或 SSH/tmux adapter 确认的 Monitor target。
+- `background_status/logs/wait/cancel` 已使用严格版本化 details；日志通过现有 cursor/hash reader 增量读取，取消复用 Monitor stop 并在本地进程组上执行有界 TERM→KILL。
+- Trigger Evaluator 支持 completed、failed、timeout、stalled、error-pattern、progress-review；Wake Queue 串行合并、去重并通过 `AgentSession.sendCustomMessage()` 在空闲时触发 turn、忙碌时进入 follow-up。
+- 默认轮询不调用模型；Progress Reviewer 复用共享 AgentPool/ModelRuntime，具备最小间隔、最大次数、输入字符和 wall-clock 预算，日志 hash 不变时零调用。
+- 任务、触发器、WakeEvent、消费 key 和 reviewer budget 写入当前 branch；resume/Compact/branch 只恢复当前分支，无法确认的目标标记 `lost`。
+- Task Ledger、Todo、Footer、minimal Tool renderer 和 40/80/120/160 列暗/亮主题 renderer 均消费结构化 Background snapshot。
+
+第一版仍只支持 BeauPi TUI 进程运行期间自动唤醒；daemon、IPC、桌面通知、M13 sudo 和专用 Git Tools 不在范围内。
+
 ## 实现策略
 
 BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是在现有 `packages/coding-agent` 中直接扩展。内部 npm 包名暂时保持不变，应用品牌、CLI、配置目录和后续发行物统一使用 BeauPi。

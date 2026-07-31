@@ -53,6 +53,7 @@ export {
 	validateAgentProfile,
 } from "./core/agents/index.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export * from "./core/background/index.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -503,6 +504,7 @@ export {
 export {
 	ArminComponent,
 	AssistantMessageComponent,
+	BackgroundTaskComponent,
 	BashExecutionComponent,
 	BorderedLoader,
 	BranchSummaryMessageComponent,

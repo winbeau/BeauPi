@@ -1,5 +1,11 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import {
+	BACKGROUND_DETAILS_VERSION,
+	type BackgroundRuntimeSnapshotV1,
+	type BackgroundToolDetailsV1,
+	getBackgroundToolDetails,
+} from "../background/index.ts";
 import type { BashResult } from "../bash-executor.ts";
 import {
 	type CompletionCriterion,
@@ -181,6 +187,7 @@ export interface TaskLedgerSnapshot {
 	interactions: readonly TaskInteractionRecord[];
 	policy: readonly PolicyToolDetails[];
 	workflows: readonly WorkflowSnapshot[];
+	background?: BackgroundRuntimeSnapshotV1;
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -220,6 +227,11 @@ const TOOL_LABELS = Object.freeze({
 	workflow_status: "Workflow Status",
 	workflow_cancel: "Workflow Cancel",
 	background_start: "Background",
+	background_attach: "Background Attach",
+	background_status: "Background Status",
+	background_logs: "Background Logs",
+	background_wait: "Background Wait",
+	background_cancel: "Background Cancel",
 	target_select: "Target Select",
 	remote_exec: "Remote Exec",
 	remote_bash: "Remote Bash",
@@ -597,6 +609,25 @@ export class TaskLedger {
 	private readonly policyRecords = new Map<string, PolicyToolDetails>();
 	private readonly workflowRecords = new Map<string, WorkflowSnapshot>();
 	private readonly workflowToolDetails = new Map<string, WorkflowToolDetails>();
+	private readonly backgroundToolDetails = new Map<string, BackgroundToolDetailsV1>();
+	private backgroundSnapshot: BackgroundRuntimeSnapshotV1 = {
+		version: BACKGROUND_DETAILS_VERSION,
+		tasks: [],
+		wakeEvents: [],
+		summary: {
+			version: BACKGROUND_DETAILS_VERSION,
+			total: 0,
+			waiting: 0,
+			starting: 0,
+			running: 0,
+			stalled: 0,
+			completed: 0,
+			failed: 0,
+			cancelled: 0,
+			lost: 0,
+			wakeQueued: 0,
+		},
+	};
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
@@ -622,6 +653,25 @@ export class TaskLedger {
 		this.policyRecords.clear();
 		this.workflowRecords.clear();
 		this.workflowToolDetails.clear();
+		this.backgroundToolDetails.clear();
+		this.backgroundSnapshot = {
+			version: BACKGROUND_DETAILS_VERSION,
+			tasks: [],
+			wakeEvents: [],
+			summary: {
+				version: BACKGROUND_DETAILS_VERSION,
+				total: 0,
+				waiting: 0,
+				starting: 0,
+				running: 0,
+				stalled: 0,
+				completed: 0,
+				failed: 0,
+				cancelled: 0,
+				lost: 0,
+				wakeQueued: 0,
+			},
+		};
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
@@ -808,6 +858,11 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	setBackgroundSnapshot(snapshot: BackgroundRuntimeSnapshotV1): void {
+		this.backgroundSnapshot = structuredClone(snapshot);
+		this.revision++;
+	}
+
 	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
 		const records = [...this.policyRecords.values()];
 		for (let index = records.length - 1; index >= 0; index--) {
@@ -818,6 +873,11 @@ export class TaskLedger {
 
 	getWorkflowDetails(toolCallId: string): WorkflowToolDetails | undefined {
 		const details = this.workflowToolDetails.get(`tool:${toolCallId}`);
+		return details ? structuredClone(details) : undefined;
+	}
+
+	getBackgroundDetails(toolCallId: string): BackgroundToolDetailsV1 | undefined {
+		const details = this.backgroundToolDetails.get(`tool:${toolCallId}`);
 		return details ? structuredClone(details) : undefined;
 	}
 
@@ -845,6 +905,7 @@ export class TaskLedger {
 		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
 		const policy = [...this.policyRecords.values()].map((record) => structuredClone(record));
 		const workflows = [...this.workflowRecords.values()].map((record) => structuredClone(record));
+		const background = structuredClone(this.backgroundSnapshot);
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
@@ -877,6 +938,7 @@ export class TaskLedger {
 			interactions,
 			policy,
 			workflows,
+			background,
 			verification,
 			todos,
 			documentContract,
@@ -980,6 +1042,8 @@ export class TaskLedger {
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
 		const policyDetails = getPolicyToolDetails(details);
 		if (policyDetails) this.policyRecords.set(policyDetails.requestId, structuredClone(policyDetails));
+		const backgroundDetails = getBackgroundToolDetails(details);
+		if (backgroundDetails) this.backgroundToolDetails.set(record.id, structuredClone(backgroundDetails));
 		const workflowDetails = getWorkflowToolDetails(details);
 		if (workflowDetails) {
 			this.workflowToolDetails.set(record.id, structuredClone(workflowDetails));
@@ -1322,7 +1386,8 @@ export class TaskLedger {
 			this.startedAt === undefined &&
 			commands.length === 0 &&
 			!this.documentContract &&
-			this.workflowRecords.size === 0
+			this.workflowRecords.size === 0 &&
+			this.backgroundSnapshot.tasks.length === 0
 		)
 			return [];
 		const firstCommand = commands[0];
@@ -1384,6 +1449,49 @@ export class TaskLedger {
 					source: source ? `${source.displayPath}:${source.startLine}` : undefined,
 				});
 			}
+		}
+
+		for (const task of this.backgroundSnapshot.tasks) {
+			const status: TaskTodoStatus =
+				task.status === "completed"
+					? "completed"
+					: task.status === "running" || task.status === "healthy"
+						? "active"
+						: task.status === "failed" || task.status === "lost"
+							? "failed"
+							: task.status === "stalled" || task.status === "cancelled"
+								? "blocked"
+								: "pending";
+			const monitor = task.monitor;
+			const updatedAt = monitor?.completedAt ?? monitor?.lastActivityAt ?? task.createdAt;
+			const diagnostic = task.diagnostics.at(-1) ?? monitor?.diagnostics.at(-1);
+			todos.push({
+				id: `background:${task.id}`,
+				label:
+					task.waitRequestedAt !== undefined && status !== "completed"
+						? `Wait for ${task.name}`
+						: `Background: ${task.name}`,
+				status,
+				sequence: 50 + todos.length,
+				updatedAt,
+				completedAt: task.status === "completed" ? monitor?.completedAt : undefined,
+				owner: DEFAULT_TASK_OWNER,
+				blockedBy: status === "blocked" ? [task.status] : undefined,
+				activity: diagnostic ?? monitor?.exitReason ?? monitor?.logPath,
+				source: "background",
+			});
+		}
+		if (this.backgroundSnapshot.summary.wakeQueued > 0) {
+			todos.push({
+				id: "background:wake-queue",
+				label: `${this.backgroundSnapshot.summary.wakeQueued} background wake event${this.backgroundSnapshot.summary.wakeQueued === 1 ? "" : "s"}`,
+				status: "blocked",
+				sequence: 90,
+				updatedAt: this.backgroundSnapshot.wakeEvents.at(-1)?.createdAt ?? now,
+				owner: DEFAULT_TASK_OWNER,
+				blockedBy: ["Coordinator turn"],
+				source: "background",
+			});
 		}
 
 		for (const workflow of this.workflowRecords.values()) {

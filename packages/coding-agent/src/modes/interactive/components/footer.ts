@@ -198,6 +198,7 @@ export class FooterComponent implements Component {
 			: "";
 		const taskLedger = this.session.taskLedger.getSnapshot();
 		const monitorSummary = this.session.monitorRuntime?.getSummary();
+		const backgroundSummary = taskLedger.background?.summary;
 		const workflows = taskLedger.workflows ?? [];
 		const runningWorkflows = workflows.filter((workflow) => workflow.status === "running").length;
 		const attentionWorkflows = workflows.filter(
@@ -237,6 +238,19 @@ export class FooterComponent implements Component {
 							? theme.fg(
 									attentionWorkflows > 0 ? "warning" : "accent",
 									`wf ${runningWorkflows} run${attentionWorkflows > 0 ? ` · ${attentionWorkflows} attention` : ""}`,
+								)
+							: "",
+					separator: " · ",
+					priority: 4,
+				},
+				{
+					text:
+						backgroundSummary && backgroundSummary.total > 0
+							? theme.fg(
+									backgroundSummary.failed + backgroundSummary.stalled + backgroundSummary.lost > 0
+										? "warning"
+										: "accent",
+									`bg ${backgroundSummary.running} run${backgroundSummary.wakeQueued > 0 ? ` · wake ${backgroundSummary.wakeQueued}` : ""}`,
 								)
 							: "",
 					separator: " · ",

@@ -241,6 +241,15 @@ M11 已在现有 AgentPool、MonitorRuntime、Task Ledger 和 Session 生命周�
 
 详细设计见 [后台任务与自动唤醒](./background-tasks.md)。
 
+M12 第一版实现约束：
+
+- BackgroundTask 只引用现有 `monitorId`，不得复制 Monitor 状态或资源事实。
+- 本地启动使用 executable + args 和独立日志；远程接管只接受现有 SSH/tmux adapter 能确认的 Monitor target。
+- `background_wait` 只登记唤醒目标并立即返回；空闲 Coordinator 通过现有 custom-message turn 唤醒，忙碌时进入现有 follow-up 队列。
+- WakeEvent 使用 task/reason/status/log hash 去重，多个同时事件合并为一个串行 Coordinator turn；已消费事件在 Compact、resume 和 branch 切换后不重复。
+- 默认进程轮询只读取 Monitor/PID/exit/log/activity/resources，不调用模型。Progress Reviewer 默认关闭，启用时复用 AgentPool/ModelRuntime 并限制间隔、次数、输入字符、输出和 wall-clock。
+- Session dispose 停止轮询和新注入；恢复时不能确认的非终态目标必须为 `lost`。
+
 ### 权限模式
 
 #### 用户模式

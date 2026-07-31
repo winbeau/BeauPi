@@ -7,6 +7,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { getBackgroundToolDetails } from "../../../core/background/index.ts";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import type { PolicyAction } from "../../../core/policy/index.ts";
 import { getTaskLedgerToolDetails } from "../../../core/state/task-ledger.ts";
@@ -43,6 +44,11 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
 	workflow_status: "Workflow Status",
 	workflow_cancel: "Workflow Cancel",
 	background_start: "Background",
+	background_attach: "Background Attach",
+	background_status: "Background Status",
+	background_logs: "Background Logs",
+	background_wait: "Background Wait",
+	background_cancel: "Background Cancel",
 	monitor_attach: "Monitor Attach",
 	monitor_list: "Monitor List",
 	monitor_status: "Monitor Status",
@@ -120,7 +126,10 @@ function summarizeArgs(args: unknown): string {
 }
 
 function isCancellationResult(result: ToolExecutionComponent["result"]): boolean {
-	return getTaskLedgerToolDetails(result?.details)?.status === "cancelled";
+	return (
+		getTaskLedgerToolDetails(result?.details)?.status === "cancelled" ||
+		getBackgroundToolDetails(result?.details)?.task?.status === "cancelled"
+	);
 }
 
 class MinimalToolShellComponent implements Component {
