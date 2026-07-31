@@ -25,7 +25,6 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
-import type { PolicyConfirmRequest, PolicyConfirmResponse } from "../../core/policy/index.ts";
 import {
 	type QuestionInteractionRequest,
 	type QuestionInteractionResponse,
@@ -140,28 +139,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
-	}
-
-	function createPolicyPromise(
-		request: PolicyConfirmRequest,
-		signal: AbortSignal | undefined,
-	): Promise<PolicyConfirmResponse> {
-		return createDialogPromise(
-			{ signal },
-			{ status: "cancelled" },
-			{ method: "policyConfirm", request },
-			(response): PolicyConfirmResponse => {
-				if ("cancelled" in response && response.cancelled) return { status: "cancelled" };
-				if ("rejected" in response && response.rejected) {
-					return { status: "rejected", ...(response.reason ? { diagnostic: response.reason } : {}) };
-				}
-				if ("error" in response) return { status: "error", diagnostic: response.error };
-				if ("policyDecision" in response && response.policyDecision === "allow_once") {
-					return { status: "allow_once" };
-				}
-				return { status: "error", diagnostic: "RPC Policy response omitted a decision" };
-			},
-		);
 	}
 
 	function createQuestionPromise(
@@ -377,7 +354,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		cancelPendingExtensionRequests();
 		session = runtimeHost.session;
 		session.setQuestionInteractionHandler(createQuestionPromise);
-		session.setPolicyInteractionHandler(createPolicyPromise);
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",

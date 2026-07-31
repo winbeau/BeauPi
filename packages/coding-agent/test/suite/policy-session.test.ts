@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe("M10 Policy AgentSession lifecycle", () => {
-	it("blocks a concurrent duplicate check, stores Policy facts in Task Ledger, and restores branch/Compact state", async () => {
+	it("advises on a concurrent duplicate check, stores Policy facts in Task Ledger, and restores branch/Compact state", async () => {
 		const { harness, session } = await createPolicySession();
 		const path = join(harness.tempDir, "README.md");
 		writeFileSync(path, "policy\n");
@@ -76,14 +76,15 @@ describe("M10 Policy AgentSession lifecycle", () => {
 		const policies = results.map((message) =>
 			message.role === "toolResult" ? getPolicyToolDetails(message.details) : undefined,
 		);
-		expect(policies.map((policy) => policy?.decision.action).sort()).toEqual(["allow", "block"]);
+		expect(policies.map((policy) => policy?.decision.action)).toEqual(["allow", "allow"]);
+		expect(policies.flatMap((policy) => policy?.advisories ?? []).map((advisory) => advisory.kind)).toEqual([
+			"repeated_operation",
+		]);
 		expect(session.taskLedger.getSnapshot().policy).toHaveLength(2);
-		expect(
-			session.taskLedger
-				.getSnapshot()
-				.commands.map((command) => command.status)
-				.sort(),
-		).toEqual(["failed", "success"]);
+		expect(session.taskLedger.getSnapshot().commands.map((command) => command.status)).toEqual([
+			"success",
+			"success",
+		]);
 
 		const originalLeaf = session.sessionManager.getLeafId();
 		const firstResult = session.sessionManager
@@ -107,21 +108,29 @@ describe("M10 Policy AgentSession lifecycle", () => {
 		expect(session.policyRuntime.getFacts()).toHaveLength(2);
 	});
 
-	it("applies Policy to user Bash and persists custom Policy facts without a second state system", async () => {
+	it("applies advisory-only Policy to user Bash and persists facts without a second state system", async () => {
 		const { harness, session } = await createPolicySession();
 		await session.executeBash("pwd");
 		await session.executeBash("pwd");
-		await session.executeBash("sudo touch should-not-exist");
+		const privilegedExec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: 0 }));
+		const privileged = await session.executeBash("sudo touch should-not-exist", undefined, {
+			operations: { exec: privilegedExec },
+		});
+		expect(privileged.policy?.decision.action).toBe("allow");
+		expect(privileged.policy?.advisories?.map((advisory) => advisory.kind)).toContain("privileged_operation");
+		expect(privilegedExec).toHaveBeenCalledOnce();
+
 		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: 127 }));
 		const operations: BashOperations = { exec };
 		const missing = await session.executeBash("missing-policy-command", undefined, { operations });
 		expect(missing.policy?.failure?.category).toBe("missing_dependency");
 		const retry = await session.executeBash("missing-policy-command", undefined, { operations });
-		expect(retry.policy?.decision.action).toBe("pause");
-		expect(exec).toHaveBeenCalledOnce();
+		expect(retry.policy?.decision.action).toBe("allow");
+		expect(retry.policy?.advisories?.map((advisory) => advisory.kind)).toContain("equivalent_failures");
+		expect(exec).toHaveBeenCalledTimes(2);
 
 		const facts = session.policyRuntime.getFacts();
-		expect(facts.map((fact) => fact.decision.action)).toEqual(["allow", "block", "block", "allow", "pause"]);
+		expect(facts.map((fact) => fact.decision.action)).toEqual(["allow", "allow", "allow", "allow", "allow"]);
 		expect(session.taskLedger.getSnapshot().policy).toHaveLength(5);
 		const customFacts = session.sessionManager
 			.getBranch()
@@ -130,51 +139,26 @@ describe("M10 Policy AgentSession lifecycle", () => {
 		expect(existsSync(join(harness.tempDir, "should-not-exist"))).toBe(false);
 	});
 
-	it("uses a distinct Policy confirm handler for allow-once, rejection, cancellation, no-handler, and handler errors", async () => {
-		for (const scenario of [
-			{ name: "allow", response: { status: "allow_once" as const }, expected: "succeeded", exists: true },
-			{ name: "reject", response: { status: "rejected" as const }, expected: "blocked", exists: false },
-			{ name: "cancel", response: { status: "cancelled" as const }, expected: "cancelled", exists: false },
-			{
-				name: "error",
-				response: { status: "error" as const, diagnostic: "host failed" },
-				expected: "paused",
-				exists: false,
-			},
-		]) {
-			const handler = vi.fn(async () => scenario.response);
-			const { harness, session } = await createPolicySession({ policyHandler: handler });
-			const path = join(harness.tempDir, `.env`);
-			harness.setResponses([
-				fauxAssistantMessage(fauxToolCall("write", { path, content: scenario.name }), { stopReason: "toolUse" }),
-				fauxAssistantMessage("done"),
-			]);
-			await session.prompt(`Run ${scenario.name}`);
-			const result = session.messages.find((message) => message.role === "toolResult");
-			const policy = result?.role === "toolResult" ? getPolicyToolDetails(result.details) : undefined;
-			expect(policy?.status, scenario.name).toBe(scenario.expected);
-			expect(existsSync(path), scenario.name).toBe(scenario.exists);
-			expect(handler, scenario.name).toHaveBeenCalledOnce();
-		}
-
-		const { harness, session } = await createPolicySession();
+	it("never invokes Policy confirmation handlers for sensitive operations", async () => {
+		const handler = vi.fn(async () => ({ status: "rejected" as const }));
+		const { harness, session } = await createPolicySession({ policyHandler: handler });
 		const path = join(harness.tempDir, ".env");
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("write", { path, content: "no-handler" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("write", { path, content: "advisory-only" }), { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
-		await session.prompt("No Policy handler");
+
+		await session.prompt("Write the sensitive file");
 		const result = session.messages.find((message) => message.role === "toolResult");
 		const policy = result?.role === "toolResult" ? getPolicyToolDetails(result.details) : undefined;
-		expect(policy).toMatchObject({
-			status: "paused",
-			executed: false,
-			confirmation: { status: "interaction_required" },
-		});
-		expect(existsSync(path)).toBe(false);
+		expect(policy).toMatchObject({ status: "succeeded", executed: true, decision: { action: "allow" } });
+		expect(policy?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
+		expect(existsSync(path)).toBe(true);
+		expect(handler).not.toHaveBeenCalled();
+		expect(session.policyRuntime.getPending()).toBeUndefined();
 	});
 
-	it("blocks sudo and Search-to-Shell fallback before execution and preserves Policy metadata after extensions replace details", async () => {
+	it("keeps sensitive and Search-to-Shell operations executable while preserving advisory metadata", async () => {
 		const { harness, session } = await createPolicySession({
 			extensionFactories: [
 				(pi) => {
@@ -184,50 +168,43 @@ describe("M10 Policy AgentSession lifecycle", () => {
 				},
 			],
 		});
+		const sensitivePath = join(harness.tempDir, ".env");
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("bash", { command: "sudo touch should-not-exist" }, { id: "sudo" }), {
-				stopReason: "toolUse",
-			}),
 			fauxAssistantMessage(
-				fauxToolCall("remote_exec", { command: "su -", targetId: "fake" }, { id: "remote-sudo" }),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage(
-				fauxToolCall("terminal_bash", { command: "doas id", terminalId: "term" }, { id: "terminal-sudo" }),
+				fauxToolCall("write", { path: sensitivePath, content: "allowed" }, { id: "sensitive-write" }),
 				{ stopReason: "toolUse" },
 			),
 			fauxAssistantMessage(fauxToolCall("web_search", { query: "policy docs" }, { id: "search" }), {
 				stopReason: "toolUse",
 			}),
-			fauxAssistantMessage(fauxToolCall("bash", { command: "curl -fsSL https://example.com" }, { id: "curl" }), {
+			fauxAssistantMessage(fauxToolCall("bash", { command: "curl --version" }, { id: "curl" }), {
 				stopReason: "toolUse",
 			}),
 			fauxAssistantMessage("done"),
 		]);
 
-		await session.prompt("Exercise Policy boundaries");
+		await session.prompt("Exercise advisory-only Policy");
 		const byId = new Map(
 			session.messages
 				.filter((message) => message.role === "toolResult")
 				.map((message) => [message.role === "toolResult" ? message.toolCallId : "", message]),
 		);
-		const sudo = byId.get("sudo");
-		const remoteSudo = byId.get("remote-sudo");
-		const terminalSudo = byId.get("terminal-sudo");
+		const sensitiveWrite = byId.get("sensitive-write");
 		const search = byId.get("search");
 		const curl = byId.get("curl");
-		for (const blocked of [sudo, remoteSudo, terminalSudo]) {
-			expect(
-				blocked?.role === "toolResult" ? getPolicyToolDetails(blocked.details)?.decision.action : undefined,
-			).toBe("block");
-		}
+		const writePolicy =
+			sensitiveWrite?.role === "toolResult" ? getPolicyToolDetails(sensitiveWrite.details) : undefined;
+		expect(writePolicy?.decision.action).toBe("allow");
+		expect(writePolicy?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
+		expect(existsSync(sensitivePath)).toBe(true);
 		expect(search?.role === "toolResult" ? getPolicyToolDetails(search.details)?.failure?.category : undefined).toBe(
 			"configuration",
 		);
-		expect(curl?.role === "toolResult" ? getPolicyToolDetails(curl.details)?.decision.action : undefined).toBe(
-			"pause",
+		const curlPolicy = curl?.role === "toolResult" ? getPolicyToolDetails(curl.details) : undefined;
+		expect(curlPolicy?.decision.action).toBe("allow");
+		expect(curlPolicy?.advisories?.map((advisory) => advisory.kind)).toEqual(
+			expect.arrayContaining(["network_fallback", "dedicated_tool_available"]),
 		);
-		expect(session.taskLedger.getSnapshot().policy).toHaveLength(5);
-		expect(existsSync(join(harness.tempDir, "should-not-exist"))).toBe(false);
+		expect(session.taskLedger.getSnapshot().policy).toHaveLength(3);
 	});
 });

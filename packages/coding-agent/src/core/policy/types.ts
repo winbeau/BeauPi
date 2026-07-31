@@ -68,6 +68,24 @@ export interface PolicyFailure {
 	retryable: boolean;
 }
 
+export type PolicyAdvisoryKind =
+	| "repeated_operation"
+	| "equivalent_failures"
+	| "fallback_budget"
+	| "failure_budget"
+	| "privileged_operation"
+	| "sensitive_operation"
+	| "terminal_state"
+	| "network_fallback"
+	| "dedicated_tool_available";
+
+export interface PolicyAdvisory {
+	version: 1;
+	kind: PolicyAdvisoryKind;
+	message: string;
+	createdAt: string;
+}
+
 export type PolicyConfirmStatus =
 	| "allow_once"
 	| "rejected"
@@ -129,6 +147,7 @@ export interface PolicyToolDetails {
 	executed: boolean;
 	confirmation?: PolicyConfirmResult;
 	failure?: PolicyFailure;
+	advisories?: PolicyAdvisory[];
 	/** Non-secret terminal recovery fact; true means a partial interactive line remained after terminal_send. */
 	terminalInputPending?: boolean;
 	targetRevisionBefore: number;
@@ -173,9 +192,7 @@ export interface ResolvedPolicyConfig {
 	sensitivePaths: string[];
 }
 
-export type PolicyRuntimeEvent =
-	| { type: "confirm_pending"; request: PendingPolicyInteraction }
-	| { type: "confirm_resolved"; toolCallId: string; requestId: string; result: PolicyConfirmResult };
+export type PolicyRuntimeEvent = { type: "advisory"; toolCallId: string; advisory: PolicyAdvisory };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -197,6 +214,24 @@ function isPolicyStatus(value: unknown): value is PolicyResultStatus {
 		value === "blocked" ||
 		value === "replaced" ||
 		value === "paused"
+	);
+}
+
+function isPolicyAdvisory(value: unknown): value is PolicyAdvisory {
+	const advisory = asRecord(value);
+	return (
+		advisory?.version === 1 &&
+		(advisory.kind === "repeated_operation" ||
+			advisory.kind === "equivalent_failures" ||
+			advisory.kind === "fallback_budget" ||
+			advisory.kind === "failure_budget" ||
+			advisory.kind === "privileged_operation" ||
+			advisory.kind === "sensitive_operation" ||
+			advisory.kind === "terminal_state" ||
+			advisory.kind === "network_fallback" ||
+			advisory.kind === "dedicated_tool_available") &&
+		typeof advisory.message === "string" &&
+		typeof advisory.createdAt === "string"
 	);
 }
 
@@ -222,6 +257,8 @@ export function getPolicyToolDetails(details: unknown): PolicyToolDetails | unde
 		typeof record.createdAt !== "string" ||
 		typeof record.completedAt !== "string" ||
 		typeof record.executed !== "boolean" ||
+		(record.advisories !== undefined &&
+			(!Array.isArray(record.advisories) || !record.advisories.every(isPolicyAdvisory))) ||
 		(record.terminalInputPending !== undefined && typeof record.terminalInputPending !== "boolean") ||
 		typeof record.targetRevisionBefore !== "number" ||
 		typeof record.targetRevisionAfter !== "number"

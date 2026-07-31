@@ -82,11 +82,11 @@ export interface CreateAgentSessionOptions {
 	questionHandler?: QuestionInteractionHandler;
 	/** Inject a session-bound Question Runtime, primarily for deterministic tests and custom hosts. */
 	questionRuntime?: QuestionRuntime;
-	/** In-process handler for Policy confirmations. Without one, confirm decisions pause immediately. */
+	/** Legacy compatibility input. Advisory-only Policy ignores confirmation handlers. */
 	policyHandler?: PolicyInteractionHandler;
 	/** Inject a session-scoped Policy Runtime, primarily for deterministic tests and custom hosts. */
 	policyRuntime?: PolicyRuntime;
-	/** Controlled child sessions never prompt users directly. */
+	/** Legacy compatibility input. Advisory-only Policy has no interactive mode distinction. */
 	policyInteractionMode?: "coordinator" | "controlled";
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
@@ -223,10 +223,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		new PolicyRuntime({
 			cwd,
 			getConfig: createPolicyConfigProvider(settingsManager),
-			handler: options.policyHandler,
-			interactionMode: options.policyInteractionMode,
 		});
-	if (options.policyRuntime) policyRuntime.setHandler(options.policyHandler);
 	policyRuntime.bindSession(sessionManager.getSessionId(), sessionManager.getBranch());
 
 	if (!resourceLoader) {
@@ -332,15 +329,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		...(options.synchronizeSearchBudget === false ? {} : { getSessionEntries: () => sessionManager.getBranch() }),
 	});
 	const customTools = [...(options.customTools ?? [])];
-	if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
-	for (const monitorTool of monitorTools) {
-		if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
-	}
-	for (const remoteTool of remoteTools) {
-		if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
-	}
-	for (const searchTool of searchTools) {
-		if (!customTools.some((tool) => tool.name === searchTool.name)) customTools.push(searchTool);
+	const includeRuntimeTools = options.noTools !== "builtin" || options.tools !== undefined;
+	if (includeRuntimeTools) {
+		if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
+		for (const monitorTool of monitorTools) {
+			if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
+		}
+		for (const remoteTool of remoteTools) {
+			if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
+		}
+		for (const searchTool of searchTools) {
+			if (!customTools.some((tool) => tool.name === searchTool.name)) customTools.push(searchTool);
+		}
 	}
 	const defaultActiveToolNames: string[] = [
 		"read",
@@ -519,6 +519,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		monitorRuntime,
 		initialActiveToolNames,
 		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,
+		disableQuestionTool: options.noTools === "builtin" && options.tools === undefined,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,

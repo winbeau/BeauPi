@@ -39,6 +39,8 @@ export interface PolicyOperationAnalysis {
 	requiresConfirmation: boolean;
 	networkFallback: boolean;
 	terminalCommandFallback: boolean;
+	/** Terminal lifecycle, inspection, cleanup, or recovery that must remain available after command failures. */
+	controlPlane?: boolean;
 }
 
 export interface PolicyOperationInput {
@@ -73,21 +75,7 @@ const POLICY_MANAGED_TOOLS = new Set([
 	"web_fetch",
 ]);
 
-const PRIVILEGED_COMMANDS = new Set([
-	"sudo",
-	"sudoedit",
-	"su",
-	"doas",
-	"pkexec",
-	"runuser",
-	"setpriv",
-	"nsenter",
-	"chroot",
-	"machinectl",
-	"unshare",
-	"newgrp",
-	"sg",
-]);
+const PRIVILEGED_COMMANDS = new Set(["sudo", "su", "doas", "pkexec"]);
 const NETWORK_COMMANDS = new Set([
 	"curl",
 	"wget",
@@ -685,18 +673,6 @@ function analyzeSimpleCommand(tokens: readonly ShellToken[]): SimpleCommandAnaly
 		SCRIPT_NETWORK_INTERPRETERS.has(name) || name === "awk"
 			? /(?:system|shell_exec|passthru|subprocess|child_process|spawn|exec|start-process|os\.)/i.test(script)
 			: false;
-	if (executesEmbeddedCommand && [...PRIVILEGED_COMMANDS].some((command) => scriptFragments.has(command))) {
-		return {
-			access: "privileged",
-			readOnly: false,
-			workspaceMutation: true,
-			privileged: true,
-			network: false,
-			remoteFallback: false,
-			unknown: false,
-			canonicalWords,
-		};
-	}
 	const scriptedNetwork =
 		(SCRIPT_NETWORK_INTERPRETERS.has(name) &&
 			/(https?:\/\/|urllib|requests\.|http\.client|fetch\s*\(|axios|https?\.get|net\/http|invoke-webrequest|invoke-restmethod)/i.test(
@@ -810,8 +786,7 @@ function analyzeShell(command: string): {
 		),
 	);
 	const fragments = parsed.opaque ? commandFragments(command) : new Set<string>();
-	const privileged =
-		commands.some((item) => item.privileged) || [...PRIVILEGED_COMMANDS].some((name) => fragments.has(name));
+	const privileged = !parsed.opaque && commands.some((item) => item.privileged);
 	const networkIntent =
 		/(https?:\/\/|urllib|requests\.|http\.client|fetch\s*\(|axios|https?\.get|net\/http|invoke-webrequest|invoke-restmethod|\/dev\/tcp\/)/i;
 	const opaqueScriptNetwork =
@@ -1107,6 +1082,14 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 		const classes: PolicyOperationKind[] = [writes ? "workspace_write" : "read_only_check"];
 		if (isSensitive || outsideWorkspace) classes.push("sensitive_path");
 		const target = remote ? `remote:${stringArg(args, "targetId") ?? "selected"}` : "local";
+		const scope = remote ? "Remote" : "Local";
+		const summary = outsideWorkspace
+			? remote
+				? "Remote write outside configured cwd"
+				: "Local write outside workspace"
+			: isSensitive
+				? `${scope} ${writes ? "write to" : "read from"} sensitive path`
+				: `${scope} ${writes ? "workspace modification" : "read-only check"}`;
 		const operationArguments = writes
 			? hash(stableJson(args ?? {}))
 			: input.toolName === "read" || input.toolName === "remote_read"
@@ -1129,7 +1112,7 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 				sensitive: isSensitive || outsideWorkspace,
 				readOnly: !writes,
 				workspaceMutation: writes,
-				summary: `${remote ? "Remote" : "Local"} ${writes ? "workspace modification" : "read-only check"}`,
+				summary,
 			}),
 			requiresConfirmation: isSensitive || outsideWorkspace,
 			networkFallback: false,
@@ -1153,39 +1136,67 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 			terminalCommandFallback: false,
 		};
 	}
-	if (input.toolName === "terminal_capture" || input.toolName === "terminal_status") {
+	if (["terminal_capture", "terminal_status", "terminal_close"].includes(input.toolName)) {
 		const terminalId = stringArg(args, "terminalId") ?? "unknown";
+		const closes = input.toolName === "terminal_close";
 		return {
 			descriptor: operation(input, {
-				kind: "read_only_check",
-				classes: ["terminal_command", "read_only_check"],
-				access: "read",
+				kind: closes ? "terminal_command" : "read_only_check",
+				classes: closes ? ["terminal_command"] : ["terminal_command", "read_only_check"],
+				access: closes ? "write" : "read",
 				target: `terminal:${terminalId}`,
 				signatureParts: [input.toolName, stableJson(args ?? {})],
-				fallbackFamily: "terminal",
-				readOnly: true,
-				summary: "Terminal status check",
+				readOnly: !closes,
+				workspaceMutation: closes,
+				summary:
+					input.toolName === "terminal_capture"
+						? "Inspect terminal output"
+						: input.toolName === "terminal_status"
+							? "Check terminal status"
+							: "Close terminal",
 			}),
 			requiresConfirmation: false,
 			networkFallback: false,
 			terminalCommandFallback: false,
+			controlPlane: true,
 		};
 	}
 	const commandKey = input.toolName === "terminal_send" ? "input" : "command";
 	const command = stringArg(args, commandKey) ?? "";
+	if (input.toolName === "terminal_create" && command.trim() === "") {
+		const terminalId = stringArg(args, "terminalId") ?? "unknown";
+		return {
+			descriptor: operation(input, {
+				kind: "terminal_command",
+				classes: ["terminal_command"],
+				access: "write",
+				target: `terminal:${terminalId}`,
+				signatureParts: [input.toolName, stableJson(args ?? {})],
+				workspaceMutation: true,
+				summary: "Create terminal",
+			}),
+			requiresConfirmation: false,
+			networkFallback: false,
+			terminalCommandFallback: false,
+			controlPlane: true,
+		};
+	}
 	const shell = analyzeShell(command);
 	const remote = input.toolName === "remote_exec" || input.toolName === "remote_bash";
 	const terminal = input.toolName.startsWith("terminal_");
 	const targetId = stringArg(args, "targetId") ?? "selected";
 	const terminalId = stringArg(args, "terminalId") ?? "unknown";
 	const target = terminal ? `terminal:${terminalId}` : remote ? `remote:${targetId}` : "local";
+	const terminalRecoveryInput =
+		input.toolName === "terminal_send" &&
+		command.length > 0 &&
+		[...command].every((character) => character === "\u0003" || character === "\u0004" || character === "\u0015");
 	const fallbackFamily = terminal ? "terminal" : remote ? "remote" : "local";
-	const sensitive =
-		shellMentionsSensitivePath(command, input.cwd, input.config) ||
-		(shell.workspaceMutation &&
-			(remote || terminal
-				? shellEscapesUnknownRemoteCwd(command)
-				: shellWritesOutsideWorkspace(command, input.cwd)));
+	const mentionsSensitivePath = shellMentionsSensitivePath(command, input.cwd, input.config);
+	const escapesWorkspaceBoundary =
+		shell.workspaceMutation &&
+		(remote || terminal ? shellEscapesUnknownRemoteCwd(command) : shellWritesOutsideWorkspace(command, input.cwd));
+	const sensitive = mentionsSensitivePath || escapesWorkspaceBoundary;
 	const ordinaryTerminalCommand =
 		input.toolName === "terminal_send" &&
 		/\r?\n$/.test(command) &&
@@ -1239,23 +1250,33 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 		target,
 		signatureParts,
 		equivalenceParts: shellReadEquivalence(command, input.cwd, remote) ?? signatureParts,
-		fallbackFamily: networkFallback ? "network" : fallbackFamily,
+		fallbackFamily: terminalRecoveryInput ? undefined : networkFallback ? "network" : fallbackFamily,
 		dedicatedTool,
 		sensitive,
 		privileged: shell.privileged,
 		readOnly: shell.readOnly,
 		workspaceMutation: shell.workspaceMutation || terminal,
-		summary: networkFallback
-			? "Shell network fallback"
-			: remote
-				? "Remote command"
-				: terminal
-					? "Terminal command"
-					: shell.readOnly
-						? "Local read-only check"
-						: shell.workspaceMutation
-							? "Local workspace modification"
-							: "Local shell command",
+		summary: terminalRecoveryInput
+			? "Clear terminal input"
+			: networkFallback
+				? "Shell network fallback"
+				: escapesWorkspaceBoundary
+					? remote
+						? "Remote write outside configured cwd"
+						: terminal
+							? "Terminal write outside working directory"
+							: "Local write outside workspace"
+					: mentionsSensitivePath
+						? `${remote ? "Remote" : terminal ? "Terminal" : "Local"} sensitive-path ${shell.readOnly ? "read" : "command"}`
+						: remote
+							? "Remote command"
+							: terminal
+								? "Terminal command"
+								: shell.readOnly
+									? "Local read-only check"
+									: shell.workspaceMutation
+										? "Local workspace modification"
+										: "Local shell command",
 	});
 	return {
 		descriptor,
@@ -1273,6 +1294,7 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 		requiresConfirmation: sensitive,
 		networkFallback,
 		terminalCommandFallback: ordinaryTerminalCommand,
+		controlPlane: input.toolName === "terminal_create" || terminalRecoveryInput || undefined,
 	};
 }
 

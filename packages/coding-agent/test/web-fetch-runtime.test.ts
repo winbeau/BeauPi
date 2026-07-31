@@ -290,7 +290,7 @@ describe("M8 web_fetch runtime", () => {
 	it("supports safe redirects and classifies DNS, TLS, timeout, cancellation, and fetch-count budget exhaustion", async () => {
 		const cacheDir = await tempDir();
 		const { port } = await setupServer();
-		const config = runtimeConfig({ timeoutMs: 20 });
+		const config = runtimeConfig();
 		const runtime = createRuntime(cacheDir, config);
 		const redirect = await runtime.fetch(`http://fetch.test:${port}/redirect`, { budgetScopeId: "redirect" });
 		expect(redirect.ok).toBe(true);
@@ -303,11 +303,12 @@ describe("M8 web_fetch runtime", () => {
 		const tls = await runtime.fetch(`https://tls.test:${port}/html`, { budgetScopeId: "tls" });
 		expect(tls.diagnostics[0]?.code).toBe("tls");
 
-		const timedOut = await runtime.fetch(`http://fetch.test:${port}/slow`, { budgetScopeId: "timeout" });
+		const timedRuntime = createRuntime(join(cacheDir, "timed"), runtimeConfig({ timeoutMs: 20 }));
+		const timedOut = await timedRuntime.fetch(`http://fetch.test:${port}/slow`, { budgetScopeId: "timeout" });
 		expect(timedOut.diagnostics[0]?.code).toBe("timeout");
 
 		const controller = new AbortController();
-		const promise = runtime.fetch(`http://fetch.test:${port}/slow`, {
+		const promise = timedRuntime.fetch(`http://fetch.test:${port}/slow`, {
 			budgetScopeId: "cancel",
 			signal: controller.signal,
 		});

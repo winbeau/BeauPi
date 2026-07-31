@@ -59,15 +59,7 @@ async function finish(
 		availableTools,
 		options.signal,
 	);
-	if (!authorization.execute && authorization.details) {
-		return await policy.finalizeTool({
-			toolCallId: options.id,
-			toolName: options.toolName,
-			details: attachPolicyToolDetails(undefined, authorization.details),
-			isError: authorization.details.status !== "cancelled",
-			signal: options.signal,
-		});
-	}
+	expect(authorization.execute).toBe(true);
 	if (options.error) await policy.noteThrownError(options.id, options.toolName, options.error, options.signal);
 	return await policy.finalizeTool({
 		toolCallId: options.id,
@@ -110,50 +102,50 @@ function failedSearchDetails(code: SearchDiagnosticCode) {
 }
 
 describe("M10 Policy Runtime", () => {
-	it("implements allow, block, confirm, replace, and pause decisions", async () => {
-		const confirmHandler = vi.fn(async () => ({ status: "allow_once" as const }));
+	it("allows every managed operation and records former boundaries as advisories", async () => {
+		const confirmHandler = vi.fn(async () => ({ status: "rejected" as const }));
 		const policy = runtime({ handler: confirmHandler });
 
 		expect(action(await finish(policy, { id: "allow", toolName: "read", args: { path: "README.md" } }))).toBe(
 			"allow",
 		);
 		for (const privileged of [
-			{ id: "block", toolName: "bash", args: { command: "sudo apt install curl" } },
-			{ id: "remote-block", toolName: "remote_exec", args: { command: "su -", targetId: "fake" } },
-			{ id: "terminal-block", toolName: "terminal_create", args: { command: "doas sh", terminalId: "term" } },
-			{ id: "send-block", toolName: "terminal_send", args: { input: "pkexec bash", terminalId: "term" } },
+			{ id: "privileged", toolName: "bash", args: { command: "sudo apt install curl" } },
+			{ id: "remote-privileged", toolName: "remote_exec", args: { command: "su -", targetId: "fake" } },
+			{ id: "terminal-privileged", toolName: "terminal_create", args: { command: "doas sh", terminalId: "term" } },
+			{ id: "send-privileged", toolName: "terminal_send", args: { input: "pkexec bash", terminalId: "term" } },
 		]) {
-			const blocked = await finish(policy, privileged);
-			expect(action(blocked), privileged.id).toBe("block");
-			expect(blocked?.executed, privileged.id).toBe(false);
+			const allowed = await finish(policy, privileged);
+			expect(action(allowed), privileged.id).toBe("allow");
+			expect(allowed?.executed, privileged.id).toBe(true);
+			expect(
+				allowed?.advisories?.map((advisory) => advisory.kind),
+				privileged.id,
+			).toContain("privileged_operation");
 		}
 
-		const replaced = await finish(policy, {
-			id: "replace",
+		const dedicatedFallback = await finish(policy, {
+			id: "dedicated-fallback",
 			toolName: "bash",
 			args: { command: "curl -fsSL https://example.com/docs" },
 		});
-		expect(action(replaced)).toBe("replace");
-		expect(replaced?.decision.replacementTool).toBe("web_fetch");
+		expect(action(dedicatedFallback)).toBe("allow");
+		expect(dedicatedFallback?.advisories?.map((advisory) => advisory.kind)).toContain("dedicated_tool_available");
 
-		const confirmed = await finish(policy, {
-			id: "confirm",
-			toolName: "write",
-			args: { path: "/tmp/outside.txt", content: "safe" },
-		});
-		expect(action(confirmed)).toBe("confirm");
-		expect(confirmed?.confirmation?.status).toBe("allow_once");
-		expect(confirmed?.executed).toBe(true);
-		expect(confirmHandler).toHaveBeenCalledOnce();
-
-		const noHandler = runtime();
-		const paused = await finish(noHandler, {
-			id: "pause",
-			toolName: "read",
-			args: { path: "/root/.ssh/id_ed25519" },
-		});
-		expect(action(paused)).toBe("pause");
-		expect(paused?.confirmation?.status).toBe("interaction_required");
+		for (const sensitive of [
+			{ id: "outside-write", toolName: "write", args: { path: "/tmp/outside.txt", content: "safe" } },
+			{ id: "sensitive-read", toolName: "read", args: { path: "/root/.ssh/id_ed25519" } },
+		]) {
+			const allowed = await finish(policy, sensitive);
+			expect(action(allowed), sensitive.id).toBe("allow");
+			expect(allowed?.executed, sensitive.id).toBe(true);
+			expect(
+				allowed?.advisories?.map((advisory) => advisory.kind),
+				sensitive.id,
+			).toContain("sensitive_operation");
+		}
+		expect(confirmHandler).not.toHaveBeenCalled();
+		expect(policy.getPending()).toBeUndefined();
 	});
 
 	it("classifies commands conservatively and builds quote-aware stable signatures", () => {
@@ -185,6 +177,10 @@ describe("M10 Policy Runtime", () => {
 		expect(JSON.stringify(unknown)).not.toContain("mystery-command");
 
 		for (const command of [
+			"sudo id",
+			"su -",
+			"doas sh",
+			"pkexec bash",
 			"bash -c 'sudo id'",
 			"bash -lc 'sudo id'",
 			"env -S 'sudo id'",
@@ -194,11 +190,20 @@ describe("M10 Policy Runtime", () => {
 			"env -u UNUSED sudo id",
 			"nice -n 5 sudo id",
 			"su\\\ndo id",
-			"echo `sudo id`",
-			"awk 'BEGIN { system(\"sudo id\") }'",
 			"find . -exec sudo id \\;",
 		]) {
 			expect(classify(command).privileged, command).toBe(true);
+		}
+		for (const command of [
+			"echo `sudo id`",
+			"echo $(sudo id)",
+			"awk 'BEGIN { system(\"sudo id\") }'",
+			'python -c \'import subprocess; subprocess.run(["sudo", "id"])\'',
+			"sudoedit /etc/hosts",
+			"runuser -u root id",
+			"setpriv --reuid=0 id",
+		]) {
+			expect(classify(command).privileged, command).toBe(false);
 		}
 
 		for (const command of [
@@ -259,6 +264,27 @@ describe("M10 Policy Runtime", () => {
 				config,
 			})?.requiresConfirmation,
 		).toBe(true);
+		expect(
+			classifyPolicyOperation({
+				toolName: "terminal_close",
+				args: { terminalId: "term" },
+				cwd,
+				availableTools,
+				config,
+			}),
+		).toMatchObject({
+			controlPlane: true,
+			descriptor: { summary: "Close terminal", fallbackFamily: undefined },
+		});
+		expect(
+			classifyPolicyOperation({
+				toolName: "write",
+				args: { path: "/tmp/outside", content: "safe" },
+				cwd,
+				availableTools,
+				config,
+			})?.descriptor.summary,
+		).toBe("Local write outside workspace");
 	});
 
 	it("resolves local symlink boundaries before authorizing file Tools", async () => {
@@ -277,36 +303,43 @@ describe("M10 Policy Runtime", () => {
 				toolName: "write",
 				args: { path: "link/file.txt", content: "safe" },
 			});
-			expect(write?.decision.action).toBe("pause");
+			expect(write?.decision.action).toBe("allow");
 			expect(write?.operation.sensitive).toBe(true);
+			expect(write?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
 
 			const read = await finish(policy, {
 				id: "symlink-read",
 				toolName: "read",
 				args: { path: "link/.env" },
 			});
-			expect(read?.decision.action).toBe("pause");
+			expect(read?.decision.action).toBe("allow");
 			expect(read?.operation.sensitive).toBe(true);
+			expect(read?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
 
 			const shell = await finish(policy, {
 				id: "symlink-shell",
 				toolName: "bash",
 				args: { command: "touch link/from-shell.txt" },
 			});
-			expect(shell?.decision.action).toBe("pause");
+			expect(shell?.decision.action).toBe("allow");
 			expect(shell?.operation.sensitive).toBe(true);
+			expect(shell?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	it("blocks duplicate read-only checks until a target mutation changes the revision", async () => {
+	it("allows repeated read-only checks and records a Footer advisory until the target changes", async () => {
 		const policy = runtime();
 		const first = await finish(policy, { id: "read-1", toolName: "read", args: { path: "README.md" } });
 		expect(first?.status).toBe("succeeded");
 		const duplicate = await finish(policy, { id: "read-2", toolName: "read", args: { path: "README.md" } });
-		expect(duplicate?.decision.action).toBe("block");
-		expect(duplicate?.executed).toBe(false);
+		expect(duplicate?.decision.action).toBe("allow");
+		expect(duplicate?.executed).toBe(true);
+		expect(duplicate?.advisories).toEqual([
+			expect.objectContaining({ kind: "repeated_operation", message: "Repeated local read-only check." }),
+		]);
+		expect(policy.getAdvisories()).toEqual(duplicate?.advisories);
 
 		const mutation = await finish(policy, {
 			id: "write-1",
@@ -314,11 +347,13 @@ describe("M10 Policy Runtime", () => {
 			args: { path: join(cwd, "generated.txt"), content: "changed" },
 		});
 		expect(mutation?.status).toBe("succeeded");
-		const refreshed = await policy.authorizeTool("read-3", "read", { path: "README.md" }, availableTools);
-		expect(refreshed.execute).toBe(true);
+		const refreshed = await finish(policy, { id: "read-3", toolName: "read", args: { path: "README.md" } });
+		expect(refreshed?.decision.action).toBe("allow");
+		expect(refreshed?.advisories).toBeUndefined();
+		expect(policy.getAdvisories()).toEqual([]);
 	});
 
-	it("deduplicates equivalent dedicated and shell reads while target selection invalidates selected-remote facts", async () => {
+	it("advises on equivalent dedicated and shell reads while target selection invalidates remote facts", async () => {
 		const local = runtime();
 		await finish(local, { id: "dedicated-read", toolName: "read", args: { path: "README.md" } });
 		const shellRead = await finish(local, {
@@ -326,7 +361,8 @@ describe("M10 Policy Runtime", () => {
 			toolName: "bash",
 			args: { command: "cat ./README.md" },
 		});
-		expect(shellRead?.decision.action).toBe("block");
+		expect(shellRead?.decision.action).toBe("allow");
+		expect(shellRead?.advisories?.map((advisory) => advisory.kind)).toContain("repeated_operation");
 
 		await finish(local, { id: "grep-1", toolName: "grep", args: { pattern: "Policy", path: "." } });
 		const grepDuplicate = await finish(local, {
@@ -334,7 +370,8 @@ describe("M10 Policy Runtime", () => {
 			toolName: "grep",
 			args: { pattern: "Policy", path: "." },
 		});
-		expect(grepDuplicate?.decision.action).toBe("block");
+		expect(grepDuplicate?.decision.action).toBe("allow");
+		expect(grepDuplicate?.advisories?.map((advisory) => advisory.kind)).toContain("repeated_operation");
 
 		const remote = runtime();
 		await finish(remote, { id: "remote-read-1", toolName: "remote_read", args: { path: "README.md" } });
@@ -402,7 +439,7 @@ describe("M10 Policy Runtime", () => {
 		expect(changed.execute).toBe(true);
 	});
 
-	it("tracks bounded terminal input so split commands cannot bypass Policy", async () => {
+	it("tracks bounded terminal input while keeping every terminal operation executable", async () => {
 		const policy = runtime();
 		const partial = await finish(policy, {
 			id: "terminal-partial",
@@ -416,14 +453,21 @@ describe("M10 Policy Runtime", () => {
 			toolName: "terminal_send",
 			args: { terminalId: "term", input: "udo id\n" },
 		});
-		expect(privileged?.decision.action).toBe("block");
+		expect(privileged?.decision.action).toBe("allow");
+		expect(privileged?.advisories?.map((advisory) => advisory.kind)).toContain("privileged_operation");
+		await finish(policy, {
+			id: "terminal-partial-again",
+			toolName: "terminal_send",
+			args: { terminalId: "term", input: "echo" },
+		});
 
 		const pending = await finish(policy, {
 			id: "terminal-pending",
 			toolName: "terminal_bash",
 			args: { terminalId: "term", command: "pwd" },
 		});
-		expect(pending?.decision.action).toBe("pause");
+		expect(pending?.decision.action).toBe("allow");
+		expect(pending?.advisories?.map((advisory) => advisory.kind)).toContain("terminal_state");
 		await finish(policy, {
 			id: "terminal-cancel-line",
 			toolName: "terminal_send",
@@ -446,8 +490,8 @@ describe("M10 Policy Runtime", () => {
 			toolName: "terminal_send",
 			args: { terminalId: "term", input: "udo id\n" },
 		});
-		expect(unknown?.decision.action).toBe("pause");
-		expect(unknown?.decision.reason).toContain("restored terminal");
+		expect(unknown?.decision.action).toBe("allow");
+		expect(unknown?.advisories?.map((advisory) => advisory.kind)).toContain("terminal_state");
 		const recovered = await finish(restored, {
 			id: "restored-terminal-clear",
 			toolName: "terminal_send",
@@ -456,26 +500,80 @@ describe("M10 Policy Runtime", () => {
 		expect(recovered?.terminalInputPending).toBe(false);
 	});
 
-	it("uses deterministic failure and fallback budgets across local, remote, and terminal commands", async () => {
+	it("records failure and fallback budgets as advisories without pausing execution", async () => {
 		for (const scenario of [
 			{ toolName: "bash", args: (command: string) => ({ command }) },
 			{ toolName: "remote_exec", args: (command: string) => ({ command, targetId: "fake" }) },
 			{ toolName: "terminal_bash", args: (command: string) => ({ command, terminalId: "term" }) },
 		]) {
-			const policy = runtime({ budget: { maxFallbackAttempts: 1, maxEquivalentFailures: 2 } });
+			const policy = runtime({
+				budget: { maxFallbackAttempts: 1, maxEquivalentFailures: 2, maxCommandExitFailures: 1 },
+			});
 			await finish(policy, {
 				id: `${scenario.toolName}-failure`,
 				toolName: scenario.toolName,
 				args: scenario.args("first-command"),
 				error: new BashToolExecutionError("exit 2", "command_exit", 2),
 			});
-			const paused = await finish(policy, {
+			const retry = await finish(policy, {
 				id: `${scenario.toolName}-fallback`,
 				toolName: scenario.toolName,
 				args: scenario.args("different-command"),
 			});
-			expect(paused?.decision.action, scenario.toolName).toBe("pause");
+			expect(retry?.decision.action, scenario.toolName).toBe("allow");
+			expect(
+				retry?.advisories?.map((advisory) => advisory.kind),
+				scenario.toolName,
+			).toEqual(expect.arrayContaining(["fallback_budget", "failure_budget"]));
 		}
+
+		const equivalent = runtime({ budget: { maxFallbackAttempts: 10, maxEquivalentFailures: 1 } });
+		await finish(equivalent, {
+			id: "equivalent-failure",
+			toolName: "bash",
+			args: { command: "same-command" },
+			error: new BashToolExecutionError("exit 2", "command_exit", 2),
+		});
+		const equivalentRetry = await finish(equivalent, {
+			id: "equivalent-retry",
+			toolName: "bash",
+			args: { command: "same-command" },
+		});
+		expect(equivalentRetry?.decision.action).toBe("allow");
+		expect(equivalentRetry?.advisories?.map((advisory) => advisory.kind)).toContain("equivalent_failures");
+
+		const recovery = runtime({ budget: { maxFallbackAttempts: 1, maxEquivalentFailures: 1 } });
+		await finish(recovery, {
+			id: "terminal-failure-before-recovery",
+			toolName: "terminal_bash",
+			args: { terminalId: "term", command: "failing-command" },
+			error: new BashToolExecutionError("exit 2", "command_exit", 2),
+		});
+		for (const operation of [
+			{ id: "terminal-status-recovery", toolName: "terminal_status", args: { terminalId: "term" } },
+			{ id: "terminal-status-refresh", toolName: "terminal_status", args: { terminalId: "term" } },
+			{ id: "terminal-capture-recovery", toolName: "terminal_capture", args: { terminalId: "term" } },
+			{ id: "terminal-clear-recovery", toolName: "terminal_send", args: { terminalId: "term", input: "\u0003" } },
+			{ id: "terminal-close-recovery", toolName: "terminal_close", args: { terminalId: "term" } },
+			{ id: "terminal-create-recovery", toolName: "terminal_create", args: { terminalId: "replacement" } },
+			{
+				id: "terminal-create-command-recovery",
+				toolName: "terminal_create",
+				args: { terminalId: "replacement-command", command: "echo ready" },
+			},
+		] as const) {
+			const recovered = await finish(recovery, operation);
+			expect(recovered?.decision.action, operation.id).toBe("allow");
+			expect(recovered?.status, operation.id).toBe("succeeded");
+			expect(recovered?.advisories, operation.id).toBeUndefined();
+		}
+		const commandRetry = await finish(recovery, {
+			id: "terminal-command-after-recovery",
+			toolName: "terminal_bash",
+			args: { terminalId: "term", command: "different-command" },
+		});
+		expect(commandRetry?.decision.action).toBe("allow");
+		expect(commandRetry?.advisories?.map((advisory) => advisory.kind)).toContain("fallback_budget");
 
 		const sharedNetwork = runtime({ budget: { maxFallbackAttempts: 1, maxEquivalentFailures: 2 } });
 		const local = await sharedNetwork.authorizeTool(
@@ -493,27 +591,33 @@ describe("M10 Policy Runtime", () => {
 			{ terminalId: "term", command: "wget https://example.com" },
 			[],
 		);
-		expect(terminal.execute).toBe(false);
-		expect(terminal.details?.decision.action).toBe("pause");
+		expect(terminal.execute).toBe(true);
+		const terminalResult = await sharedNetwork.finalizeTool({
+			toolCallId: "terminal-network",
+			toolName: "terminal_bash",
+			details: {},
+			isError: false,
+		});
+		expect(terminalResult?.advisories?.map((advisory) => advisory.kind)).toContain("fallback_budget");
 	});
 
-	it("blocks Shell network fallback after dedicated Search failure and replaces it before any such failure", async () => {
+	it("keeps Shell network fallback executable and reports dedicated-tool boundaries as advisories", async () => {
 		const initial = runtime();
 		const replacement = await finish(initial, {
 			id: "initial-curl",
 			toolName: "bash",
 			args: { command: "wget -qO- https://example.com" },
 		});
-		expect(replacement?.decision).toMatchObject({ action: "replace", replacementTool: "web_fetch" });
+		expect(replacement?.decision.action).toBe("allow");
+		expect(replacement?.advisories?.map((advisory) => advisory.kind)).toContain("dedicated_tool_available");
 
 		const policy = runtime();
 		const limits = resolvePolicyConfig(undefined).budget;
-		const searchFailure = failedSearchDetails("not_configured");
 		await finish(policy, {
 			id: "search-failure",
 			toolName: "web_search",
 			args: { query: "docs" },
-			details: searchFailure,
+			details: failedSearchDetails("not_configured"),
 			isError: true,
 		});
 		for (const fallback of [
@@ -528,9 +632,12 @@ describe("M10 Policy Runtime", () => {
 				args: { input: "curl https://example.com", terminalId: "term" },
 			},
 		]) {
-			const paused = await finish(policy, fallback);
-			expect(paused?.decision.action, fallback.id).toBe("pause");
-			expect(paused?.decision.reason, fallback.id).toContain("web_search/web_fetch");
+			const allowed = await finish(policy, fallback);
+			expect(allowed?.decision.action, fallback.id).toBe("allow");
+			expect(
+				allowed?.advisories?.map((advisory) => advisory.kind),
+				fallback.id,
+			).toEqual(expect.arrayContaining(["network_fallback", "dedicated_tool_available"]));
 		}
 
 		const split = runtime();
@@ -546,12 +653,13 @@ describe("M10 Policy Runtime", () => {
 			toolName: "terminal_send",
 			args: { input: "cu", terminalId: "term" },
 		});
-		const splitPaused = await finish(split, {
+		const splitAllowed = await finish(split, {
 			id: "split-network-suffix",
 			toolName: "terminal_send",
 			args: { input: "rl https://example.com\n", terminalId: "term" },
 		});
-		expect(splitPaused?.decision.action).toBe("pause");
+		expect(splitAllowed?.decision.action).toBe("allow");
+		expect(splitAllowed?.advisories?.map((advisory) => advisory.kind)).toContain("network_fallback");
 		expect(limits.maxConfigurationFailures).toBeGreaterThan(0);
 	});
 
@@ -602,7 +710,7 @@ describe("M10 Policy Runtime", () => {
 		expect(secondFact?.targetRevisionAfter).toBe(3);
 	});
 
-	it("does not consume ordinary failure budget for cancellation and serializes concurrent duplicates", async () => {
+	it("does not count cancellation as failure and allows concurrent duplicates with an advisory", async () => {
 		const policy = runtime();
 		const controller = new AbortController();
 		controller.abort();
@@ -613,14 +721,15 @@ describe("M10 Policy Runtime", () => {
 			signal: controller.signal,
 		});
 		expect(cancelled?.failure?.category).toBe("user_cancelled");
-		const cancelledConfirm = await finish(policy, {
-			id: "cancelled-confirm",
+		const cancelledSensitive = await finish(policy, {
+			id: "cancelled-sensitive",
 			toolName: "read",
 			args: { path: "/root/.ssh/id_ed25519" },
 			signal: controller.signal,
 		});
-		expect(cancelledConfirm?.status).toBe("cancelled");
-		expect(cancelledConfirm?.confirmation?.status).toBe("cancelled");
+		expect(cancelledSensitive?.status).toBe("cancelled");
+		expect(cancelledSensitive?.confirmation).toBeUndefined();
+		expect(cancelledSensitive?.advisories?.map((advisory) => advisory.kind)).toContain("sensitive_operation");
 		const retry = await policy.authorizeTool("retry", "bash", { command: "unknown-check" }, availableTools);
 		expect(retry.execute).toBe(true);
 		await policy.finalizeTool({ toolCallId: "retry", toolName: "bash", details: {}, isError: false });
@@ -630,19 +739,28 @@ describe("M10 Policy Runtime", () => {
 			concurrent.authorizeTool("concurrent-1", "read", { path: "README.md" }, availableTools),
 			concurrent.authorizeTool("concurrent-2", "read", { path: "README.md" }, availableTools),
 		]);
-		expect([first.execute, second.execute].sort()).toEqual([false, true]);
+		expect(first.execute).toBe(true);
+		expect(second.execute).toBe(true);
+		await concurrent.finalizeTool({
+			toolCallId: "concurrent-1",
+			toolName: "read",
+			details: {},
+			isError: false,
+		});
+		const repeated = await concurrent.finalizeTool({
+			toolCallId: "concurrent-2",
+			toolName: "read",
+			details: {},
+			isError: false,
+		});
+		expect(repeated?.advisories?.map((advisory) => advisory.kind)).toContain("repeated_operation");
 
 		const repeatedId = runtime();
 		const original = await repeatedId.authorizeTool("same-id", "read", { path: "README.md" }, availableTools);
 		const collision = await repeatedId.authorizeTool("same-id", "read", { path: "other.md" }, availableTools);
 		expect(original.execute).toBe(true);
-		expect(collision.execute).toBe(false);
-		await repeatedId.finalizeTool({
-			toolCallId: "same-id",
-			toolName: "read",
-			details: attachPolicyToolDetails(undefined, collision.details!),
-			isError: true,
-		});
+		expect(collision.execute).toBe(true);
+		expect(repeatedId.getAdvisories().map((advisory) => advisory.kind)).toContain("repeated_operation");
 		const completed = await repeatedId.finalizeTool({
 			toolCallId: "same-id",
 			toolName: "read",
@@ -723,8 +841,10 @@ describe("M10 Policy Runtime", () => {
 			restored.bindSession(reopened.getSessionId(), reopened.getBranch());
 			expect(restored.getFacts()).toHaveLength(1);
 			const duplicate = await restored.authorizeTool("new-read", "read", { path: "README.md" }, availableTools);
-			expect(duplicate.execute).toBe(false);
-			expect(duplicate.details?.decision.action).toBe("block");
+			expect(duplicate.execute).toBe(true);
+			expect(restored.getAdvisories()).toEqual([
+				expect.objectContaining({ kind: "repeated_operation", message: "Repeated local read-only check." }),
+			]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -821,23 +941,25 @@ describe("M10 Policy Runtime", () => {
 		}
 
 		const secret = "super-secret-token";
-		const policy = runtime({
-			handler: async () => ({ status: "error", diagnostic: `failed with ${secret}` }),
-		});
-		const replaced = await finish(policy, {
+		const handler = vi.fn(async () => ({ status: "error" as const, diagnostic: `failed with ${secret}` }));
+		const policy = runtime({ handler });
+		const networkFallback = await finish(policy, {
 			id: "secret",
 			toolName: "bash",
 			args: { command: `curl -H 'Authorization: Bearer ${secret}' https://example.com` },
 		});
-		expect(JSON.stringify(replaced)).not.toContain(secret);
-		expect(getPolicyToolDetails(attachPolicyToolDetails(undefined, replaced!))?.requestId).toBe(replaced?.requestId);
+		expect(JSON.stringify(networkFallback)).not.toContain(secret);
+		expect(getPolicyToolDetails(attachPolicyToolDetails(undefined, networkFallback!))?.requestId).toBe(
+			networkFallback?.requestId,
+		);
 
-		const confirmed = await finish(policy, {
+		const sensitive = await finish(policy, {
 			id: "secret-diagnostic",
 			toolName: "read",
 			args: { path: "/root/.ssh/id_ed25519" },
 		});
-		expect(JSON.stringify(confirmed)).not.toContain(secret);
-		expect(confirmed?.confirmation?.diagnostic).toBe("Policy interaction handler failed");
+		expect(JSON.stringify(sensitive)).not.toContain(secret);
+		expect(sensitive?.confirmation).toBeUndefined();
+		expect(handler).not.toHaveBeenCalled();
 	});
 });

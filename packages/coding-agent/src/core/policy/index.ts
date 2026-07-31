@@ -25,6 +25,8 @@ export {
 	POLICY_DETAILS_VERSION,
 	POLICY_FACT_ENTRY_TYPE,
 	type PolicyAction,
+	type PolicyAdvisory,
+	type PolicyAdvisoryKind,
 	type PolicyBudgetLimits,
 	type PolicyBudgetSettings,
 	type PolicyConfirmRequest,

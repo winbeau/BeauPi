@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BashOperations } from "../../src/core/tools/bash.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
@@ -158,6 +158,7 @@ describe("AgentSession bash and persistence characterization", () => {
 
 		const firstBash = harness.session.executeBash("first", undefined, { operations });
 		const secondBash = harness.session.executeBash("second", undefined, { operations });
+		await vi.waitFor(() => expect(invocations).toHaveLength(2));
 
 		invocations[0].finish();
 		const firstResult = await firstBash;
@@ -183,6 +184,7 @@ describe("AgentSession bash and persistence characterization", () => {
 
 		const firstBash = harness.session.executeBash("first", undefined, { operations });
 		const secondBash = harness.session.executeBash("second", undefined, { operations });
+		await vi.waitFor(() => expect(invocations).toHaveLength(2));
 
 		harness.session.abortBash();
 		const abortedSignals = invocations.map((invocation) => invocation.signal?.aborted);

@@ -236,6 +236,8 @@ export interface AgentSessionConfig {
 	initialActiveToolNames?: string[];
 	/** Disable the default document tools while retaining the existing built-in registry. */
 	disableDocumentTools?: boolean;
+	/** Disable the built-in user question tool while retaining extension tools. */
+	disableQuestionTool?: boolean;
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
 	allowedToolNames?: string[];
 	/** Optional denylist of tool names. When provided, these tool names are not exposed. */
@@ -399,6 +401,7 @@ export class AgentSession {
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	private _disableDocumentTools = false;
+	private _disableQuestionTool = false;
 	private _allowedToolNames?: Set<string>;
 	private _excludedToolNames?: Set<string>;
 	private _baseToolsOverride?: Record<string, AgentTool>;
@@ -449,7 +452,6 @@ export class AgentSession {
 			});
 		this.policyRuntime.bindSession(config.sessionManager.getSessionId(), config.sessionManager.getBranch());
 		this._unsubscribePolicyRuntime = this.policyRuntime.subscribe((event) => {
-			this.taskLedger.setPendingPolicyInteraction(event.type === "confirm_pending" ? event.request : undefined);
 			this._emit({ type: "policy", event });
 		});
 		this.documentRuntime =
@@ -486,6 +488,7 @@ export class AgentSession {
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
+		this._disableQuestionTool = config.disableQuestionTool ?? false;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
@@ -2883,6 +2886,7 @@ export class AgentSession {
 			delete baseToolDefinitions.docs_read;
 			delete baseToolDefinitions.docs_resolve_task;
 		}
+		if (this._disableQuestionTool) delete baseToolDefinitions.ask_user_question;
 
 		this._baseToolDefinitions = new Map(
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
@@ -3093,7 +3097,7 @@ export class AgentSession {
 		const abortController = new AbortController();
 		const executionId = options?.id ?? randomUUID();
 		this._bashAbortControllers.add(abortController);
-		const authorization = await this.policyRuntime.authorizeTool(
+		await this.policyRuntime.authorizeTool(
 			executionId,
 			"bash",
 			{ command },
@@ -3101,35 +3105,6 @@ export class AgentSession {
 			abortController.signal,
 		);
 		this.taskLedger.startShell(executionId, command);
-		if (!authorization.execute && authorization.details) {
-			const policy = await this.policyRuntime.finalizeTool({
-				toolCallId: executionId,
-				toolName: "bash",
-				details: attachPolicyToolDetails(undefined, authorization.details),
-				isError: authorization.details.status !== "cancelled",
-				signal: abortController.signal,
-			});
-			const output = [
-				authorization.details.decision.reason,
-				authorization.details.decision.replacementTool
-					? `Replacement: ${authorization.details.decision.replacementTool}`
-					: undefined,
-				authorization.details.decision.suggestion,
-			]
-				.filter((part): part is string => Boolean(part))
-				.join("\n");
-			const result: BashResult = {
-				output: output || "Policy did not allow this Bash execution.",
-				exitCode: authorization.details.status === "cancelled" ? undefined : 1,
-				cancelled: authorization.details.status === "cancelled",
-				truncated: false,
-				error: authorization.details.status === "cancelled" ? undefined : output,
-				policy,
-			};
-			this.recordBashResult(command, result, { ...options, executionId });
-			this._bashAbortControllers.delete(abortController);
-			return result;
-		}
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();

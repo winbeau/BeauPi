@@ -10,7 +10,6 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
-import type { PolicyConfirmResponse } from "../../core/policy/index.ts";
 import type { QuestionInteractionResponse } from "../../core/question.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -48,8 +47,6 @@ export interface RpcClientOptions {
 	args?: string[];
 	/** Handler for built-in ask_user_question RPC requests. Missing handlers cancel immediately. */
 	questionHandler?: RpcQuestionHandler;
-	/** Handler for versioned Policy confirmation requests. Missing handlers cancel immediately. */
-	policyHandler?: RpcPolicyHandler;
 }
 
 export interface ModelInfo {
@@ -64,8 +61,7 @@ export type RpcQuestionRequest = Extract<RpcExtensionUIRequest, { method: "askUs
 export type RpcQuestionHandler = (
 	request: RpcQuestionRequest,
 ) => QuestionInteractionResponse | Promise<QuestionInteractionResponse>;
-export type RpcPolicyRequest = Extract<RpcExtensionUIRequest, { method: "policyConfirm" }>;
-export type RpcPolicyHandler = (request: RpcPolicyRequest) => PolicyConfirmResponse | Promise<PolicyConfirmResponse>;
+type LegacyRpcPolicyRequest = Extract<RpcExtensionUIRequest, { method: "policyConfirm" }>;
 
 // ============================================================================
 // RPC Client
@@ -79,10 +75,7 @@ export class RpcClient {
 		new Map();
 	private requestId = 0;
 	private questionHandler: RpcQuestionHandler | undefined;
-	private policyHandler: RpcPolicyHandler | undefined;
 	private questionGeneration = 0;
-	private policyGeneration = 0;
-	private activePolicyRequestId: string | undefined;
 	private stderr = "";
 	private exitError: Error | null = null;
 	private options: RpcClientOptions;
@@ -90,7 +83,6 @@ export class RpcClient {
 	constructor(options: RpcClientOptions = {}) {
 		this.options = options;
 		this.questionHandler = options.questionHandler;
-		this.policyHandler = options.policyHandler;
 	}
 
 	/**
@@ -173,7 +165,6 @@ export class RpcClient {
 		this.stopReadingStdout?.();
 		this.stopReadingStdout = null;
 		this.questionGeneration++;
-		this.policyGeneration++;
 		this.process.kill("SIGTERM");
 
 		// Wait for process to exit
@@ -209,26 +200,6 @@ export class RpcClient {
 	setQuestionHandler(handler: RpcQuestionHandler | undefined): void {
 		this.questionGeneration++;
 		this.questionHandler = handler;
-	}
-
-	setPolicyHandler(handler: RpcPolicyHandler | undefined): void {
-		this.policyGeneration++;
-		this.policyHandler = handler;
-		if (
-			this.activePolicyRequestId &&
-			this.process?.stdin?.writable &&
-			!this.process.stdin.destroyed &&
-			!this.exitError
-		) {
-			this.process.stdin.write(
-				serializeJsonLine({
-					type: "extension_ui_response",
-					id: this.activePolicyRequestId,
-					cancelled: true,
-				} satisfies RpcExtensionUIResponse),
-			);
-		}
-		this.activePolicyRequestId = undefined;
 	}
 
 	/**
@@ -270,7 +241,6 @@ export class RpcClient {
 	 */
 	async abort(): Promise<void> {
 		this.questionGeneration++;
-		this.policyGeneration++;
 		await this.send({ type: "abort" });
 	}
 
@@ -281,7 +251,6 @@ export class RpcClient {
 	 */
 	async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
 		this.questionGeneration++;
-		this.policyGeneration++;
 		const response = await this.send({ type: "new_session", parentSession });
 		return this.getData(response);
 	}
@@ -425,7 +394,6 @@ export class RpcClient {
 	 */
 	async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
 		this.questionGeneration++;
-		this.policyGeneration++;
 		const response = await this.send({ type: "switch_session", sessionPath });
 		return this.getData(response);
 	}
@@ -436,7 +404,6 @@ export class RpcClient {
 	 */
 	async fork(entryId: string): Promise<{ text: string; cancelled: boolean }> {
 		this.questionGeneration++;
-		this.policyGeneration++;
 		const response = await this.send({ type: "fork", entryId });
 		return this.getData(response);
 	}
@@ -447,7 +414,6 @@ export class RpcClient {
 	 */
 	async clone(): Promise<{ cancelled: boolean }> {
 		this.questionGeneration++;
-		this.policyGeneration++;
 		const response = await this.send({ type: "clone" });
 		return this.getData(response);
 	}
@@ -584,7 +550,7 @@ export class RpcClient {
 				return;
 			}
 			if (data.type === "extension_ui_request" && data.method === "policyConfirm") {
-				void this.handlePolicyRequest(data as RpcPolicyRequest);
+				this.cancelLegacyPolicyRequest(data as LegacyRpcPolicyRequest);
 				return;
 			}
 
@@ -597,35 +563,15 @@ export class RpcClient {
 		}
 	}
 
-	private async handlePolicyRequest(request: RpcPolicyRequest): Promise<void> {
-		const generation = this.policyGeneration;
-		this.activePolicyRequestId = request.id;
-		let response: PolicyConfirmResponse = { status: "cancelled" };
-		try {
-			response = this.policyHandler ? await this.policyHandler(request) : response;
-		} catch (error) {
-			response = { status: "error", diagnostic: error instanceof Error ? error.message : String(error) };
-		}
-		if (generation !== this.policyGeneration) return;
-		if (!this.process?.stdin?.writable || this.process.stdin.destroyed || this.exitError) {
-			this.activePolicyRequestId = undefined;
-			return;
-		}
-		const rpcResponse: RpcExtensionUIResponse =
-			response.status === "allow_once"
-				? { type: "extension_ui_response", id: request.id, policyDecision: "allow_once" }
-				: response.status === "error"
-					? { type: "extension_ui_response", id: request.id, error: response.diagnostic }
-					: response.status === "rejected"
-						? {
-								type: "extension_ui_response",
-								id: request.id,
-								rejected: true,
-								...(response.diagnostic ? { reason: response.diagnostic } : {}),
-							}
-						: { type: "extension_ui_response", id: request.id, cancelled: true };
-		this.process.stdin.write(serializeJsonLine(rpcResponse));
-		if (this.activePolicyRequestId === request.id) this.activePolicyRequestId = undefined;
+	private cancelLegacyPolicyRequest(request: LegacyRpcPolicyRequest): void {
+		if (!this.process?.stdin?.writable || this.process.stdin.destroyed || this.exitError) return;
+		this.process.stdin.write(
+			serializeJsonLine({
+				type: "extension_ui_response",
+				id: request.id,
+				cancelled: true,
+			} satisfies RpcExtensionUIResponse),
+		);
 	}
 
 	private async handleQuestionRequest(request: RpcQuestionRequest): Promise<void> {

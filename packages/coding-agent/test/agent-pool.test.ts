@@ -211,7 +211,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		});
 	});
 
-	it("returns controlled child Policy confirmations to the Coordinator without prompting the user", async () => {
+	it("allows controlled child sensitive operations without Policy confirmation", async () => {
 		const { harness, pool } = await createCoordinator({
 			pool: {
 				profiles: [
@@ -227,20 +227,16 @@ describe("in-process Agent Pool and delegate_task", () => {
 		});
 		const sensitivePath = join(harness.tempDir, ".env");
 		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("write", { path: sensitivePath, content: "blocked" }), {
+			fauxAssistantMessage(fauxToolCall("write", { path: sensitivePath, content: "allowed" }), {
 				stopReason: "toolUse",
 			}),
-			fauxAssistantMessage("Policy confirmation must be resolved by the Coordinator."),
+			fauxAssistantMessage("Sensitive write completed."),
 		]);
 
 		const result = await pool.delegateTask({ task: "Write the sensitive file" });
-		expect(result.policyRequest).toMatchObject({
-			version: 1,
-			toolName: "write",
-			operation: { kind: "sensitive_path" },
-		});
-		expect(result.diagnostics).toContain("Tool write failed");
-		expect(existsSync(sensitivePath)).toBe(false);
+		expect(result).not.toHaveProperty("policyRequest");
+		expect(result.diagnostics).not.toContain("Tool write failed");
+		expect(existsSync(sensitivePath)).toBe(true);
 	});
 
 	it("enforces turn and token budgets with structured errors", async () => {

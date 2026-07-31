@@ -191,6 +191,11 @@ export class FooterComponent implements Component {
 		const branch = this.footerData.getGitBranch();
 		const sessionName = this.session.sessionManager.getSessionName();
 		const selectedTarget = this.session.remoteRuntime?.selectedTarget;
+		const policyAdvisories = this.session.policyRuntime?.getAdvisories() ?? [];
+		const latestPolicyAdvisory = policyAdvisories.at(-1);
+		const policyAdvisory = latestPolicyAdvisory
+			? `policy: ${sanitizeStatusText(latestPolicyAdvisory.message)}${policyAdvisories.length > 1 ? ` (+${policyAdvisories.length - 1})` : ""}`
+			: "";
 		const taskLedger = this.session.taskLedger.getSnapshot();
 		const monitorSummary = this.session.monitorRuntime?.getSummary();
 		const hasTaskActivity = taskLedger.startedAt !== undefined || taskLedger.commands.length > 0;
@@ -211,6 +216,11 @@ export class FooterComponent implements Component {
 			[
 				{ text: theme.fg("dim", cwd), required: true, truncate: true },
 				{ text: branch ? theme.fg("dim", `(${branch})`) : "", separator: " ", priority: 5 },
+				{
+					text: policyAdvisory ? theme.fg("warning", policyAdvisory) : "",
+					separator: " · ",
+					priority: 5,
+				},
 				{
 					text: hasTaskActivity ? theme.fg("accent", taskLedger.phase) : "",
 					separator: " · ",

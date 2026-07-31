@@ -12,12 +12,7 @@ import {
 	type Requirement,
 } from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
-import {
-	getPolicyToolDetails,
-	type PendingPolicyInteraction,
-	POLICY_FACT_ENTRY_TYPE,
-	type PolicyToolDetails,
-} from "../policy/index.ts";
+import { getPolicyToolDetails, POLICY_FACT_ENTRY_TYPE, type PolicyToolDetails } from "../policy/index.ts";
 import type { PendingQuestionInteraction } from "../question.ts";
 import {
 	getSearchRuntimeToolDetails,
@@ -599,7 +594,6 @@ export class TaskLedger {
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
-	private pendingPolicyInteraction: PendingPolicyInteraction | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -623,7 +617,6 @@ export class TaskLedger {
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
-		this.pendingPolicyInteraction = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
@@ -796,13 +789,6 @@ export class TaskLedger {
 		this.revision++;
 	}
 
-	setPendingPolicyInteraction(pending: PendingPolicyInteraction | undefined): void {
-		if (!pending && !this.pendingPolicyInteraction) return;
-		if (pending && this.pendingPolicyInteraction?.requestId === pending.requestId) return;
-		this.pendingPolicyInteraction = pending ? structuredClone(pending) : undefined;
-		this.revision++;
-	}
-
 	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
 		const records = [...this.policyRecords.values()];
 		for (let index = records.length - 1; index >= 0; index--) {
@@ -848,18 +834,6 @@ export class TaskLedger {
 				owner: "user",
 				blockedBy: ["user response"],
 				source: "ask_user_question",
-			});
-		}
-		if (this.pendingPolicyInteraction) {
-			todos.push({
-				id: `policy:${this.pendingPolicyInteraction.requestId}`,
-				label: `Policy confirmation: ${this.pendingPolicyInteraction.operation.summary}`,
-				status: "blocked",
-				sequence: -101,
-				updatedAt: Date.parse(this.pendingPolicyInteraction.createdAt) || now,
-				owner: "user",
-				blockedBy: ["policy confirmation"],
-				source: "policy",
 			});
 		}
 		return {

@@ -74,7 +74,15 @@ type LoadedResourcesContext = {
 };
 
 type RebindContext = {
+	session: {
+		monitorRuntime: {
+			stopPolling: () => void;
+			startPolling: () => void;
+			subscribe: (listener: () => void) => () => void;
+		};
+	};
 	unsubscribe?: () => void;
+	unsubscribeMonitor?: () => void;
 	applyRuntimeSettings: () => void;
 	renderCurrentSessionState: () => void;
 	bindCurrentSessionExtensions: () => Promise<void>;
@@ -137,6 +145,14 @@ type InteractiveModePrototype = {
 };
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrototype;
+
+function createMonitorRuntimeStub(): RebindContext["session"]["monitorRuntime"] {
+	return {
+		stopPolling: () => {},
+		startPolling: () => {},
+		subscribe: () => () => {},
+	};
+}
 
 type ReloadCommandContextOverrides = Omit<
 	Partial<ReloadCommandContext>,
@@ -283,6 +299,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				session: { monitorRuntime: createMonitorRuntimeStub() },
 				applyRuntimeSettings: () => events.push("apply"),
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {
@@ -324,6 +341,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				session: { monitorRuntime: createMonitorRuntimeStub() },
 				applyRuntimeSettings: () => {},
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {
@@ -376,6 +394,7 @@ describe("regression #5943: session_start transient UI", () => {
 
 		try {
 			const context: RebindContext = {
+				session: { monitorRuntime: createMonitorRuntimeStub() },
 				applyRuntimeSettings: () => {},
 				renderCurrentSessionState: () => events.push("render"),
 				bindCurrentSessionExtensions: async () => {

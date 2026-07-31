@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 
+type RebindSession = {
+	monitorRuntime: {
+		stopPolling: () => void;
+		startPolling: () => void;
+		subscribe: (listener: () => void) => () => void;
+	};
+};
+
 type RebindContext = {
-	session: object;
+	session: RebindSession;
 	unsubscribe?: () => void;
+	unsubscribeMonitor?: () => void;
 	applyRuntimeSettings: () => void;
 	renderCurrentSessionState: () => void;
 	bindCurrentSessionExtensions: () => Promise<void>;
@@ -19,10 +28,20 @@ type InteractiveModePrototype = {
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrototype;
 
+function createSession(): RebindSession {
+	return {
+		monitorRuntime: {
+			stopPolling: () => {},
+			startPolling: () => {},
+			subscribe: () => () => {},
+		},
+	};
+}
+
 describe("overlapping startup and replacement session rebinds", () => {
 	it("does not subscribe from the stale startup rebind", async () => {
-		const startupSession = {};
-		const replacementSession = {};
+		const startupSession = createSession();
+		const replacementSession = createSession();
 		let resolveStartupBind!: () => void;
 		let resolveReplacementBind!: () => void;
 
