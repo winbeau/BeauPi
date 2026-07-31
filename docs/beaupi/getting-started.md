@@ -138,6 +138,34 @@ web_fetch(url)
 
 `engines` 可选，用于限定当前 SearXNG 实例已启用且稳定的搜索引擎；当默认引擎持续触发 CAPTCHA 或 rate limit 时，可选择实例中可用的引擎。SearXNG 返回全部引擎 suspended/unresponsive 且没有结果时，BeauPi 会返回结构化 `rate_limited`/`connection` 错误，不再误报为空搜索成功。
 
+### 本地 SearXNG systemd 开机启动
+
+本地 Docker Compose 实例固定放在：
+
+```text
+~/.local/share/searxng/compose.yml
+~/.local/share/searxng/settings.yml
+```
+
+安装并立即启动 systemd user service：
+
+```bash
+./scripts/install-searxng-systemd.sh
+```
+
+脚本会安装 `~/.config/systemd/user/searxng.service`、启用 `default.target.wants`，执行幂等的 `docker compose up -d --remove-orphans`，并检查容器状态及 `http://127.0.0.1:8888/`。unit 在 Docker 尚未就绪时每 5 秒重试；容器运行后的异常恢复继续由 Compose 的 `restart: unless-stopped` 负责。
+
+常用管理命令：
+
+```bash
+systemctl --user status searxng.service
+systemctl --user restart searxng.service
+systemctl --user reload searxng.service
+journalctl --user -u searxng.service
+```
+
+开机但尚未登录时启动依赖 user lingering；可通过 `loginctl show-user "$USER" -p Linger` 检查，必要时执行 `loginctl enable-linger "$USER"`。WSL 必须在 `/etc/wsl.conf` 中启用 `systemd=true`。若当前 WSL 会话因 runtime bus 已失效而出现 `Failed to connect to bus`，安装脚本仍会创建 enablement symlink、确保容器当前运行，并在下一次 WSL/systemd 启动时加载该 unit。
+
 endpoint 也可通过环境变量配置：
 
 ```text
