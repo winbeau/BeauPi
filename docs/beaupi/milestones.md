@@ -340,7 +340,7 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 - `delegate_task` 的 Tool 参数使用 TypeBox 校验。Coordinator 只接收包含状态、summary、citations/references、filesModified、checks、diagnostics、error、usage 和 budget 的结构化结果，不接收子 Agent transcript。
 - Agent Pool 使用共享 Runtime 的并发槽位，子 Agent 的 Provider、Tool 和 bash 操作都服从同一 AbortSignal；正常、失败、取消、超时、Provider/Tool 错误均转换为结构化状态。
 - 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态、预算、最后活动和错误字段发出；progress 包含 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
-- 默认 reviewer 只设置 180 秒 wall-clock timeout，不设置 output token 或 turn 上限；子任务关闭自动 Document Contract preflight，明确范围的简单任务不先扫描项目文档，仍可在显式文档审查时调用 `docs_resolve_task`。
+- 默认 reviewer 只设置 300 秒 wall-clock timeout，不设置 output token 或 turn 上限；子任务关闭自动 Document Contract preflight，明确范围的简单任务不先扫描项目文档，仍可在显式文档审查时调用 `docs_resolve_task`。
 - 自定义 Profile 仍可通过 Agent loop 的 turn-end stop hook 配置 turn/token 预算，并在下一次 Provider 请求前结束，不通过 abort 产生额外的合成 turn。
 - faux provider 定向测试覆盖成功委派、Profile 选择、Tool/Skill/文件边界、token/轮数预算、超时、取消、Provider/Tool 失败、Coordinator transcript 隔离、递归委派阻断、生命周期事件去重和并发限制。
 

@@ -80,7 +80,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 	it("limits built-in profiles only by wall-clock time", () => {
 		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
 			id: "reviewer",
-			timeoutMs: 180_000,
+			timeoutMs: 300_000,
 		});
 		for (const profile of DEFAULT_AGENT_PROFILES) {
 			expect(profile.maxTokens).toBeUndefined();
@@ -128,7 +128,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(result.error?.code).toBe("profile_not_found");
 		expect(result.budget.maxTurns).toBeUndefined();
 		expect(result.budget.maxTokens).toBeUndefined();
-		expect(result.budget.timeoutMs).toBe(180_000);
+		expect(result.budget.timeoutMs).toBe(300_000);
 	});
 
 	it("filters tools, Skills, file modification boundaries, and recursive delegation", async () => {

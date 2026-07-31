@@ -636,7 +636,7 @@ const { session } = await createAgentSession({
       systemPrompt: "Review the assigned task and return concise findings.",
       toolAllowlist: ["read", "grep", "find", "ls"],
       skillAllowlist: { allow: [] },
-      timeoutMs: 180_000,
+      timeoutMs: 300_000,
       cancelStrategy: "abort",
       allowFileModifications: false,
     }],

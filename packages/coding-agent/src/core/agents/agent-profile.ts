@@ -41,7 +41,7 @@ export const DEFAULT_AGENT_PROFILE: AgentProfile = Object.freeze({
 		"Do not delegate to another agent.",
 	toolAllowlist: ["read", "grep", "find", "ls", "docs_search", "docs_read", "docs_resolve_task"],
 	skillAllowlist: { allow: [] },
-	timeoutMs: 180_000,
+	timeoutMs: 300_000,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });
