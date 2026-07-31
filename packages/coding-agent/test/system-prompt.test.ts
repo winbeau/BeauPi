@@ -71,6 +71,11 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("Actionable response style:");
 			expect(prompt).toContain("- Start with the answer, result, or next action");
 			expect(prompt).toContain("- Do work the agent can perform instead of delegating it back to the user.");
+			expect(prompt).toContain(
+				"When a missing prerequisite needs system-level installation (for example Cloudflare tooling)",
+			);
+			expect(prompt).toContain("do not fall back to a user-local install, downloaded binary, or PATH workaround");
+			expect(prompt).toContain("give the user the exact sudo command to run; do not execute it yourself");
 			expect(prompt).toContain("- State failures matter-of-factly with the location, cause, and fix.");
 			expect(prompt).toContain("Safety confirmations, genuine ambiguity, and higher-priority instructions override");
 		});

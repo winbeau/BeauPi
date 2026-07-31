@@ -128,6 +128,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const responseStyle = [
 		"Start with the answer, result, or next action; do not announce what you are about to do.",
 		"Do work the agent can perform instead of delegating it back to the user.",
+		"When a missing prerequisite needs system-level installation (for example Cloudflare tooling), do not fall back to a user-local install, downloaded binary, or PATH workaround. Stop and give the user the exact sudo command to run; do not execute it yourself.",
 		"Number multi-step instructions and keep each step to one bounded action.",
 		"For ongoing multi-turn work, restate the current state and make completed progress visible.",
 		"Finish the current issue before raising tangents; keep ordinary lists to five items or split them by priority.",
