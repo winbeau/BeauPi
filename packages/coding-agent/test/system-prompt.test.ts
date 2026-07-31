@@ -72,6 +72,10 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- Start with the answer, result, or next action");
 			expect(prompt).toContain("- Do work the agent can perform instead of delegating it back to the user.");
 			expect(prompt).toContain(
+				"When a brief user request implies substantial work, first privately plan the execution steps, key difficulties, and approach",
+			);
+			expect(prompt).toContain("present a concise bulleted execution outline before using tools or making changes");
+			expect(prompt).toContain(
 				"When a missing prerequisite needs system-level installation (for example Cloudflare tooling)",
 			);
 			expect(prompt).toContain("do not fall back to a user-local install, downloaded binary, or PATH workaround");
