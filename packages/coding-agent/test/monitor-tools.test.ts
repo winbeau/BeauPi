@@ -41,8 +41,9 @@ function createSetup() {
 async function executeTool(
 	definition: ReturnType<typeof createMonitorToolDefinitions>[number],
 	params: unknown,
+	signal?: AbortSignal,
 ): Promise<AgentToolResult<MonitorToolDetails>> {
-	const result = await definition.execute("tool-call", params as never, undefined, undefined, {} as ExtensionContext);
+	const result = await definition.execute("tool-call", params as never, signal, undefined, {} as ExtensionContext);
 	return { ...result, details: result.details as MonitorToolDetails };
 }
 
@@ -122,5 +123,18 @@ describe("monitor_* tools", () => {
 		expect(result.details.ok).toBe(false);
 		expect(result.details.error?.code).toBe("wait_timeout");
 		expect(result.details.monitor?.status).toBe("starting");
+	});
+
+	it("cancels monitor_wait when the Tool AbortSignal is aborted", async () => {
+		const setup = createSetup();
+		const attach = await executeTool(setup.definitions.monitor_attach, { kind: "process", pid: 45 });
+		const monitorId = attach.details.monitor!.id;
+		const controller = new AbortController();
+		const waiting = executeTool(setup.definitions.monitor_wait, { monitorId }, controller.signal);
+
+		controller.abort();
+
+		await expect(waiting).rejects.toMatchObject({ name: "AbortError", message: "Monitor wait cancelled" });
+		expect(setup.runtime.status(monitorId).status).toBe("starting");
 	});
 });

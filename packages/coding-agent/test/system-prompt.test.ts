@@ -60,6 +60,37 @@ describe("buildSystemPrompt", () => {
 		});
 	});
 
+	describe("actionable response style", () => {
+		test("includes ADHD-friendly guidance adapted for autonomous coding agents", () => {
+			const prompt = buildSystemPrompt({
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).toContain("Actionable response style:");
+			expect(prompt).toContain("- Start with the answer, result, or next action");
+			expect(prompt).toContain("- Do work the agent can perform instead of delegating it back to the user.");
+			expect(prompt).toContain("- State failures matter-of-factly with the location, cause, and fix.");
+			expect(prompt).toContain("Safety confirmations, genuine ambiguity, and higher-priority instructions override");
+		});
+	});
+
+	describe("coding style", () => {
+		test("prefers compact implementations without arbitrary size limits", () => {
+			const prompt = buildSystemPrompt({
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).toContain("Coding style:");
+			expect(prompt).toContain("- Prioritize the shortest reliable implementation");
+			expect(prompt).toContain("do not generate a large multi-line script");
+			expect(prompt).toContain("- Do not impose arbitrary line-count or file-size limits.");
+		});
+	});
+
 	describe("custom tool snippets", () => {
 		test("includes custom tools in available tools section when promptSnippet is provided", () => {
 			const prompt = buildSystemPrompt({

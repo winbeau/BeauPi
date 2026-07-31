@@ -29,6 +29,7 @@
 - Changed the streaming working row to show the latest model Thinking summary while preserving explicit extension messages and Tool-associated summaries/results.
 - Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
 - Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
+- Changed the default system prompt to use action-first, ADHD-friendly responses and focused implementations, preferring compact commands and scripts without arbitrary code-size limits.
 - Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
@@ -54,6 +55,7 @@
 - Fixed `web_fetch` to keep IPv4 and IPv6 SSRF block lists separate, honor standard HTTP(S) proxy settings while pinning the validated target IP/Host/TLS SNI, and send an identifiable user agent, restoring access to common public sites without weakening private-target blocking.
 - Fixed SearXNG empty-success responses by supporting an explicit `search.searxng.engines` allowlist and reporting all-engine CAPTCHA, suspension, or transport failures as structured diagnostics instead of caching an empty success.
 - Fixed agent, Tool, Bash, and compaction activity from pushing OSC 9;4 terminal progress to an indeterminate or visually full state by keeping active progress at the minimum determinate value.
+- Fixed `monitor_wait` to observe the Tool AbortSignal so pressing Escape cancels the wait promptly without stopping the monitored target.
 
 ### Removed
 

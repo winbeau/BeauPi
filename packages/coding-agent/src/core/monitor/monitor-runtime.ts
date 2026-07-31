@@ -68,6 +68,10 @@ interface Waiter {
 	resolve: (record: MonitorRecord) => void;
 }
 
+function monitorWaitAbortError(): DOMException {
+	return new DOMException("Monitor wait cancelled", "AbortError");
+}
+
 interface PendingToolExecution {
 	toolCallId: string;
 	toolName: string;
@@ -508,31 +512,47 @@ export class MonitorRuntime {
 		return this.snapshot(record);
 	}
 
-	async wait(monitorId: string, timeoutMs?: number): Promise<MonitorRecord> {
+	async wait(monitorId: string, timeoutMs?: number, signal?: AbortSignal): Promise<MonitorRecord> {
+		if (signal?.aborted) throw monitorWaitAbortError();
 		const record = this.requireRecord(monitorId);
 		if (isMonitorTerminal(record.status)) return this.snapshot(record);
 		await this.poll();
+		if (signal?.aborted) throw monitorWaitAbortError();
 		const current = this.requireRecord(monitorId);
 		if (isMonitorTerminal(current.status)) return this.snapshot(current);
 		const result = await new Promise<MonitorRecord>((resolve, reject) => {
-			const waiter: Waiter = { resolve };
 			const waiters = this.waiters.get(monitorId) ?? new Set<Waiter>();
+			let settled = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const cleanup = (): void => {
+				if (timer) clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				waiters.delete(waiter);
+				if (waiters.size === 0) this.waiters.delete(monitorId);
+			};
+			const settle = (callback: () => void): void => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				callback();
+			};
+			const waiter: Waiter = {
+				resolve: (nextRecord) => settle(() => resolve(nextRecord)),
+			};
+			const onAbort = (): void => settle(() => reject(monitorWaitAbortError()));
 			waiters.add(waiter);
 			this.waiters.set(monitorId, waiters);
-			if (timeoutMs === undefined) return;
-			const timer = setTimeout(
-				() => {
-					waiters.delete(waiter);
-					if (waiters.size === 0) this.waiters.delete(monitorId);
-					reject(new Error(`Timed out waiting for monitor ${monitorId}`));
-				},
-				Math.max(1, Math.floor(timeoutMs)),
-			);
-			const resolveOnce = waiter.resolve;
-			waiter.resolve = (nextRecord) => {
-				clearTimeout(timer);
-				resolveOnce(nextRecord);
-			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+			if (signal?.aborted) {
+				onAbort();
+				return;
+			}
+			if (timeoutMs !== undefined) {
+				timer = setTimeout(
+					() => settle(() => reject(new Error(`Timed out waiting for monitor ${monitorId}`))),
+					Math.max(1, Math.floor(timeoutMs)),
+				);
+			}
 		});
 		return this.snapshot(result);
 	}

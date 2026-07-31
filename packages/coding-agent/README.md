@@ -331,6 +331,8 @@ Disable context file loading with `--no-context-files` (or `-nc`).
 
 Replace the default system prompt with `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
 
+The default prompt uses an action-first response style adapted from [i-have-adhd](https://github.com/ayghri/i-have-adhd): direct answers, bounded numbered steps, visible progress, matter-of-fact failures, and autonomous agent work. Its coding guidance prefers the shortest reliable implementation and compact commands or scripts without arbitrary code-size limits. A custom `SYSTEM.md` replaces these defaults.
+
 ---
 
 ## Customization

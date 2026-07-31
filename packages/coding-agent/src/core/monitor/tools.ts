@@ -351,15 +351,16 @@ function createWaitTool(runtime: MonitorRuntime): ToolDefinition<typeof monitorW
 		description: "Wait for a Monitor target to reach a terminal state without starting a model review.",
 		promptSnippet: "Wait for a monitored target to finish",
 		parameters: monitorWaitSchema,
-		execute: async (_toolCallId, params) => {
+		execute: async (_toolCallId, params, signal) => {
 			validateParameters<MonitorWaitInput>("monitor_wait", waitValidator, params);
 			try {
-				const monitor = await runtime.wait(params.monitorId, params.timeoutMs);
+				const monitor = await runtime.wait(params.monitorId, params.timeoutMs, signal);
 				return {
 					content: [{ type: "text", text: plainMonitorLine(monitor) }],
 					details: operationResult("monitor_wait", { ok: true, monitor }),
 				};
 			} catch (error) {
+				if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
 				const message = error instanceof Error ? error.message : String(error);
 				const monitor = runtime.status(params.monitorId);
 				return {

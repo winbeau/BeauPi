@@ -181,6 +181,22 @@ describe("MonitorRuntime", () => {
 		});
 	});
 
+	it("cancels only an active wait when its AbortSignal is aborted", async () => {
+		const setup = createRuntime();
+		cleanupPaths.push(setup.cwd);
+		const record = setup.runtime.attach({ target: { kind: "process", pid: 6 } });
+		const controller = new AbortController();
+		const waiting = setup.runtime.wait(record.id, undefined, controller.signal);
+
+		controller.abort();
+
+		await expect(waiting).rejects.toMatchObject({ name: "AbortError", message: "Monitor wait cancelled" });
+		expect(setup.runtime.status(record.id).status).toBe("starting");
+		setup.adapter.setSnapshot("pid:6", { availability: "confirmed", running: false, exitCode: 0 });
+		await setup.runtime.poll();
+		await expect(setup.runtime.wait(record.id)).resolves.toMatchObject({ status: "completed" });
+	});
+
 	it("uses fake Tool and Sub-Agent adapters through the same registry", async () => {
 		const clock = new Clock();
 		const cwd = createWorkspace();
