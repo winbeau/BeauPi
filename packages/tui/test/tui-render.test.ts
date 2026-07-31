@@ -537,6 +537,73 @@ describe("TUI differential rendering", () => {
 		tui.stop();
 	});
 
+	it("preserves a user-scrolled viewport when an offscreen status changes while output appends", async () => {
+		const terminal = new VirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => (index === 0 ? "Working 0" : `Line ${index}`));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.scrollLines(-3);
+		const scrolledPosition = terminal.getViewportPosition();
+		const redrawsBeforeUpdate = tui.fullRedraws;
+
+		component.lines = ["Working 1", ...Array.from({ length: 11 }, (_, index) => `Line ${index + 1}`), "Appended"];
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		assert.strictEqual(tui.fullRedraws, redrawsBeforeUpdate, "Offscreen updates must not clear scrollback");
+		assert.strictEqual(
+			terminal.getViewportPosition().viewportY,
+			scrolledPosition.viewportY,
+			"Background output must not move a user-scrolled viewport",
+		);
+
+		terminal.scrollToBottom();
+		assert.ok(terminal.getViewport().at(-1)?.includes("Appended"), "Appended output should remain available");
+
+		tui.stop();
+	});
+
+	it("preserves a user-scrolled viewport when an offscreen status changes while output shrinks", async () => {
+		const terminal = new VirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => (index === 0 ? "Working 0" : `Line ${index}`));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.scrollLines(-3);
+		const scrolledPosition = terminal.getViewportPosition();
+		const redrawsBeforeUpdate = tui.fullRedraws;
+
+		component.lines = ["Working done", ...Array.from({ length: 10 }, (_, index) => `Line ${index + 1}`)];
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		assert.strictEqual(tui.fullRedraws, redrawsBeforeUpdate, "A bounded shrink must not clear scrollback");
+		assert.strictEqual(
+			terminal.getViewportPosition().viewportY,
+			scrolledPosition.viewportY,
+			"Completing background work must not move a user-scrolled viewport",
+		);
+
+		terminal.scrollToBottom();
+		const viewport = terminal.getViewport();
+		assert.ok(
+			viewport.some((line) => line.includes("Line 10")),
+			"The new last line should remain visible",
+		);
+		assert.ok(!viewport.some((line) => line.includes("Line 11")), "Removed output must be cleared");
+
+		tui.stop();
+	});
+
 	it("renders correctly when only a middle line changes (spinner case)", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui = new TUI(terminal);

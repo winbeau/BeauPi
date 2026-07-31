@@ -55,6 +55,7 @@
 - Fixed `web_fetch` to keep IPv4 and IPv6 SSRF block lists separate, honor standard HTTP(S) proxy settings while pinning the validated target IP/Host/TLS SNI, and send an identifiable user agent, restoring access to common public sites without weakening private-target blocking.
 - Fixed SearXNG empty-success responses by supporting an explicit `search.searxng.engines` allowlist and reporting all-engine CAPTCHA, suspension, or transport failures as structured diagnostics instead of caching an empty success.
 - Fixed agent, Tool, Bash, and compaction activity from pushing OSC 9;4 terminal progress to an indeterminate or visually full state by keeping active progress at the minimum determinate value.
+- Fixed inherited TUI rendering so offscreen Tool, Bash, and compaction status updates preserve a user-scrolled terminal viewport while output appends or the active tail shrinks.
 - Fixed `monitor_wait` to observe the Tool AbortSignal so pressing Escape cancels the wait promptly without stopping the monitored target.
 
 ### Removed

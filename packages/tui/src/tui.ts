@@ -1117,6 +1117,15 @@ export class TUI extends Container {
 		return ids;
 	}
 
+	private hasKittyImageInRange(lines: string[], start: number, end: number): boolean {
+		const first = Math.max(0, start);
+		const last = Math.min(lines.length - 1, end);
+		for (let i = first; i <= last; i++) {
+			if (extractKittyImageIds(lines[i] ?? "").length > 0) return true;
+		}
+		return false;
+	}
+
 	private deleteKittyImages(ids: Iterable<number>): string {
 		let buffer = "";
 		for (const id of ids) {
@@ -1396,11 +1405,63 @@ export class TUI extends Container {
 			firstChanged = expandedRange.firstChanged;
 			lastChanged = expandedRange.lastChanged;
 		}
-		const appendStart = appendedLines && firstChanged === this.previousLines.length && firstChanged > 0;
+		let appendStart = appendedLines && firstChanged === this.previousLines.length && firstChanged > 0;
+		let offscreenOnlyChange = false;
+
+		// Lines above the viewport are already committed to terminal scrollback. If the
+		// new content still reaches the viewport and no Kitty image crosses the
+		// boundary, avoid a full redraw: update only visible changes and keep user
+		// scrollback intact. This covers status/spinner updates plus new output.
+		const newContentReachesViewport = Math.max(0, newLines.length - 1) >= prevViewportTop;
+		const shrinking = newLines.length < this.previousLines.length;
+		let visibleContentStableDuringShrink = true;
+		if (shrinking) {
+			for (let i = prevViewportTop; i < newLines.length; i++) {
+				if (this.previousLines[i] !== newLines[i]) {
+					visibleContentStableDuringShrink = false;
+					break;
+				}
+			}
+		}
+		if (
+			firstChanged >= 0 &&
+			firstChanged < prevViewportTop &&
+			newContentReachesViewport &&
+			visibleContentStableDuringShrink
+		) {
+			const offscreenEnd = Math.min(lastChanged, prevViewportTop - 1);
+			const offscreenHasImage =
+				this.hasKittyImageInRange(this.previousLines, firstChanged, offscreenEnd) ||
+				this.hasKittyImageInRange(newLines, firstChanged, offscreenEnd);
+			if (!offscreenHasImage) {
+				let firstVisibleChanged = -1;
+				for (let i = prevViewportTop; i < Math.max(newLines.length, this.previousLines.length); i++) {
+					const oldLine = i < this.previousLines.length ? this.previousLines[i] : "";
+					const newLine = i < newLines.length ? newLines[i] : "";
+					if (oldLine !== newLine) {
+						firstVisibleChanged = i;
+						break;
+					}
+				}
+
+				if (firstVisibleChanged === -1 && !appendedLines) {
+					firstChanged = -1;
+					lastChanged = -1;
+					offscreenOnlyChange = true;
+				} else {
+					firstChanged = firstVisibleChanged === -1 ? this.previousLines.length : firstVisibleChanged;
+					appendStart = appendedLines && firstChanged === this.previousLines.length && firstChanged > 0;
+				}
+			}
+		}
 
 		// No changes - but still need to update hardware cursor position if it moved
 		if (firstChanged === -1) {
 			this.positionHardwareCursor(cursorPos, newLines.length);
+			if (offscreenOnlyChange) {
+				this.previousLines = newLines;
+				this.previousKittyImageIds = this.collectKittyImageIds(newLines);
+			}
 			this.previousViewportTop = prevViewportTop;
 			this.previousHeight = height;
 			return;

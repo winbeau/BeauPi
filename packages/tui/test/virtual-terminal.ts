@@ -184,6 +184,21 @@ export class VirtualTerminal implements Terminal {
 		return lines;
 	}
 
+	/** Scroll the viewport without moving the active terminal cursor. */
+	scrollLines(amount: number): void {
+		this.xterm.scrollLines(amount);
+	}
+
+	/** Return the viewport to the active cursor at the bottom of the buffer. */
+	scrollToBottom(): void {
+		this.xterm.scrollToBottom();
+	}
+
+	getViewportPosition(): { baseY: number; viewportY: number } {
+		const buffer = this.xterm.buffer.active;
+		return { baseY: buffer.baseY, viewportY: buffer.viewportY };
+	}
+
 	/**
 	 * Clear the terminal viewport
 	 */

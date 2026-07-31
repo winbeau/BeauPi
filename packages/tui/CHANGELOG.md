@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed active OSC 9;4 terminal progress to stay at the minimum determinate value instead of switching terminal tabs to an indeterminate or visually full indicator.
+- Fixed offscreen status updates with appended output or bounded tail shrinkage from clearing scrollback and moving a user-scrolled terminal viewport to the top.
 
 ## [0.82.1] - 2026-07-25
 
