@@ -46,7 +46,7 @@ class FocusableOverlay implements Component, Focusable {
 }
 
 async function renderAndFlush(tui: TUI, terminal: VirtualTerminal): Promise<void> {
-	tui.requestRender(true);
+	tui.requestRender({ force: true });
 	await new Promise<void>((resolve) => process.nextTick(resolve));
 	await terminal.waitForRender();
 }

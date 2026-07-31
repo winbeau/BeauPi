@@ -298,7 +298,7 @@ export class QuestionSelectorComponent implements Component, Focusable {
 			}
 		} finally {
 			this.tui.start();
-			this.tui.requestRender(true);
+			this.tui.requestRender({ force: true });
 		}
 	}
 

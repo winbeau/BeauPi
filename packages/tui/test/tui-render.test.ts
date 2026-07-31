@@ -168,7 +168,7 @@ describe("TUI Kitty image cleanup", () => {
 			await terminal.waitForRender();
 
 			assert.ok(tui.fullRedraws > redrawsBeforeImage, "unsafe image pre-clear should force a full redraw");
-			assert.ok(terminal.getWrites().includes("\x1b[2J"), "fallback should clear and fully redraw");
+			assert.ok(terminal.getWrites().includes("\x1b[1;1H\x1b[2K"), "fallback should repaint the active screen");
 
 			tui.stop();
 		} finally {
@@ -177,7 +177,7 @@ describe("TUI Kitty image cleanup", () => {
 		}
 	});
 
-	it("reserves Kitty image rows before drawing during full redraw fallbacks", async () => {
+	it("positions Kitty images directly during viewport redraw fallbacks", async () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		try {
@@ -208,8 +208,8 @@ describe("TUI Kitty image cleanup", () => {
 			const writes = terminal.getWrites();
 			assert.ok(tui.fullRedraws > redrawsBeforeImage, "scrolling image append should force a full redraw");
 			assert.ok(
-				writes.includes(`\r\n\r\n\x1b[2A${imageSequence}\x1b[2B`),
-				"full redraw should reserve visible image rows before drawing the placement",
+				writes.includes(`\x1b[2;1H${imageSequence}`),
+				"viewport redraw should place the image without linefeeds",
 			);
 			assert.ok(
 				!writes.includes(`${imageSequence}\r\n\x1b[0m`),
@@ -249,11 +249,11 @@ describe("TUI Kitty image cleanup", () => {
 			assert.ok(imageLines.length > terminal.rows, "test image should exceed the viewport height");
 
 			component.lines = ["before", ...imageLines, "after"];
-			tui.requestRender(true);
+			tui.requestRender({ force: true });
 			await terminal.waitForRender();
 
 			const writes = terminal.getWrites();
-			assert.ok(writes.includes(imageSequence), "image placement should be drawn");
+			assert.ok(writes.includes(`\x1b[1;1H${imageSequence}`), "image placement should be drawn at the viewport top");
 			assert.ok(
 				!writes.includes(`\x1b[${imageLines.length - 1}A${imageSequence}`),
 				"taller-than-viewport images must keep the #4461 first-row placement path",
@@ -315,7 +315,7 @@ describe("TUI Kitty image cleanup", () => {
 		assert.ok(deleteIndex >= 0, "image should be deleted when a reserved row changes");
 		assert.ok(drawIndex >= 0, "unchanged image line should be redrawn after deleting the placement");
 		assert.ok(deleteIndex < drawIndex, "old placement must be deleted before the image line is redrawn");
-		assert.ok(!writes.includes("\x1b[2J"), "reserved row changes should not force a full redraw");
+		assert.ok(!writes.includes("\x1b[1;1H\x1b[2K"), "reserved row changes should not force a full redraw");
 
 		tui.stop();
 	});
@@ -332,12 +332,12 @@ describe("TUI Kitty image cleanup", () => {
 		terminal.clearWrites();
 
 		component.lines = ["plain text"];
-		tui.requestRender(true);
+		tui.requestRender({ force: true });
 		await terminal.waitForRender();
 
 		const writes = terminal.getWrites();
 		const deleteIndex = writes.indexOf(deleteKittyImage(77));
-		const clearIndex = writes.indexOf("\x1b[2J");
+		const clearIndex = writes.indexOf("\x1b[1;1H\x1b[2K");
 		assert.ok(deleteIndex >= 0, "previous image should be deleted during full redraw");
 		assert.ok(clearIndex >= 0, "full redraw should clear the screen");
 		assert.ok(deleteIndex < clearIndex, "old image should be deleted before the screen is cleared");
@@ -393,7 +393,7 @@ describe("TUI resize handling", () => {
 			}
 
 			assert.strictEqual(tui.fullRedraws, initialRedraws, "Height change should not trigger full redraw");
-			assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Height change should not clear the screen");
+			assert.ok(!terminal.getWrites().includes("\x1b[1;1H\x1b[2K"), "Height change should not clear the screen");
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 
 			const viewport = terminal.getViewport();
@@ -422,6 +422,29 @@ describe("TUI resize handling", () => {
 		// Should have triggered a full redraw
 		assert.ok(tui.fullRedraws > initialRedraws, "Width change should trigger full redraw");
 
+		tui.stop();
+	});
+
+	it("preserves a user-scrolled viewport when resize forces a repaint", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => `Line ${index}`);
+		tui.start();
+		await terminal.waitForRender();
+		terminal.scrollLines(-3);
+		terminal.clearWrites();
+
+		terminal.resize(60, 5);
+		const positionAfterResize = terminal.getViewportPosition();
+		await terminal.waitForRender();
+
+		assert.strictEqual(terminal.getViewportPosition().viewportY, positionAfterResize.viewportY);
+		assert.ok(terminal.getWrites().includes("\x1b[1;1H\x1b[2K"));
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"));
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"));
 		tui.stop();
 	});
 });
@@ -601,6 +624,84 @@ describe("TUI differential rendering", () => {
 		);
 		assert.ok(!viewport.some((line) => line.includes("Line 11")), "Removed output must be cleared");
 
+		tui.stop();
+	});
+
+	it("preserves a user-scrolled viewport during forced repaints", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => `Line ${index}`);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.scrollLines(-3);
+		const scrolledPosition = terminal.getViewportPosition();
+		terminal.clearWrites();
+
+		tui.requestRender({ force: true });
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(terminal.getViewportPosition(), scrolledPosition);
+		assert.ok(terminal.getWrites().includes("\x1b[1;1H\x1b[2K"), "Forced repaint should clear the active screen");
+		assert.ok(!terminal.getWrites().includes("\r\n"), "Forced repaint must use absolute row updates");
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Forced repaint must not inflate scrollback");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Forced repaint must preserve scrollback");
+
+		terminal.scrollToBottom();
+		assert.ok(terminal.getViewport().at(-1)?.includes("Line 11"));
+		tui.stop();
+	});
+
+	it("repaints only the active viewport when offscreen changes require a fallback", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => `Old ${index}`);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.scrollLines(-3);
+		const scrolledPosition = terminal.getViewportPosition();
+		terminal.clearWrites();
+
+		component.lines = ["New 0", "New 1", "New 2"];
+		tui.requestRender();
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(terminal.getViewportPosition(), scrolledPosition);
+		assert.ok(terminal.getWrites().includes("\x1b[1;1H\x1b[2K"), "Fallback should repaint the active screen");
+		assert.ok(!terminal.getWrites().includes("\r\n"), "Fallback must use absolute row updates");
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Fallback must not inflate scrollback");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Automatic fallback must preserve scrollback");
+
+		terminal.scrollToBottom();
+		assert.deepStrictEqual(terminal.getViewport(), ["New 0", "New 1", "New 2", "", ""]);
+		tui.stop();
+	});
+
+	it("clears scrollback only when transcript replacement is explicit", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, index) => `Old ${index}`);
+		tui.start();
+		await terminal.waitForRender();
+		terminal.clearWrites();
+
+		component.lines = ["Replacement"];
+		tui.requestRender({ clearScrollback: true });
+		await terminal.waitForRender();
+
+		assert.ok(terminal.getWrites().includes("\x1b[3J"), "Explicit replacement should clear scrollback");
+		assert.ok(!terminal.getScrollBuffer().some((line) => line.includes("Old ")));
+		assert.ok(terminal.getViewport()[0]?.includes("Replacement"));
 		tui.stop();
 	});
 

@@ -6,6 +6,7 @@
 
 - Fixed active OSC 9;4 terminal progress to stay at the minimum determinate value instead of switching terminal tabs to an indeterminate or visually full indicator.
 - Fixed offscreen status updates with appended output or bounded tail shrinkage from clearing scrollback and moving a user-scrolled terminal viewport to the top.
+- Fixed resize, forced-refresh, shrink, and offscreen fallback rendering to repaint the active viewport with absolute row updates instead of clearing or inflating terminal scrollback; destructive transcript replacement is now explicit via `requestRender({ clearScrollback: true })`.
 
 ## [0.82.1] - 2026-07-25
 

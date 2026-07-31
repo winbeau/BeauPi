@@ -95,6 +95,13 @@ type PendingOsc11BackgroundQuery = {
 	timer: NodeJS.Timeout | undefined;
 };
 
+export interface RenderOptions {
+	/** Repaint the active viewport even when the rendered lines are unchanged. */
+	force?: boolean;
+	/** Clear terminal scrollback before rendering. Use only when replacing the transcript intentionally. */
+	clearScrollback?: boolean;
+}
+
 /**
  * Interface for components that can receive focus and display a hardware cursor.
  * When focused, the component should emit CURSOR_MARKER at the cursor position
@@ -304,6 +311,8 @@ export class TUI extends Container {
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
 	private renderRequested = false;
+	private forceRedrawRequested = false;
+	private clearScrollbackRequested = false;
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
@@ -357,8 +366,8 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Set whether to trigger full re-render when content shrinks.
-	 * When true (default), empty rows are cleared when content shrinks.
+	 * Set whether to repaint the viewport when content shrinks.
+	 * When true, empty rows are cleared when content shrinks.
 	 * When false, empty rows remain (reduces redraws on slower terminals).
 	 */
 	setClearOnShrink(enabled: boolean): void {
@@ -713,15 +722,13 @@ export class TUI extends Container {
 		this.terminal.stop();
 	}
 
-	requestRender(force = false): void {
+	requestRender(options: RenderOptions = {}): void {
+		const force = options.force === true || options.clearScrollback === true;
+		if (options.clearScrollback) {
+			this.clearScrollbackRequested = true;
+		}
 		if (force) {
-			this.previousLines = [];
-			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
-			this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
-			this.cursorRow = 0;
-			this.hardwareCursorRow = 0;
-			this.maxLinesRendered = 0;
-			this.previousViewportTop = 0;
+			this.forceRedrawRequested = true;
 			if (this.renderTimer) {
 				clearTimeout(this.renderTimer);
 				this.renderTimer = undefined;
@@ -1108,9 +1115,15 @@ export class TUI extends Container {
 	}
 
 	private collectKittyImageIds(lines: string[]): Set<number> {
+		return this.collectKittyImageIdsInRange(lines, 0, lines.length - 1);
+	}
+
+	private collectKittyImageIdsInRange(lines: string[], start: number, end: number): Set<number> {
 		const ids = new Set<number>();
-		for (const line of lines) {
-			for (const id of extractKittyImageIds(line)) {
+		const first = Math.max(0, start);
+		const last = Math.min(lines.length - 1, end);
+		for (let i = first; i <= last; i++) {
+			for (const id of extractKittyImageIds(lines[i] ?? "")) {
 				ids.add(id);
 			}
 		}
@@ -1266,6 +1279,10 @@ export class TUI extends Container {
 
 	private doRender(): void {
 		if (this.stopped) return;
+		const forceRedraw = this.forceRedrawRequested;
+		const clearScrollback = this.clearScrollbackRequested;
+		this.forceRedrawRequested = false;
+		this.clearScrollbackRequested = false;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
@@ -1293,43 +1310,63 @@ export class TUI extends Container {
 
 		newLines = this.applyLineResets(newLines);
 
-		// Helper to clear scrollback and viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		// Full-frame fallbacks repaint only the active viewport. Scrollback is
+		// cleared only for an explicit transcript replacement.
+		const fullRender = (mode: "initial" | "viewport" | "clear"): void => {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
-			if (clear) {
-				buffer += this.deleteKittyImages(this.previousKittyImageIds);
-				buffer += "\x1b[2J\x1b[H\x1b[3J"; // Clear screen, home, then clear scrollback
-			}
-			for (let i = 0; i < newLines.length; i++) {
-				if (i > 0) buffer += "\r\n";
-				const line = newLines[i];
-				const isImage = isImageLine(line);
-				const imageReservedRows = isImage ? this.getKittyImageReservedRows(newLines, i) : 1;
-				if (imageReservedRows > 1 && imageReservedRows <= height) {
-					for (let row = 1; row < imageReservedRows; row++) {
-						buffer += "\r\n";
-					}
-					buffer += `\x1b[${imageReservedRows - 1}A`;
-					buffer += line;
-					buffer += `\x1b[${imageReservedRows - 1}B`;
-					i += imageReservedRows - 1;
-					continue;
+			const viewportTop = Math.max(0, newLines.length - height);
+			if (mode === "viewport") {
+				buffer += this.deleteKittyImages(
+					this.collectKittyImageIdsInRange(
+						this.previousLines,
+						this.previousViewportTop,
+						this.previousLines.length - 1,
+					),
+				);
+				for (let row = 1; row <= height; row++) {
+					buffer += `\x1b[${row};1H\x1b[2K`;
 				}
-				buffer += line;
+				for (let i = 0; i < viewportTop; i++) {
+					if (extractKittyImageIds(newLines[i] ?? "").length === 0) continue;
+					if (i + this.getKittyImageReservedRows(newLines, i) > viewportTop) {
+						buffer += `\x1b[1;1H${newLines[i]}`;
+						break;
+					}
+				}
+				for (let i = viewportTop; i < newLines.length; i++) {
+					buffer += `\x1b[${i - viewportTop + 1};1H${newLines[i]}`;
+				}
+			} else {
+				if (mode === "clear") {
+					buffer += this.deleteKittyImages(this.previousKittyImageIds);
+					buffer += "\x1b[2J\x1b[H\x1b[3J"; // Intentional transcript replacement
+				}
+				for (let i = 0; i < newLines.length; i++) {
+					if (i > 0) buffer += "\r\n";
+					const line = newLines[i];
+					const isImage = isImageLine(line);
+					const imageReservedRows = isImage ? this.getKittyImageReservedRows(newLines, i) : 1;
+					if (imageReservedRows > 1 && imageReservedRows <= height) {
+						for (let row = 1; row < imageReservedRows; row++) {
+							buffer += "\r\n";
+						}
+						buffer += `\x1b[${imageReservedRows - 1}A`;
+						buffer += line;
+						buffer += `\x1b[${imageReservedRows - 1}B`;
+						i += imageReservedRows - 1;
+						continue;
+					}
+					buffer += line;
+				}
 			}
 			buffer += "\x1b[?2026l"; // End synchronized output
 			this.terminal.write(buffer);
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			this.hardwareCursorRow = this.cursorRow;
-			// Reset max lines when clearing, otherwise track growth
-			if (clear) {
-				this.maxLinesRendered = newLines.length;
-			} else {
-				this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
-			}
-			const bufferLength = Math.max(height, newLines.length);
-			this.previousViewportTop = Math.max(0, bufferLength - height);
+			this.maxLinesRendered =
+				mode === "initial" ? Math.max(this.maxLinesRendered, newLines.length) : newLines.length;
+			this.previousViewportTop = Math.max(0, newLines.length - height);
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousKittyImageIds = this.collectKittyImageIds(newLines);
@@ -1346,26 +1383,38 @@ export class TUI extends Container {
 			fs.appendFileSync(logPath, msg);
 		};
 
+		if (clearScrollback) {
+			logRedraw("explicit scrollback clear");
+			fullRender("clear");
+			return;
+		}
+
+		if (forceRedraw) {
+			logRedraw("forced viewport repaint");
+			fullRender("viewport");
+			return;
+		}
+
 		// First render - just output everything without clearing (assumes clean screen)
 		if (this.previousLines.length === 0 && !widthChanged && !heightChanged) {
 			logRedraw("first render");
-			fullRender(false);
+			fullRender("initial");
 			return;
 		}
 
-		// Width changes always need a full re-render because wrapping changes.
+		// Width changes need a viewport repaint because wrapping changes.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
-			fullRender(true);
+			fullRender("viewport");
 			return;
 		}
 
-		// Height changes normally need a full re-render to keep the visible viewport aligned,
-		// but Termux changes height when the software keyboard shows or hides.
-		// In that environment, a full redraw causes the entire history to replay on every toggle.
+		// Height changes normally need a viewport repaint to keep visible rows aligned,
+		// but Termux changes height whenever the software keyboard shows or hides.
+		// Skip that redundant repaint there to avoid flicker on every toggle.
 		if (heightChanged && !isTermuxSession()) {
 			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
-			fullRender(true);
+			fullRender("viewport");
 			return;
 		}
 
@@ -1374,7 +1423,7 @@ export class TUI extends Container {
 		// Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
 		if (this.clearOnShrink && newLines.length < this.maxLinesRendered && this.overlayStack.length === 0) {
 			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
-			fullRender(true);
+			fullRender("viewport");
 			return;
 		}
 
@@ -1476,7 +1525,7 @@ export class TUI extends Container {
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
 					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
-					fullRender(true);
+					fullRender("viewport");
 					return;
 				}
 				const lineDiff = computeLineDiff(targetRow);
@@ -1487,7 +1536,7 @@ export class TUI extends Container {
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
+					fullRender("viewport");
 					return;
 				}
 				const clearStartOffset = newLines.length === 0 ? 0 : 1;
@@ -1517,10 +1566,10 @@ export class TUI extends Container {
 		}
 
 		// Differential rendering can only touch what was actually visible.
-		// If the first changed line is above the previous viewport, we need a full redraw.
+		// If the first changed line is above the previous viewport, repaint the active viewport.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
+			fullRender("viewport");
 			return;
 		}
 
@@ -1567,7 +1616,7 @@ export class TUI extends Container {
 					logRedraw(
 						`kitty image pre-clear would scroll (${imageStartScreenRow} + ${imageReservedRows} > ${height})`,
 					);
-					fullRender(true);
+					fullRender("viewport");
 					return;
 				}
 

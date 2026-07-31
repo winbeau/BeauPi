@@ -36,7 +36,7 @@
 - Changed the Tool renderer, Tasks Widget, and Footer to expose live Monitor status, running counts, stalled/failed attention summaries, durations, and complete log paths without exceeding narrow terminal widths.
 - Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
 - Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
-- Changed the default reviewer profile to use an independent 8192-token, 12-turn, 180-second review budget, skip automatic document-contract preflight for child prompts, and reserve `docs_resolve_task` for explicit document-driven audits.
+- Changed the built-in sub-agent profiles to use only wall-clock timeouts by default, removing their token and turn caps; custom profiles can still opt into additional budgets.
 - Changed the BeauPi roadmap to mark the Policy Engine complete and advance the active milestone to multi-agent Workflow.
 - Changed Policy to advisory-only behavior: every managed operation reaches its original executor, former block/confirm/replace/pause conditions become non-sensitive Footer-only advisories, TUI/SDK/RPC confirmation handlers are not invoked, controlled sub-agents omit Policy requests, and Tool/Todo rendering ignores Policy status metadata while legacy Session Policy details remain parseable.
 
@@ -56,6 +56,7 @@
 - Fixed SearXNG empty-success responses by supporting an explicit `search.searxng.engines` allowlist and reporting all-engine CAPTCHA, suspension, or transport failures as structured diagnostics instead of caching an empty success.
 - Fixed agent, Tool, Bash, and compaction activity from pushing OSC 9;4 terminal progress to an indeterminate or visually full state by keeping active progress at the minimum determinate value.
 - Fixed inherited TUI rendering so offscreen Tool, Bash, and compaction status updates preserve a user-scrolled terminal viewport while output appends or the active tail shrinks.
+- Fixed terminal resize, resume, forced-refresh, shrink, and offscreen fallback rendering to preserve scrollback size and the user's current scroll position instead of repeatedly jumping to the top.
 - Fixed `monitor_wait` to observe the Tool AbortSignal so pressing Escape cancels the wait promptly without stopping the monitored target.
 
 ### Removed

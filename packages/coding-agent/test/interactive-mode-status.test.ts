@@ -54,7 +54,7 @@ class TestFocusableComponent implements Component, Focusable {
 }
 
 async function flushTui(tui: TUI, terminal: VirtualTerminal): Promise<void> {
-	tui.requestRender(true);
+	tui.requestRender({ force: true });
 	await Promise.resolve();
 	await terminal.waitForRender();
 }

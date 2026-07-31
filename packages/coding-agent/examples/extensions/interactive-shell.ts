@@ -169,7 +169,7 @@ export default function (pi: ExtensionAPI) {
 
 			// Restart TUI
 			tui.start();
-			tui.requestRender(true);
+			tui.requestRender({ force: true });
 
 			// Signal completion
 			done(result.status);

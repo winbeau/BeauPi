@@ -1723,6 +1723,7 @@ export class InteractiveMode {
 					}
 					this.showStatus("Navigated to selected point");
 					void this.flushCompactionQueue({ willRetry: false });
+					this.ui.requestRender({ clearScrollback: true });
 					return { cancelled: false };
 				},
 				switchSession: async (sessionPath, options) => {
@@ -1831,6 +1832,7 @@ export class InteractiveMode {
 		this.dynamicWorkingMessage = undefined;
 		this.pendingTools.clear();
 		this.renderInitialMessages();
+		this.ui.requestRender({ clearScrollback: true });
 	}
 
 	/**
@@ -3876,7 +3878,7 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.ui.requestRender({ force: true });
 		});
 
 		try {
@@ -4025,7 +4027,7 @@ export class InteractiveMode {
 			}
 		} finally {
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.ui.requestRender({ force: true });
 		}
 	}
 
@@ -4897,6 +4899,7 @@ export class InteractiveMode {
 						}
 						this.showStatus("Navigated to selected point");
 						void this.flushCompactionQueue({ willRetry: false });
+						this.ui.requestRender({ clearScrollback: true });
 					} catch (error) {
 						this.showError(error instanceof Error ? error.message : String(error));
 					} finally {
@@ -5938,7 +5941,7 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(reloadBox);
 		this.ui.setFocus(reloadBox);
-		this.ui.requestRender(true);
+		this.ui.requestRender({ clearScrollback: true });
 		await new Promise((resolve) => process.nextTick(resolve));
 
 		const dismissReloadBox = (editor: Component) => {

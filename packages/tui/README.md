@@ -62,7 +62,9 @@ tui.addChild(component);
 tui.removeChild(component);
 tui.start();
 tui.stop();
-tui.requestRender(); // Request a re-render
+tui.requestRender(); // Schedule a differential update
+tui.requestRender({ force: true }); // Repaint the active viewport without clearing scrollback
+tui.requestRender({ clearScrollback: true }); // Intentional transcript replacement
 
 // Global debug key handler (Shift+Ctrl+D)
 tui.onDebug = () => console.log("Debug triggered");
@@ -592,9 +594,11 @@ if (matchesKey(data, Key.enter)) {
 
 The TUI uses three rendering strategies:
 
-1. **First Render**: Output all lines without clearing scrollback
-2. **Width Changed or Change Above Viewport**: Clear screen and full re-render
-3. **Normal Update**: Move cursor to first changed line, clear to end, render changed lines
+1. **First Render**: Output all lines without clearing scrollback.
+2. **Viewport Repaint**: On resize, forced refresh, or an unreachable offscreen change, clear and redraw only the active viewport with absolute row updates. Terminal scrollback size and a user-scrolled viewport are preserved.
+3. **Normal Update**: Move to the changed visible lines and update only those rows.
+
+`requestRender({ clearScrollback: true })` is the explicit destructive path for applications that intentionally replace the transcript, such as switching sessions. Routine rendering never clears scrollback.
 
 All updates are wrapped in **synchronized output** (`\x1b[?2026h` ... `\x1b[?2026l`) for atomic, flicker-free rendering.
 

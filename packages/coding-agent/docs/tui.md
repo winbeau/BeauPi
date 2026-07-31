@@ -503,7 +503,7 @@ class CachedComponent {
 }
 ```
 
-Call `invalidate()` when state changes, then use the injected `tui.requestRender()` to trigger re-render.
+Call `invalidate()` when state changes, then use the injected `tui.requestRender()` to trigger re-render. For terminal resume or other forced refreshes, use `tui.requestRender({ force: true })`; it repaints only the active viewport and preserves scrollback. Reserve `tui.requestRender({ clearScrollback: true })` for intentional transcript replacement.
 
 ## Invalidation and Theme Changes
 

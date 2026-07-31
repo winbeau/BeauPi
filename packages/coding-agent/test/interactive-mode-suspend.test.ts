@@ -1,10 +1,11 @@
+import type { RenderOptions } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 type FakeUi = {
 	start: () => void;
 	stop: () => void;
-	requestRender: (force?: boolean) => void;
+	requestRender: (options?: RenderOptions) => void;
 };
 
 type HandleCtrlZThis = {
@@ -109,7 +110,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);
 		expect(removeListenerSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
 		expect(ui.start).toHaveBeenCalledTimes(1);
-		expect(ui.requestRender).toHaveBeenCalledWith(true);
+		expect(ui.requestRender).toHaveBeenCalledWith({ force: true });
 	});
 
 	test("cleans up the temporary handlers if suspension fails", () => {

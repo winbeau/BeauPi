@@ -126,7 +126,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 			}
 		} finally {
 			this.tui.start();
-			this.tui.requestRender(true);
+			this.tui.requestRender({ force: true });
 		}
 	}
 }

@@ -123,7 +123,7 @@ describe("edit tool TUI rendering", () => {
 		const callOnlyRender = await waitForRenderedText(
 			() => stripAnsi(component.render(80).join("\n")),
 			"line 50 changed",
-			() => tui.requestRender(true),
+			() => tui.requestRender({ force: true }),
 		);
 		expect(callOnlyRender).toContain("edit");
 		expect(callOnlyRender).toContain("line 950 changed");
@@ -228,7 +228,7 @@ describe("edit tool TUI rendering", () => {
 		const rendered = await waitForRenderedText(
 			() => stripAnsi(component.render(80).join("\n")),
 			"Could not find",
-			() => tui.requestRender(true),
+			() => tui.requestRender({ force: true }),
 		);
 		expect(rendered).not.toContain("+1 ");
 		expect(rendered).not.toContain("-1 ");

@@ -166,7 +166,7 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - 优先使用 Pi SDK 创建进程内独立 `AgentSession`
 - 共享 ModelRuntime、认证、缓存和并发控制
 - 子 Agent 上下文、工具、预算和 System Prompt 相互隔离
-- reviewer 使用独立的大审查预算；turn 预算必须在下一次 Provider 请求前停止，`turnsUsed` 不得超过 `maxTurns`
+- 默认 reviewer 只设置 wall-clock timeout，不设置 token 或 turn 上限；自定义 Profile 仍可显式配置额外预算
 - 明确范围的子任务不得自动解析完整 Document Contract；只有显式文档驱动审查才调用 `docs_resolve_task`
 - Monitor 保存有界 turn/Tool/目标路径/结果活动事实，并直接显示预算错误、turn 使用和最后 Tool
 - 禁止默认递归委派

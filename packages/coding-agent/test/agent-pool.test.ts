@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { type AgentLifecycleEvent, type AgentPoolConfig, DEFAULT_AGENT_PROFILE } from "../src/core/agents/index.ts";
+import {
+	type AgentLifecycleEvent,
+	type AgentPoolConfig,
+	DEFAULT_AGENT_PROFILE,
+	DEFAULT_AGENT_PROFILES,
+} from "../src/core/agents/index.ts";
 import { createExtensionRuntime, defineTool } from "../src/core/extensions/index.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "../src/core/sdk.ts";
@@ -72,13 +77,15 @@ function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
 }
 
 describe("in-process Agent Pool and delegate_task", () => {
-	it("gives the default reviewer an independent review-sized budget", () => {
+	it("limits built-in profiles only by wall-clock time", () => {
 		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
 			id: "reviewer",
-			maxTokens: 8192,
-			maxTurns: 12,
 			timeoutMs: 180_000,
 		});
+		for (const profile of DEFAULT_AGENT_PROFILES) {
+			expect(profile.maxTokens).toBeUndefined();
+			expect(profile.maxTurns).toBeUndefined();
+		}
 	});
 
 	it("runs a selected profile and returns only structured data", async () => {
@@ -111,6 +118,17 @@ describe("in-process Agent Pool and delegate_task", () => {
 		);
 		expect(eventTypes(events, result.taskId).filter((type) => type === "started")).toHaveLength(1);
 		expect(eventTypes(events, result.taskId).filter((type) => type === "completed")).toHaveLength(1);
+	});
+
+	it("does not attach default turn or token limits to unknown-profile failures", async () => {
+		const { pool } = await createCoordinator();
+		const result = await pool.delegateTask({ task: "Review files", profile: "missing-profile" });
+
+		expect(result.status).toBe("failed");
+		expect(result.error?.code).toBe("profile_not_found");
+		expect(result.budget.maxTurns).toBeUndefined();
+		expect(result.budget.maxTokens).toBeUndefined();
+		expect(result.budget.timeoutMs).toBe(180_000);
 	});
 
 	it("filters tools, Skills, file modification boundaries, and recursive delegation", async () => {
