@@ -76,6 +76,13 @@ describe("buildSystemPrompt", () => {
 			);
 			expect(prompt).toContain("present a concise bulleted execution outline before using tools or making changes");
 			expect(prompt).toContain(
+				"When the user asks for a plan for a large project whose implementation is expected to be roughly 500 lines or more",
+			);
+			expect(prompt).toContain(
+				"a main plan file containing phase overviews, milestone implementation summaries, and an index linking to separate detailed sub-plan files for each module",
+			);
+			expect(prompt).toContain("do not place the entire plan in one monolithic file");
+			expect(prompt).toContain(
 				"When a missing prerequisite needs system-level installation (for example Cloudflare tooling)",
 			);
 			expect(prompt).toContain("do not fall back to a user-local install, downloaded binary, or PATH workaround");
