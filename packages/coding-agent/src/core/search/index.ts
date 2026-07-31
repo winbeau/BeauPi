@@ -39,6 +39,7 @@ export {
 } from "./tools.ts";
 export * from "./types.ts";
 export {
+	isBlockedWebAddress,
 	SafeWebClient,
 	type SafeWebClientOptions,
 	type SafeWebResponse,

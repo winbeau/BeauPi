@@ -15,7 +15,7 @@ M0–M10 已完成。近期开发转入阶段 12（M11）多 Agent Workflow：
 3. 将真实节点状态接入现有 Monitor、Task Ledger、Todo、Footer 和统一 Tool renderer。
 4. Workflow 稳定后再推进后台自动唤醒和受控 sudo。
 
-M10 已提供五种确定性 Policy 决策、等价检查签名、失败/fallback 预算、敏感路径与普通用户边界、Search-to-Shell 阻断、TUI/SDK/RPC confirm，以及 Session/Compact/branch/受控子 Agent 一致性。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
+M10 已提供确定性分类、等价检查签名、失败/fallback 预算诊断、敏感路径与普通用户 advisory、Search-to-Shell advisory，以及 Session/Compact/branch 一致性。Policy authorization 始终返回 `execute: true`，不发起 TUI/SDK/RPC confirmation；当前执行或最近 Policy fact 的提示只显示在 Footer。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
 
 ## 阶段 1：BeauPi 基础整合
 
@@ -162,7 +162,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - tmux capture 使用增量 cursor，完整日志写入文件
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
-- 第一版按受信任 Target 的 OpenSSH 配置身份执行，允许 AutoDL 等平台直接提供的 `root` 登录；仍阻止 sudo、su 等登录后提权或身份切换
+- 第一版按受信任 Target 的 OpenSSH 配置身份执行，允许 AutoDL 等平台直接提供的 `root` 登录；能够明确解析为直接执行的 sudo/su/doas/pkexec 登录后身份切换只由 Policy 分类并显示 advisory，不由 Policy 阻断
 - 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
 - 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 
@@ -217,16 +217,16 @@ M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案
 
 - 命令和错误分类
 - 等价操作签名
-- 缺少依赖、权限、认证、网络和超时停止策略
+- 缺少依赖、权限、认证、网络和超时的确定性分类与 advisory
 - Shell、远程执行和网络 fallback 预算
 - Session 恢复、分支切换和并发调用下的策略事实一致性
-- Policy block/confirm/replace/pause 状态接入统一 Tool 状态组件
-- confirm 复用阶段 10 的稳定交互接口，但与普通澄清问题保留不同 details
+- Policy advisory 接入 Footer 工作区行，不改变统一 Tool 状态组件
+- 不发起 Policy confirm，也不复用阶段 10 的交互接口
 - 明确不增加专用 Git Tools，普通 Git 操作继续走现有 Bash 能力
 
-验收：达到失败或 fallback 预算后 Agent 暂停并报告原因；工作区相关事实未变化时不重复执行等价检查；Policy block/confirm/replace/pause 在本地、远程和网络路径上行为一致。
+验收：达到失败或 fallback 预算、出现敏感/特权/terminal/Search fallback 条件时，原操作仍执行并产生非敏感 advisory；Policy 不调用交互 handler；advisory 只在 Footer 显示；本地、远程和网络路径行为一致。
 
-M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operator/pipeline/redirection/multiline-aware Shell 分类和脱敏 hash 签名；本地/Remote/terminal/Search 统一失败预算；sudo/su 等身份切换阻断；敏感路径、工作区/远程边界和 symlink confirm；专用 Tool replacement 与 Search-to-Shell pause；版本化 TUI/SDK/RPC confirm；Task Ledger/Session/Compact/branch 恢复；以及受控子 Agent `policyRequest`。faux/fake 测试覆盖并发 revision、取消、无 handler、RPC、renderer、暗/亮主题和 40/80/120/160 列。
+M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operator/pipeline/redirection/multiline-aware Shell 分类和脱敏 hash 签名；本地/Remote/terminal/Search 统一失败预算诊断；明确解析的直接 sudo/su/doas/pkexec、敏感路径、工作区/远程边界、symlink、专用 Tool 推荐与 Search-to-Shell fallback advisory；Task Ledger/Session/Compact/branch 恢复，以及旧 Session Policy details 解析兼容。faux/fake 测试覆盖并发 revision、取消、handler 不调用、受控子 Agent、Footer、普通 Tool renderer、暗/亮主题和 40/80/120/160 列。
 
 ## 阶段 12：多 Agent Workflow
 
@@ -321,6 +321,6 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 7. SSH/tmux 远程执行并接入 Monitor Runtime（已完成）
 8. 一个搜索 Provider（已完成）
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
-10. Policy Engine：重复命令、失败预算和等价 fallback 阻断（已完成）
+10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成）
 
-当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择和 Policy Engine 闭环。下一步推进 M11 Workflow，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor 和共享 Runtime 生命周期；自动唤醒与 sudo 仍不提前实现。
+当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择和 advisory-only Policy Engine 闭环。下一步推进 M11 Workflow，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor 和共享 Runtime 生命周期；自动唤醒与结构化 sudo 仍不提前实现。

@@ -115,7 +115,8 @@ web_fetch(url)
     "searxng": {
       "endpoint": "https://search.example.com/search",
       "timeoutMs": 15000,
-      "maxResults": 10
+      "maxResults": 10,
+      "engines": ["bing", "yep"]
     },
     "cache": {
       "queryTtlMs": 300000,
@@ -134,6 +135,8 @@ web_fetch(url)
   }
 }
 ```
+
+`engines` 可选，用于限定当前 SearXNG 实例已启用且稳定的搜索引擎；当默认引擎持续触发 CAPTCHA 或 rate limit 时，可选择实例中可用的引擎。SearXNG 返回全部引擎 suspended/unresponsive 且没有结果时，BeauPi 会返回结构化 `rate_limited`/`connection` 错误，不再误报为空搜索成功。
 
 endpoint 也可通过环境变量配置：
 
@@ -160,27 +163,29 @@ BEAUPI_SEARXNG_ENDPOINT
 
 `web_search` 只返回标题、URL、snippet 和搜索级引用；snippet 不是已验证正文。`web_fetch` 支持 HTML、纯文本和 JSON，返回正文级引用和 SHA-256 content hash。大正文只向模型返回最多 2,000 行/50 KiB，完整 Markdown 写入临时文件；同一任务内相同 content hash 不重复注入。
 
-`web_fetch` 会拒绝 URL credentials、非 HTTP(S) 协议、localhost、loopback、私网、link-local、保留地址和云 metadata 目标，并在每次重定向后重新执行 DNS/IP 安全验证。PDF 提取不属于 M8。
+`web_fetch` 会拒绝 URL credentials、非 HTTP(S) 协议、localhost、loopback、私网、link-local、保留地址和云 metadata 目标，并在每次重定向后重新执行 DNS/IP 安全验证。IPv4/IPv6 地址分别校验，避免 IPv4-mapped IPv6 规则误伤全部公网 IPv4；存在标准 `HTTP_PROXY`/`HTTPS_PROXY` 时，仍先验证目标 DNS，再通过固定目标 IP、原始 Host 和 TLS SNI 使用代理，避免代理侧重新解析绕过 SSRF 边界。PDF 提取不属于 M8。
 
-达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，不应改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。M10 Policy Runtime 会在通用 Bash、Remote 或 terminal fallback 执行前返回 `pause`；存在适用的专用 Tool 时返回 `replace`，但不会自动执行 replacement。
+达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，Search Runtime 自身不会改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。如果 Agent 随后显式调用通用 Bash、Remote 或 terminal fallback，M10 Policy Runtime 只在 Footer 记录 advisory，不阻断执行；存在适用的专用 Tool 时也只提示推荐 Tool。
 
 Coordinator 和受控 `researcher` 子 Agent 共享同一 Search Runtime/cache。可通过普通 Tool allowlist/denylist 明确启用或禁用 `web_search`、`web_fetch`。
 
 ## 执行策略
 
-M10 默认通过现有 Tool 生命周期管理本地文件操作、Bash、Remote、terminal 和 Search。Policy 结果为：
+M10 默认通过现有 Tool 生命周期分类本地文件操作、Bash、Remote、terminal 和 Search。Policy authorization 对所有能够分类的受管操作都返回 `execute: true`，新的 Policy fact 统一记录 `decision.action: "allow"`。以下情况只产生非敏感 advisory：
 
 ```text
-allow    直接执行
-block    明确禁止，例如 sudo/su 等身份切换或未变化的重复检查
-confirm  敏感路径或执行边界需要一次授权
-replace  应改用已有专用 Tool；不会自动执行
-pause    失败/fallback 预算、Search fallback 或缺少交互通道要求停止
+重复或等价失败检查
+失败类别与 fallback 预算达到阈值
+敏感路径、工作区外写入和 symlink 边界
+能够明确解析为直接执行的 sudo/su/doas/pkexec
+terminal 未知、超长或待处理输入状态
+Search 失败后的 Shell/Remote/terminal 网络 fallback
+存在更合适的专用 Tool
 ```
 
-Policy confirm 在 TUI 中显示独立选择框；SDK 使用 `policyHandler`，RPC 使用 `method: "policyConfirm"` 的 `extension_ui_request`。Print/JSON、无 handler SDK 和受控子 Agent 不等待 stdin：前两者立即返回 paused `interaction_required`，子 Agent 将 `policyRequest` 放入 `delegate_task` 结构化结果交给 Coordinator。
+Policy 不显示确认选择框，不调用 SDK/RPC `policyHandler`，不因无交互通道暂停，也不向受控子 Agent 返回 `policyRequest`。Policy advisory 只显示在 Footer 工作区行，内容来自当前执行或最近 Policy fact；Tool renderer 和 Todo 不展示 Policy block/confirm/replace/pause 状态。
 
-Policy fact 使用 `version: 1` details 写入正常 Session/Task Ledger 生命周期。恢复、Compact 和 branch 切换不读取全局隐藏状态，只从当前 branch 重建。已配置 SSH Target 本身可以使用平台提供的 root 登录身份，但本地或登录后 sudo/su/doas/pkexec 仍直接 block。
+Policy fact 使用 `version: 1` details 写入正常 Session/Task Ledger 生命周期。恢复、Compact 和 branch 切换不读取全局隐藏状态，只从当前 branch 重建；旧 Session 中的 block/confirm/replace/pause action、status 和 confirmation details 继续可解析，但不影响当前执行或 UI。已配置 SSH Target 本身可以使用平台提供的 root 登录身份；本地或登录后的身份切换命令由执行后端按调用者权限处理，Policy 只做提示。
 
 ## 交互式询问
 
@@ -232,4 +237,4 @@ BeauPi M0–M10 已完成。当前按优先主线推进：
 3. M13：最后实现受控权限能力。
 4. M14：功能稳定后再决定独立 npm 发行物和二进制方案。
 
-M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime 和 M10 Policy Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、Policy/clarification request 和生命周期事件与 Coordinator 交互。
+M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime 和 M10 Policy Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、clarification request 和生命周期事件与 Coordinator 交互。

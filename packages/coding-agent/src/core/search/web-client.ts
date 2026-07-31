@@ -2,7 +2,7 @@ import type { LookupAddress, LookupOptions } from "node:dns";
 import { lookup as defaultLookup } from "node:dns/promises";
 import type { LookupFunction } from "node:net";
 import { BlockList, isIP } from "node:net";
-import { Agent, request } from "undici";
+import { Agent, ProxyAgent, request } from "undici";
 import { classifyNetworkError, createTimedSignal, raceWithSignal, SearchRuntimeError } from "./errors.ts";
 import { canonicalizeWebUrl } from "./normalize.ts";
 import type { SearchDiagnostic } from "./types.ts";
@@ -14,7 +14,7 @@ const METADATA_HOSTNAMES = new Set([
 	"instance-data.ec2.internal",
 ]);
 
-const BLOCKED_ADDRESSES = new BlockList();
+const BLOCKED_IPV4_ADDRESSES = new BlockList();
 for (const [network, prefix] of [
 	["0.0.0.0", 8],
 	["10.0.0.0", 8],
@@ -31,8 +31,9 @@ for (const [network, prefix] of [
 	["224.0.0.0", 4],
 	["240.0.0.0", 4],
 ] as const) {
-	BLOCKED_ADDRESSES.addSubnet(network, prefix, "ipv4");
+	BLOCKED_IPV4_ADDRESSES.addSubnet(network, prefix, "ipv4");
 }
+const BLOCKED_IPV6_ADDRESSES = new BlockList();
 for (const [network, prefix] of [
 	["::", 128],
 	["::1", 128],
@@ -45,7 +46,7 @@ for (const [network, prefix] of [
 	["fe80::", 10],
 	["ff00::", 8],
 ] as const) {
-	BLOCKED_ADDRESSES.addSubnet(network, prefix, "ipv6");
+	BLOCKED_IPV6_ADDRESSES.addSubnet(network, prefix, "ipv6");
 }
 
 export type WebDnsLookup = (hostname: string) => Promise<LookupAddress[]>;
@@ -54,6 +55,8 @@ export interface SafeWebClientOptions {
 	lookup?: WebDnsLookup;
 	/** Test-only hostname exceptions still pin DNS to the injected resolved address. */
 	allowHostnames?: ReadonlySet<string>;
+	/** Environment source for standard HTTP(S)_PROXY and NO_PROXY settings. */
+	environment?: NodeJS.ProcessEnv;
 }
 
 export interface SafeWebResponse {
@@ -73,10 +76,10 @@ function blockedTarget(message: string): SearchRuntimeError {
 	});
 }
 
-function isBlockedAddress(address: string): boolean {
+export function isBlockedWebAddress(address: string): boolean {
 	const family = isIP(address);
-	if (family === 4) return BLOCKED_ADDRESSES.check(address, "ipv4");
-	if (family === 6) return BLOCKED_ADDRESSES.check(address, "ipv6");
+	if (family === 4) return BLOCKED_IPV4_ADDRESSES.check(address, "ipv4");
+	if (family === 6) return BLOCKED_IPV6_ADDRESSES.check(address, "ipv6");
 	return true;
 }
 
@@ -99,6 +102,79 @@ function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
 		}
 		callback(null, eligible[0]!.address, eligible[0]!.family);
 	};
+}
+
+function firstEnvironmentValue(environment: NodeJS.ProcessEnv, names: readonly string[]): string | undefined {
+	for (const name of names) {
+		const value = environment[name]?.trim();
+		if (value) return value;
+	}
+	return undefined;
+}
+
+function noProxyPatternMatches(hostname: string, pattern: string): boolean {
+	if (pattern === "*") return true;
+	if (pattern.startsWith("*.")) return hostname.endsWith(pattern.slice(1));
+	if (pattern.startsWith(".")) return hostname === pattern.slice(1) || hostname.endsWith(pattern);
+	if (pattern.includes("*")) {
+		const expression = pattern
+			.split("*")
+			.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+			.join(".*");
+		return new RegExp(`^${expression}$`, "i").test(hostname);
+	}
+	return hostname === pattern || hostname.endsWith(`.${pattern}`);
+}
+
+function noProxyMatches(url: URL, value: string | undefined): boolean {
+	if (!value) return false;
+	const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	const port = url.port || (url.protocol === "https:" ? "443" : "80");
+	for (const rawEntry of value.split(",")) {
+		let entry = rawEntry.trim().toLowerCase();
+		if (!entry) continue;
+		if (entry === "<local>" && !hostname.includes(".")) return true;
+		let entryPort: string | undefined;
+		if (entry.startsWith("[")) {
+			const closing = entry.indexOf("]");
+			if (closing !== -1) {
+				entryPort = entry[closing + 1] === ":" ? entry.slice(closing + 2) : undefined;
+				entry = entry.slice(1, closing);
+			}
+		} else {
+			const colon = entry.lastIndexOf(":");
+			if (colon !== -1 && entry.indexOf(":") === colon && /^\d+$/.test(entry.slice(colon + 1))) {
+				entryPort = entry.slice(colon + 1);
+				entry = entry.slice(0, colon);
+			}
+		}
+		if (entryPort && entryPort !== port) continue;
+		if (noProxyPatternMatches(hostname, entry)) return true;
+	}
+	return false;
+}
+
+function proxyUrlFor(url: URL, environment: NodeJS.ProcessEnv): string | undefined {
+	const noProxy = firstEnvironmentValue(environment, ["NO_PROXY", "no_proxy"]);
+	if (noProxyMatches(url, noProxy)) return undefined;
+	const configured =
+		url.protocol === "https:"
+			? firstEnvironmentValue(environment, [
+					"HTTPS_PROXY",
+					"https_proxy",
+					"HTTP_PROXY",
+					"http_proxy",
+					"ALL_PROXY",
+					"all_proxy",
+				])
+			: firstEnvironmentValue(environment, ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]);
+	if (!configured) return undefined;
+	try {
+		const proxy = new URL(configured);
+		return ["http:", "https:", "socks:", "socks5:"].includes(proxy.protocol) ? proxy.toString() : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
@@ -150,11 +226,13 @@ function httpFailure(statusCode: number, retryAfter: string | undefined): Search
 export class SafeWebClient {
 	private readonly lookup: WebDnsLookup;
 	private readonly allowHostnames: ReadonlySet<string>;
+	private readonly environment: NodeJS.ProcessEnv;
 
 	constructor(options: SafeWebClientOptions = {}) {
 		this.lookup =
 			options.lookup ?? (async (hostname) => await defaultLookup(hostname, { all: true, verbatim: true }));
 		this.allowHostnames = options.allowHostnames ?? new Set();
+		this.environment = options.environment ?? process.env;
 	}
 
 	async fetch(
@@ -176,24 +254,43 @@ export class SafeWebClient {
 		let redirects = 0;
 		try {
 			while (true) {
-				const url = await this.validateAndResolve(current, timed.signal);
-				const addresses = url.addresses;
-				const dispatcher = new Agent({
-					connections: 1,
-					connectTimeout: options.timeoutMs,
-					headersTimeout: options.timeoutMs,
-					bodyTimeout: options.timeoutMs,
-					maxResponseSize: options.maxBytes + 1,
-					connect: { lookup: pinnedLookup(addresses) },
-				});
+				const resolved = await this.validateAndResolve(current, timed.signal);
+				const originalUrl = new URL(resolved.url);
+				const proxyUrl = resolved.allowPrivate ? undefined : proxyUrlFor(originalUrl, this.environment);
+				const pinnedAddress = resolved.addresses.find((address) => address.family === 4) ?? resolved.addresses[0]!;
+				const requestUrl = new URL(originalUrl);
+				if (proxyUrl) requestUrl.hostname = pinnedAddress.address;
+				const dispatcher = proxyUrl
+					? new ProxyAgent({
+							uri: proxyUrl,
+							proxyTunnel: originalUrl.protocol === "https:",
+							connections: 1,
+							connectTimeout: options.timeoutMs,
+							headersTimeout: options.timeoutMs,
+							bodyTimeout: options.timeoutMs,
+							maxResponseSize: options.maxBytes + 1,
+							requestTls: originalUrl.protocol === "https:" ? { servername: originalUrl.hostname } : undefined,
+						})
+					: new Agent({
+							connections: 1,
+							connectTimeout: options.timeoutMs,
+							headersTimeout: options.timeoutMs,
+							bodyTimeout: options.timeoutMs,
+							maxResponseSize: options.maxBytes + 1,
+							autoSelectFamily: true,
+							autoSelectFamilyAttemptTimeout: 250,
+							connect: { lookup: pinnedLookup(resolved.addresses) },
+						});
 				try {
-					const response = await request(url.url, {
+					const response = await request(requestUrl, {
 						method: "GET",
 						dispatcher,
 						signal: timed.signal,
 						headers: {
 							accept: "text/html, text/plain, application/json;q=0.9",
 							"accept-encoding": "identity",
+							"user-agent": "BeauPi-web-fetch/1.0 (+https://github.com/earendil-works/pi)",
+							...(proxyUrl ? { host: originalUrl.host } : {}),
 						},
 						headersTimeout: options.timeoutMs,
 						bodyTimeout: options.timeoutMs,
@@ -211,7 +308,7 @@ export class SafeWebClient {
 							});
 						}
 						try {
-							current = canonicalizeWebUrl(new URL(location, url.url).toString());
+							current = canonicalizeWebUrl(new URL(location, resolved.url).toString());
 						} catch {
 							throw new SearchRuntimeError({
 								code: "invalid_url",
@@ -265,7 +362,7 @@ export class SafeWebClient {
 	private async validateAndResolve(
 		input: string,
 		signal: AbortSignal,
-	): Promise<{ url: string; addresses: LookupAddress[] }> {
+	): Promise<{ url: string; addresses: LookupAddress[]; allowPrivate: boolean }> {
 		let url: URL;
 		try {
 			url = new URL(input);
@@ -296,12 +393,12 @@ export class SafeWebClient {
 		if (addresses.length === 0) {
 			throw new SearchRuntimeError({ code: "dns", severity: "error", message: "DNS returned no addresses." });
 		}
-		if (!allowPrivate && addresses.some((address) => isBlockedAddress(address.address))) {
+		if (!allowPrivate && addresses.some((address) => isBlockedWebAddress(address.address))) {
 			throw blockedTarget(
 				"The web target resolves to a loopback, private, link-local, metadata, or reserved address.",
 			);
 		}
-		return { url: canonicalizeWebUrl(url.toString()), addresses };
+		return { url: canonicalizeWebUrl(url.toString()), addresses, allowPrivate };
 	}
 }
 

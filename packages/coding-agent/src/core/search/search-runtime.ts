@@ -146,8 +146,13 @@ function budgetDiagnostic(
 	};
 }
 
-function queryCacheKey(provider: string, query: string): string {
-	return `${provider}\0${canonicalSearchQuery(query)}`;
+function queryCacheKey(
+	provider: string,
+	query: string,
+	candidateLimit: number,
+	includeDomains: readonly string[],
+): string {
+	return [provider, canonicalSearchQuery(query), String(candidateLimit), includeDomains.join(",")].join("\0");
 }
 
 function searchCitation(result: SearchResult, fetchedAt: string): WebCitation {
@@ -351,6 +356,12 @@ export class SearchRuntime {
 			1,
 			Math.floor(input.maxResults ?? Math.min(config.searxng.maxResults, config.budget.maxResultsPerSearch)),
 		);
+		const includeDomains = normalizeDomains(input.includeDomains);
+		const excludeDomains = normalizeDomains(input.excludeDomains);
+		const providerCandidateLimit =
+			includeDomains.length > 0 || excludeDomains.length > 0
+				? 50
+				: Math.min(config.searxng.maxResults, config.budget.maxResultsPerSearch);
 		if (requestedResults > config.budget.maxResultsPerSearch) {
 			return failure([budgetDiagnostic("results")], "results");
 		}
@@ -390,7 +401,7 @@ export class SearchRuntime {
 			);
 		}
 		const provider = this.injectedProvider ?? new SearXNGProvider(config.searxng);
-		const key = queryCacheKey(provider.id, normalizedQuery);
+		const key = queryCacheKey(provider.id, normalizedQuery, providerCandidateLimit, includeDomains);
 		const cacheDiagnostics: SearchDiagnostic[] = [];
 		let cacheStatus: SearchCacheStatus = config.cache.queryTtlMs === 0 ? "disabled" : "miss";
 		let entry: SearchCacheEntry<CachedSearchValue> | undefined;
@@ -420,7 +431,15 @@ export class SearchRuntime {
 						provider.id,
 					);
 				}
-				const promise = this.fetchSearchFromProvider(provider, normalizedQuery, config, context.signal, key);
+				const promise = this.fetchSearchFromProvider(
+					provider,
+					normalizedQuery,
+					providerCandidateLimit,
+					includeDomains,
+					config,
+					context.signal,
+					key,
+				);
 				this.pendingSearches.set(key, promise);
 				try {
 					const network = await promise;
@@ -442,12 +461,10 @@ export class SearchRuntime {
 			}
 		}
 		const broadResults = entry.value.results;
-		const filtered = normalizeAndRankResults(
-			broadResults,
-			normalizedQuery,
-			normalizeDomains(input.includeDomains),
-			normalizeDomains(input.excludeDomains),
-		).slice(0, requestedResults);
+		const filtered = normalizeAndRankResults(broadResults, normalizedQuery, includeDomains, excludeDomains).slice(
+			0,
+			requestedResults,
+		);
 		const remaining = this.budget.remainingCharacters(context.budgetScopeId, config.budget);
 		const fitted = fitSearchResults(filtered, remaining);
 		this.budget.consumeCharacters(context.budgetScopeId, config.budget, fitted.characters);
@@ -595,6 +612,8 @@ export class SearchRuntime {
 	private async fetchSearchFromProvider(
 		provider: SearchProvider,
 		query: string,
+		candidateLimit: number,
+		includeDomains: readonly string[],
 		config: ResolvedSearchConfig,
 		signal: AbortSignal | undefined,
 		key: string,
@@ -602,7 +621,7 @@ export class SearchRuntime {
 		const timed = createTimedSignal(signal, Math.min(config.searxng.timeoutMs, config.budget.timeoutMs));
 		try {
 			const response = await provider.search(
-				{ query, maxResults: Math.min(config.searxng.maxResults, config.budget.maxResultsPerSearch) },
+				{ query, maxResults: candidateLimit, includeDomains },
 				{ signal: timed.signal, timeoutMs: Math.min(config.searxng.timeoutMs, config.budget.timeoutMs) },
 			);
 			const results = normalizeAndRankResults(response.results, query);

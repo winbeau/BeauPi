@@ -96,6 +96,7 @@ export interface SearXNGSettings {
 	endpoint?: string;
 	timeoutMs?: number;
 	maxResults?: number;
+	engines?: string[];
 	apiKeyEnv?: string;
 	apiKeyHeader?: string;
 	apiKeyPrefix?: string;
@@ -132,6 +133,7 @@ export interface ResolvedSearchConfig {
 		endpoint?: string;
 		timeoutMs: number;
 		maxResults: number;
+		engines: string[];
 		apiKey?: string;
 		apiKeyRequired: boolean;
 		apiKeyHeader: string;

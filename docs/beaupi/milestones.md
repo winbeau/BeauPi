@@ -47,7 +47,7 @@
 | M7 | 建立 SSH/tmux 远程执行 | Execution Target、SSH、tmux、远程 Tool | M3、M6 |
 | M8 | 建立受预算搜索能力 | `web_search`、`web_fetch`、引用与缓存 | M3 |
 | M9 | 建立交互式询问闭环 | `ask_user_question`、单选/多选、自由输入、review | M1、M2 |
-| M10 | 建立确定性执行策略 | Policy Engine、失败预算、fallback 阻断 | M2、M6、M7、M8、M9 |
+| M10 | 建立确定性执行策略 | Policy Engine、失败预算、Footer advisory | M2、M6、M7、M8、M9 |
 | M11 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M10 |
 | M12 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M10 |
 | M13 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M10、M12 |
@@ -475,15 +475,15 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 ### 验收记录（2026-07-30）
 
 - `SearchRuntime` 由现有 `AgentSessionServices` 按 cwd 持有，`createAgentSession()`、默认 Tool registry 和 `AgentPool` 复用同一实例；Coordinator 与受控 `researcher` 子 Agent 共享查询/URL 缓存和预算 scope，不复制缓存到 Session branch。
-- `SearchProvider` 固化规范化结果接口；第一版只实现 SearXNG JSON API。endpoint、Provider timeout、结果数、查询/正文 TTL 和全部 M8 预算来自现有 Settings，endpoint/API key 也可由环境变量注入，secret 不进入 Session、Tool details、缓存或诊断。
+- `SearchProvider` 固化规范化结果接口；第一版只实现 SearXNG JSON API。endpoint、Provider timeout、结果数、可选 engine allowlist、查询/正文 TTL 和全部 M8 预算来自现有 Settings，endpoint/API key 也可由环境变量注入，secret 不进入 Session、Tool details、缓存或诊断；全部引擎 suspended/unresponsive 且无结果时返回结构化错误。
 - `web_search` 使用 TypeBox/Compile 校验，执行 NFKC 查询规范化、规范 URL 去重、include/exclude domain 过滤和可解释的 query-domain/requested-domain 排序；snippet 明确保留为未验证发现信息。
-- `web_fetch` 只允许 HTTP/HTTPS，拒绝 URL credentials、localhost、loopback、私网、link-local、保留地址和 metadata hostname；DNS 结果被验证并固定到 Undici lookup，每次重定向重新校验，支持 timeout、AbortSignal、响应字节和重定向上限。
+- `web_fetch` 只允许 HTTP/HTTPS，拒绝 URL credentials、localhost、loopback、私网、link-local、保留地址和 metadata hostname；IPv4/IPv6 DNS 结果分别验证并固定到 Undici lookup，每次重定向重新校验。标准 HTTP(S) proxy 路径固定已验证目标 IP，并保留原始 Host/TLS SNI；支持 timeout、AbortSignal、响应字节和重定向上限。
 - HTML 使用内置、无脚本执行的正文转换器移除 script/style/nav/header/footer/aside 等噪声并输出 Markdown；text/JSON 使用受控解析。PDF 和其他 content type 返回结构化 unsupported 诊断。
 - 文件缓存使用版本化、原子写入的 query/URL JSON entry，保存 canonical key、source/URL、fetchedAt/expiresAt、content hash 和规范化结果；损坏/过期 entry 安全失效并重建，并发相同请求只访问一次网络。
 - 大正文沿用 2,000 行/50 KiB 模型输出上限，完整 Markdown 写入权限受限的临时文件；相同 content hash 在同一任务预算 scope 中只注入一次正文。
 - 搜索级和正文级 `WebCitation` 进入 Tool details、Session 与现有 Task Ledger；Task Ledger 记录调用状态、cache hit、预算、诊断和引用，子 Agent 只向 Coordinator 返回结构化引用，不返回 transcript。
 - M8 预算确定性限制单次结果数、单任务 query/fetch/Provider 尝试、单次 fetch 字节、总输入字符、timeout 和 redirects；达到限制后不继续网络访问，并通过 Tool prompt guideline 禁止 curl/wget/Python/Node/Bash 等价 fallback。
-- M8 本身不实现通用 Shell Policy Engine；M10 已在现有 Tool 生命周期中补齐 Bash、Remote 和 terminal 网络 fallback 的强制阻断。
+- M8 本身不实现通用 Shell Policy Engine；M10 在现有 Tool 生命周期中分类 Bash、Remote 和 terminal 网络 fallback，并只记录 Footer advisory。
 - fake provider、fake HTTP server、可控时钟和临时目录测试覆盖成功、空结果、参数、排序/去重、缓存、正文提取、hash/截断、错误分类、SSRF、预算、Session 恢复、分支预算重建、子 Agent 隔离/引用传递及 80/120/160 列 renderer。
 
 ---
@@ -558,34 +558,34 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 
 ### 目标
 
-把重复命令、失败预算、权限边界和等价 fallback 从模型提示转化为确定性执行策略，并覆盖本地、远程和网络执行。
+把重复命令、失败预算、敏感/权限边界和等价 fallback 从模型提示转化为确定性分类与 advisory，并覆盖本地、远程和网络执行。
 
 ### 交付物
 
 - 命令与错误分类
 - 等价操作签名
 - Shell、远程执行、网络和失败预算
-- `PolicyDecision`
+- `PolicyDecision` 与 advisory details；新的 decision 只使用 `action: "allow"`
 - Session 恢复、分支切换和并发调用下的策略事实一致性
-- 缺少依赖、权限不足、认证失败、限流和超时的停止策略
-- Policy block/confirm/replace/pause 状态接入现有 Tool renderer 和 Task Ledger
-- confirm 复用 M9 的稳定交互接口，但与普通澄清问题保持不同结构化 details
+- 缺少依赖、权限不足、认证失败、限流和超时的分类与 advisory
+- Policy details 接入现有 Task Ledger，当前执行或最近 Policy fact 的 advisory 只接入 Footer
+- 不发起 Policy confirm，不调用 M9、SDK 或 RPC 交互接口
 - 明确不增加专用 Git Tools；普通 Git 操作继续使用现有 Bash 能力和仓库开发规则
 
 ### 验收标准
 
-工作区相关事实未变化时不会重复运行等价检查；达到失败或 fallback 预算后 Agent 暂停并给出明确原因；本地、远程和网络路径使用一致的 Policy 决策语义。
+工作区相关事实未变化时，重复等价检查仍执行并记录 advisory；达到失败或 fallback 预算后原操作继续执行；敏感、特权、terminal 和网络 fallback 条件使用一致的非阻断 Policy 语义。
 
 ### 验收记录（2026-07-30）
 
-- `core/policy/` 提供集中默认预算、保守 Shell/路径/错误分类、稳定脱敏签名和 Session-scoped 串行 Policy Runtime；决策统一为 `allow`、`block`、`confirm`、`replace`、`pause`。
-- Tool registry wrapper 和用户 Bash 共用同一授权/finalize 生命周期；本地 read/grep/find/ls/write/edit、Bash、Remote、terminal、target selection 和 Search facts 都进入现有 Session/Task Ledger。
+- `core/policy/` 提供集中默认预算、保守 Shell/路径/错误分类、稳定脱敏签名和 Session-scoped 串行 Policy Runtime；新的 Policy fact 始终记录 `decision.action: "allow"`。
+- Tool registry wrapper 和用户 Bash 共用同一分类/finalize 生命周期；本地 read/grep/find/ls/write/edit、Bash、Remote、terminal、target selection 和 Search facts 都进入现有 Session/Task Ledger。
 - quote、escaped newline、operator、pipeline、redirect、multiline、常见 wrapper/解释器、Git inspect/mutation、敏感路径、远程绝对写入和本地 symlink 边界已有定向分类测试；Policy details 只保留 hash、类别和非敏感摘要。
-- 等价只读检查在目标 revision 未变化时阻断；不透明/修改操作不按文本去重；并发 read/mutation finalize 不回滚 revision；失败、类别和 fallback 预算原子更新，取消不消耗普通失败预算。
-- sudo/su/doas/pkexec 等登录后身份切换直接 block；已配置 Target 本身的 root 登录保持合法。Search Runtime 失败后，curl/wget/Python/Node/Bash/terminal 等价 fallback 强制 pause；专用 Tool replacement 不自动执行。
-- confirm 使用独立 `version: 1` Policy request/result，复用 TUI custom interaction、SDK callback 和 RPC request/response transport；无 handler 立即 pause，受控子 Agent 只返回 `policyRequest`。
-- Tool renderer 和 Task Ledger 支持 blocked/confirm/replace/paused；Session 文件恢复、Compact、branch 切换、extension details replacement、用户 Bash custom facts 和 AgentPool 边界均有 faux/fake 测试。
-- 已单独运行 Policy Runtime、AgentSession、RPC、renderer、AgentPool、Task Ledger 和受影响回归测试；最终 `npm run check` 通过。
+- 等价只读检查在目标 revision 未变化时仍执行并记录 advisory；不透明/修改操作不按文本去重；并发 read/mutation finalize 不回滚 revision；失败、类别和 fallback 预算原子更新，取消不消耗普通失败预算。
+- 能够明确解析为直接执行的 sudo/su/doas/pkexec、敏感路径、工作区/远程边界、symlink、terminal 未知/超长/待处理输入、Search-to-Shell fallback 和专用 Tool 推荐都只产生 advisory。
+- Policy 不发起 confirmation、不调用 TUI/SDK/RPC handler，也不向受控子 Agent 返回 `policyRequest`；旧 SDK 输入保留为 no-op，RPC Client 对旧 `policyConfirm` 请求只返回 cancelled。
+- 当前执行或最近 Policy fact 的 advisory 只显示在 Footer；Tool renderer 不显示 blocked/confirm/replace/paused。旧 Session 中的 Policy action/status/confirmation details 保持可解析；Session 文件恢复、Compact、branch 切换、extension details replacement、用户 Bash custom facts 和 AgentPool 边界均有 faux/fake 测试。
+- Policy Runtime、AgentSession、renderer、AgentPool、Task Ledger、完整非 E2E 测试和 `npm run check` 均作为验收检查。
 
 ---
 
@@ -640,7 +640,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令并�
 - Agent 忙碌时事件进入 follow-up 队列
 - 多个同时完成事件不会并发启动多个 Coordinator turn
 - Session 恢复后不重复消费事件
-- 后台任务继承当前用户模式，不能绕过权限策略
+- 后台任务继承当前执行身份和后端权限；Policy 只记录 advisory，不作为权限强制边界
 
 ### 验收标准
 

@@ -9,7 +9,7 @@ import { StdinBuffer } from "./stdin-buffer.ts";
 const cjsRequire = createRequire(import.meta.url);
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
-const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
+const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;1;0\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 const APPLE_TERMINAL_SHIFT_ENTER_SEQUENCE = "\x1b[13;2u";
 const DESIRED_KITTY_KEYBOARD_PROTOCOL_FLAGS = 7;
@@ -508,7 +508,7 @@ export class ProcessTerminal implements Terminal {
 
 	setProgress(active: boolean): void {
 		if (active) {
-			// OSC 9;4;3 - indeterminate progress
+			// OSC 9;4;1;0 - determinate progress at the minimum value
 			process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 			if (!this.progressInterval) {
 				this.progressInterval = setInterval(() => {

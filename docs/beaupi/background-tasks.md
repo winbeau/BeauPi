@@ -210,8 +210,8 @@ interface ProgressReview {
 
 ## 安全
 
-- 后台任务继承当前用户模式，不能绕过 sudo 策略
-- Sudo 后台任务必须通过结构化 `privileged_exec` 创建
+- 后台任务继承当前执行身份和后端权限；advisory-only Policy Runtime 不提供提权或强制阻断
+- 未来的 Sudo 后台任务必须通过结构化 `privileged_exec` 创建
 - 任务记录启动 Agent、Session、工作目录和完整参数
 - 限制最大并发后台任务数
 - 取消时终止整个进程树

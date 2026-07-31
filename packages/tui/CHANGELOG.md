@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed active OSC 9;4 terminal progress to stay at the minimum determinate value instead of switching terminal tabs to an indeterminate or visually full indicator.
+
 ## [0.82.1] - 2026-07-25
 
 ## [0.82.0] - 2026-07-24

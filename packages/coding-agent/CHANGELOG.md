@@ -17,7 +17,7 @@
 - Added the interactive `/target-server` command for creating and updating user/project SSH execution targets, persisting non-secret OpenSSH configuration, and selecting the saved target immediately.
 - Added the BeauPi M8 web research loop with a configurable SearXNG provider, `web_search` and SSRF-safe `web_fetch` Tools, shared query/URL caching, stable citations, content-hash deduplication, deterministic network budgets, Task Ledger evidence, and controlled sub-agent access.
 - Added BeauPi M9 `ask_user_question` with strict bounded schemas, single/multi-select, built-in Other and notes editors, multi-question review, Markdown preview, configurable keybindings, versioned Session/Task Ledger facts, SDK/RPC callbacks, and controlled sub-agent clarification boundaries.
-- Added the M10 session-scoped, branch-aware Policy Runtime with deterministic `allow`/`block`/`confirm`/`replace`/`pause` decisions, conservative Shell/path/error classification, equivalent-check and fallback budgets, sudo/su and Search-to-Shell boundaries, versioned TUI/SDK/RPC confirmations, Task Ledger facts, and controlled sub-agent Policy requests.
+- Added the M10 session-scoped, branch-aware Policy Runtime with conservative Shell/path/error classification, stable redacted signatures, repeated-operation and failure/fallback advisories, Task Ledger facts, and current-branch Session restoration.
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 
 ### Changed
@@ -36,6 +36,7 @@
 - Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
 - Changed the default reviewer profile to use an independent 8192-token, 12-turn, 180-second review budget, skip automatic document-contract preflight for child prompts, and reserve `docs_resolve_task` for explicit document-driven audits.
 - Changed the BeauPi roadmap to mark the Policy Engine complete and advance the active milestone to multi-agent Workflow.
+- Changed Policy to advisory-only behavior: every managed operation reaches its original executor, former block/confirm/replace/pause conditions become non-sensitive Footer-only advisories, TUI/SDK/RPC confirmation handlers are not invoked, controlled sub-agents omit Policy requests, and Tool/Todo rendering ignores Policy status metadata while legacy Session Policy details remain parseable.
 
 ### Fixed
 
@@ -46,7 +47,12 @@
 - Fixed explicit clipboard environment overrides from being reclassified as WSL by host kernel detection.
 - Fixed `/skills` collision actions to target the selected Registry entry by ID, and clarified diagnostics for non-updateable local Skill sources.
 - Fixed `/target-server` field ordering and remote working-directory handling so SSH usernames are not confused with `remoteCwd`, relative paths resolve from the remote home, and absolute paths remain supported.
-- Fixed remote execution guidance to allow trusted targets whose configured OpenSSH login identity is `root`, such as provider-managed AutoDL instances, while continuing to block post-login privilege and identity changes.
+- Fixed remote execution guidance to allow trusted targets whose configured OpenSSH login identity is `root`, such as provider-managed AutoDL instances, while treating clearly parsed direct post-login sudo/su/doas/pkexec execution as non-blocking advisories.
+- Fixed terminal inspection, close, no-command creation, and pure control-character input cleanup so recovery remains available after command failures, and limited privilege advisories to clearly parsed direct sudo/su/doas/pkexec execution.
+- Fixed `noTools: "builtin"` session creation to disable all built-in runtime Tools, including question, document, monitor, remote, search, and sub-agent Tools, while preserving explicitly supplied extension/custom Tools.
+- Fixed `web_fetch` to keep IPv4 and IPv6 SSRF block lists separate, honor standard HTTP(S) proxy settings while pinning the validated target IP/Host/TLS SNI, and send an identifiable user agent, restoring access to common public sites without weakening private-target blocking.
+- Fixed SearXNG empty-success responses by supporting an explicit `search.searxng.engines` allowlist and reporting all-engine CAPTCHA, suspension, or transport failures as structured diagnostics instead of caching an empty success.
+- Fixed agent, Tool, Bash, and compaction activity from pushing OSC 9;4 terminal progress to an indeterminate or visually full state by keeping active progress at the minimum determinate value.
 
 ### Removed
 

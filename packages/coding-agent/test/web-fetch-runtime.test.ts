@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	canonicalizeWebUrl,
+	isBlockedWebAddress,
 	resolveSearchConfig,
 	SafeWebClient,
 	SearchCache,
@@ -161,6 +162,49 @@ function createRuntime(
 }
 
 describe("M8 web_fetch runtime", () => {
+	it("keeps public IPv4 and IPv6 reachable without weakening private-address blocking", () => {
+		for (const address of ["20.205.243.166", "151.101.195.42", "34.120.73.14", "8.8.8.8", "2606:4700:4700::1111"]) {
+			expect(isBlockedWebAddress(address), address).toBe(false);
+		}
+		for (const address of ["127.0.0.1", "169.254.169.254", "192.168.1.1", "::1", "::ffff:127.0.0.1", "2001:db8::1"]) {
+			expect(isBlockedWebAddress(address), address).toBe(true);
+		}
+	});
+
+	it("uses standard proxy settings with a validated pinned target address", async () => {
+		let proxyRequests = 0;
+		let proxyRequestUrl: string | undefined;
+		let proxyHost: string | undefined;
+		const proxy = createServer((request, response) => {
+			proxyRequests++;
+			proxyRequestUrl = request.url;
+			proxyHost = request.headers.host;
+			response
+				.writeHead(200, { "content-type": "text/html", connection: "close" })
+				.end("<main>proxied public content</main>");
+		});
+		const proxyPort = await listen(proxy);
+		const client = new SafeWebClient({
+			lookup: async (hostname) => [
+				{ address: hostname === "private.test" ? "127.0.0.1" : "93.184.216.34", family: 4 },
+			],
+			environment: { HTTP_PROXY: `http://127.0.0.1:${proxyPort}` },
+		});
+		const result = await client.fetch("http://public.test/article", {
+			timeoutMs: 100,
+			maxBytes: 10_000,
+			maxRedirects: 1,
+		});
+		expect(result.body.toString("utf-8")).toContain("proxied public content");
+		expect(proxyHost).toBe("public.test");
+		expect(proxyRequestUrl && new URL(proxyRequestUrl).hostname).toBe("93.184.216.34");
+
+		await expect(
+			client.fetch("http://private.test/secret", { timeoutMs: 100, maxBytes: 10_000, maxRedirects: 1 }),
+		).rejects.toMatchObject({ diagnostic: { code: "blocked_target" } });
+		expect(proxyRequests).toBe(1);
+	});
+
 	it("extracts HTML body as Markdown while removing scripts, styles, navigation noise, and duplicates", async () => {
 		const cacheDir = await tempDir();
 		const { port } = await setupServer();

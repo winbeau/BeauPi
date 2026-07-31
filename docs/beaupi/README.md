@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0–M10 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question` 和确定性 Policy Engine。当前优先主线转为 M11 多 Agent Workflow；自动唤醒和 sudo 继续后置。
+当前进度：M0–M10 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question` 和 advisory-only Policy Runtime。当前优先主线转为 M11 多 Agent Workflow；自动唤醒和 sudo 继续后置。
 
 ## 文档
 
@@ -37,9 +37,9 @@ M5–M10 已交付六个可直接使用的能力闭环：
 3. SSH/tmux 远程执行，并复用同一 Monitor Runtime
 4. 单一 SearXNG Provider 的 `web_search`/`web_fetch`、共享缓存、稳定引用和严格预算
 5. 内置 `ask_user_question` 的单选、多选、Other、notes、多问题 review、Markdown preview 及 SDK/RPC 回调
-6. Session-scoped、branch-aware Policy Runtime，提供 `allow`、`block`、`confirm`、`replace`、`pause`，统一处理重复检查、失败预算、敏感路径、sudo/su 阻断和 Search-to-Shell fallback
+6. Session-scoped、branch-aware Policy Runtime，对重复检查、失败预算、敏感路径、明确解析的直接身份切换命令和 Search-to-Shell fallback 做确定性分类，并只在 Footer 显示 advisory；Policy 不阻断执行或发起确认
 
-下一步是 M11 多 Agent Workflow。M10 复用了现有 AgentSession、Tool registry、Task Ledger、Session/Compact/branch、InteractiveMode custom UI 和 M9 interaction transport，没有创建第二套执行或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。自动唤醒和 sudo 继续后置。
+下一步是 M11 多 Agent Workflow。M10 复用了现有 AgentSession、Tool registry、Task Ledger 和 Session/Compact/branch 生命周期，没有创建第二套执行或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。自动唤醒和结构化 sudo 继续后置。
 
 ## 实现策略
 
@@ -49,7 +49,7 @@ BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是
 
 1. 原生能力和现有 Extension 机制优先，Skill 只描述知识与流程。
 2. 保留并扩展 Pi Runtime/TUI，前期不重写 Agent Loop。
-3. 本地 Agent 进程默认保持普通用户身份；受信任 SSH Target 按其 OpenSSH 配置的登录身份运行，允许 AutoDL 等平台提供的 `root` 账户，但不允许登录后通过 sudo/su 切换或提升身份。
+3. 本地 Agent 进程默认保持普通用户身份；受信任 SSH Target 按其 OpenSSH 配置的登录身份运行，允许 AutoDL 等平台提供的 `root` 账户。Policy 只提示能够明确解析为直接执行的 sudo/su/doas/pkexec，不负责阻断；真正的结构化提权边界留给后续权限模式。
 4. 多 Agent 默认单写者，并行写入使用 Git Worktree 隔离。
 5. 文档直接生成执行约束，不实现传统 Plan 模式。
 6. 所有失败、联网、Shell 和子 Agent 调用都有预算与可视化。

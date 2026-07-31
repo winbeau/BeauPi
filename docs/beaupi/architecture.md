@@ -59,7 +59,7 @@ packages/coding-agent/
 │   │   ├── workflow/        # DAG、调度和节点状态
 │   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
 │   │   ├── questions/       # 询问 schema、pending interaction 和结构化答案
-│   │   ├── policy/          # 命令、失败、预算和权限策略
+│   │   ├── policy/          # 命令、失败、预算分类和 advisory
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
 │   └── modes/
@@ -103,7 +103,6 @@ interface AgentTaskResult {
   checks: AgentTaskCheck[];
   diagnostics: string[];
   clarificationRequest?: AgentClarificationRequest;
-  policyRequest?: PolicyConfirmRequest;
   lastActivity?: AgentTaskActivity;
   error?: AgentTaskError;
   usage: AgentTaskUsage;
@@ -198,34 +197,25 @@ M9 已落地为 Session-bound `QuestionRuntime`：Tool result 继续走普通 Ag
 
 ## Policy Engine
 
-M10 Policy Engine 已作为现有 AgentSession 的 session-scoped 服务实现。它在 Tool wrapper 执行前授权、在现有 `afterToolCall`/用户 Bash 完成路径中 finalize，并从当前 Session branch 的 Tool Result 或 `beaupi.policy.fact` custom entry 重建；Compact 不复制状态，branch 切换只使用目标分支事实。Policy confirm 复用 M9 的稳定 interaction transport，但 Policy 决策与普通澄清问题仍是不同的版本化结构化事实。
+M10 Policy Engine 已作为现有 AgentSession 的 session-scoped 服务实现。它在 Tool wrapper/用户 Bash 执行前分类，在现有 `afterToolCall`/用户 Bash 完成路径中 finalize，并从当前 Session branch 的 Tool Result 或 `beaupi.policy.fact` custom entry 重建；Compact 不复制状态，branch 切换只使用目标分支事实。
 
-策略结果：
-
-```typescript
-interface PolicyDecision {
-  action: "allow" | "block" | "confirm" | "replace" | "pause";
-  reason?: string;
-  replacementTool?: string;
-  suggestion?: string;
-}
-```
+新的 Policy authorization 始终返回 `execute: true`，对应 fact 始终记录 `decision.action: "allow"`；Policy Runtime 不再返回执行阻断、replacement、pause 或 confirmation。旧 Session 中的 `block`/`confirm`/`replace`/`pause` action、status 和 confirmation details 仍可被解析为历史事实，但不会驱动当前 Tool UI。旧 SDK `policyHandler`/`policyInteractionMode` 输入保留为无操作兼容接口，RPC Client 收到旧 `policyConfirm` 请求时只返回 cancelled。
 
 主要策略：
 
 - quote/operator/pipeline/redirection/multiline-aware Shell 分类和 hash-only 等价签名
-- 本地、Remote、terminal、Search 与用户 Bash 的统一失败/类别/fallback 预算
-- 目标 revision 驱动的等价只读检查去重，以及并发 mutation 的单调 revision 更新
+- 本地、Remote、terminal、Search 与用户 Bash 的统一失败/类别/fallback 预算诊断
+- 目标 revision 驱动的等价只读检查 advisory，以及并发 mutation 的单调 revision 更新
 - 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置和 session-lost 分类
-- 敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界
-- sudo/su/doas/pkexec 等登录后身份切换 block；受信任 Target 配置的 root 登录不视为 sudo
-- Search 失败后的 Shell/terminal 网络 fallback pause，以及专用 Tool `replace` 但不自动执行
-- TUI、SDK、RPC、无 handler 和受控子 Agent 的独立 `version: 1` confirm request/result
-- Policy details 进入现有 Task Ledger，并渲染 blocked/confirm/replace/paused 状态
+- 敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界 advisory
+- 能够明确解析为直接执行的 sudo/su/doas/pkexec、terminal 未知/超长/待处理输入和 Search-to-Shell fallback advisory
+- 存在专用 Tool 时记录推荐 advisory，但不替换或阻止原 Tool
+- Policy 不发起 TUI、SDK 或 RPC interaction，受控子 Agent 不返回 Policy confirmation request
+- Policy details 进入现有 Task Ledger；当前执行或最近 Policy fact 的 advisory 只渲染在 Footer 工作区行
 
-Policy Runtime 使用串行授权队列，使并发预算和目标 revision 更新具有确定顺序；原始命令、文件内容、token 和 handler 错误不进入 Policy 持久化诊断。它是执行守卫而不是 Shell sandbox。
+Policy Runtime 使用串行分类队列，使并发预算和目标 revision 更新具有确定顺序；原始命令、文件内容和 token 不进入 Policy 持久化诊断。它是诊断与可视化层，不是执行守卫或 Shell sandbox。
 
-BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则；Policy Engine 只对其应用通用的重复命令、失败预算和权限策略。
+BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则；Policy Engine 只对其应用通用的重复命令、失败预算和敏感/权限 advisory。
 
 ## State
 
@@ -304,12 +294,12 @@ AgentSessionServices
     └── WebCitation
 ```
 
-`SearchProvider` 只暴露规范化请求和结构化结果，后续 Brave、Tavily、Exa 和 GitHub Search 可实现同一接口；M8 不实现第二 Provider，也没有 fallback 链。
+`SearchProvider` 只暴露规范化请求和结构化结果，后续 Brave、Tavily、Exa 和 GitHub Search 可实现同一接口；M8 不实现第二 Provider，也没有 Provider fallback 链。SearXNG 可通过 `search.searxng.engines` 限定实例中已启用的引擎；全部引擎 suspended/unresponsive 且无结果时返回结构化错误，不缓存为空成功。
 
 query/URL cache 位于现有 agentDir 下，使用版本化 JSON、canonical key、原子写入、TTL、fetchedAt/expiresAt 和 SHA-256 content hash。Coordinator 与受控子 Agent 共享 Runtime/cache，Session branch 只保存 Tool details 和预算事实，不复制缓存正文。
 
 `web_search` 只返回精简结果和搜索级引用。第一方候选优先级只使用显式 include domain 或 query token 与 hostname label 的可解释匹配，不把来源标记成未经验证的“官方”。snippet 始终是未验证发现信息。
 
-`web_fetch` 使用 Undici，并在连接前解析和验证全部 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
+`web_fetch` 使用 Undici，并在连接前分别验证 IPv4/IPv6 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。标准 HTTP(S) proxy 存在时，请求使用已验证的固定目标 IP，同时保留原始 Host 和 TLS SNI，避免代理侧 DNS 重新解析绕过 SSRF 边界。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
 
-预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。预算/配置失败不会执行网络请求或 Shell fallback。M10 Policy Runtime 已将该边界扩展到通用 Bash、Remote 和 terminal：专用 Search 失败或预算耗尽后，curl/wget/Python/Node/Bash 等价网络 fallback 会在执行前 pause。
+预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。Search Runtime 自身在预算/配置失败后不会继续网络请求或启动 Shell fallback。若 Agent 随后显式调用通用 Bash、Remote 或 terminal 网络 fallback，M10 Policy Runtime 只记录 Footer advisory，不暂停执行。

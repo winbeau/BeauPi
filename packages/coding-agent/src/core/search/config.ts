@@ -23,6 +23,16 @@ function finiteInteger(value: number | undefined, fallback: number, minimum: num
 	return typeof value === "number" && Number.isFinite(value) ? Math.max(minimum, Math.floor(value)) : fallback;
 }
 
+function normalizedEngines(values: readonly string[] | undefined): string[] {
+	return [
+		...new Set(
+			(values ?? [])
+				.map((value) => value.normalize("NFKC").trim())
+				.filter((value) => value.length > 0 && !value.includes(",")),
+		),
+	];
+}
+
 function optionalSecret(
 	environment: NodeJS.ProcessEnv,
 	configuredName: string | undefined,
@@ -57,6 +67,7 @@ export function resolveSearchConfig(
 			endpoint: environment[ENV_SEARXNG_ENDPOINT]?.trim() || settings?.searxng?.endpoint?.trim() || undefined,
 			timeoutMs: providerTimeoutMs,
 			maxResults: finiteInteger(settings?.searxng?.maxResults, DEFAULT_PROVIDER_MAX_RESULTS, 1),
+			engines: normalizedEngines(settings?.searxng?.engines),
 			apiKey: secret.value,
 			apiKeyRequired: secret.required,
 			apiKeyHeader: settings?.searxng?.apiKeyHeader?.trim() || "Authorization",

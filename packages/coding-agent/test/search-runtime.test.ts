@@ -140,7 +140,39 @@ describe("M8 SearchRuntime", () => {
 			{ budgetScopeId: "filters" },
 		);
 		expect(filtered.results.map((item) => item.domain)).toEqual(["blog.example"]);
-		expect(provider.calls).toHaveLength(1);
+		expect(provider.calls).toHaveLength(2);
+		expect(provider.calls[1]?.maxResults).toBe(50);
+	});
+
+	it("requests a broader provider candidate pool before applying domain filters", async () => {
+		const cacheDir = await tempDir();
+		const provider = new FakeProvider();
+		provider.response.results = [
+			...Array.from({ length: 15 }, (_, index) => ({
+				title: `Unrelated ${index}`,
+				url: `https://example${index}.com/page`,
+				snippet: "noise",
+				provider: "fake",
+				rank: index + 1,
+			})),
+			{
+				title: "Google Search Help",
+				url: "https://support.google.com/websearch",
+				snippet: "search help",
+				provider: "fake",
+				rank: 16,
+			},
+		];
+		const runtime = new SearchRuntime({ cacheDir, getConfig: () => config(), provider });
+		const result = await runtime.search(
+			{ query: "Google Search documentation", maxResults: 3, includeDomains: ["support.google.com"] },
+			{ budgetScopeId: "domain-filter" },
+		);
+
+		expect(provider.calls[0]).toMatchObject({ maxResults: 50, includeDomains: ["support.google.com"] });
+		expect(result.results).toEqual([
+			expect.objectContaining({ title: "Google Search Help", domain: "support.google.com" }),
+		]);
 	});
 
 	it("returns empty results and reuses query cache across equivalent requests until TTL expiry", async () => {
@@ -186,7 +218,7 @@ describe("M8 SearchRuntime", () => {
 			{ title: "Result", url: "https://example.com", snippet: "ok", provider: "fake", rank: 1 },
 		];
 		const cache = new SearchCache(cacheDir);
-		const key = "fake\0query";
+		const key = ["fake", "query", "10", ""].join("\0");
 		const path = cache.pathFor("queries", key);
 		await mkdir(join(cacheDir, "queries"), { recursive: true });
 		await writeFile(path, "{broken", "utf-8");
@@ -294,7 +326,11 @@ describe("M8 SearchRuntime", () => {
 	it("resolves Settings and environment overrides without persisting secret values", () => {
 		const manager = SettingsManager.inMemory({
 			search: {
-				searxng: { endpoint: "https://settings.example/search", apiKeyEnv: "CUSTOM_SEARCH_KEY" },
+				searxng: {
+					endpoint: "https://settings.example/search",
+					engines: [" bing ", "mojeek", "bing", "invalid,engine"],
+					apiKeyEnv: "CUSTOM_SEARCH_KEY",
+				},
 				budget: { maxQueriesPerTask: 3 },
 			},
 		});
@@ -304,12 +340,13 @@ describe("M8 SearchRuntime", () => {
 		});
 		expect(resolved.searxng.endpoint).toBe("https://env.example/search");
 		expect(resolved.searxng.apiKey).toBe("secret-value");
+		expect(resolved.searxng.engines).toEqual(["bing", "mojeek"]);
 		expect(resolved.budget.maxQueriesPerTask).toBe(3);
 		expect(JSON.stringify(manager.getGlobalSettings())).not.toContain("secret-value");
 	});
 
-	it("implements the SearXNG JSON API and classifies auth, rate-limit, and malformed responses", async () => {
-		let mode: "success" | "auth" | "rate" | "invalid" = "success";
+	it("implements the SearXNG JSON API and classifies auth, rate-limit, engine, and malformed responses", async () => {
+		let mode: "success" | "auth" | "rate" | "engines" | "invalid" = "success";
 		const server = createServer((request, response) => {
 			const url = new URL(request.url ?? "/", "http://localhost");
 			if (mode === "auth") {
@@ -320,10 +357,20 @@ describe("M8 SearchRuntime", () => {
 				response.writeHead(429, { "retry-after": "2" }).end("limited");
 				return;
 			}
+			if (mode === "engines") {
+				response.writeHead(200, { "content-type": "application/json" }).end(
+					JSON.stringify({
+						results: [],
+						unresponsive_engines: [["bing", "Suspended: too many requests"]],
+					}),
+				);
+				return;
+			}
 			if (mode === "invalid") {
 				response.writeHead(200, { "content-type": "application/json" }).end("not-json");
 				return;
 			}
+			expect(url.searchParams.get("engines")).toBe("bing,mojeek");
 			response.writeHead(200, { "content-type": "application/json" }).end(
 				JSON.stringify({
 					results: [{ title: "Found", url: "https://example.com", content: url.searchParams.get("q"), score: 1 }],
@@ -331,13 +378,21 @@ describe("M8 SearchRuntime", () => {
 			);
 		});
 		const endpoint = await listen(server);
-		const provider = new SearXNGProvider({ endpoint });
-		const success = await provider.search({ query: "needle", maxResults: 3 }, { timeoutMs: 100 });
-		expect(success.results[0]).toMatchObject({ title: "Found", snippet: "needle", provider: "searxng" });
+		const provider = new SearXNGProvider({ endpoint, engines: ["bing", "mojeek", "bing"] });
+		const success = await provider.search(
+			{ query: "needle", maxResults: 3, includeDomains: ["example.com"] },
+			{ timeoutMs: 100 },
+		);
+		expect(success.results[0]).toMatchObject({
+			title: "Found",
+			snippet: "needle site:example.com",
+			provider: "searxng",
+		});
 
 		for (const [nextMode, expected] of [
 			["auth", "authentication"],
 			["rate", "rate_limited"],
+			["engines", "rate_limited"],
 			["invalid", "invalid_response"],
 		] as const) {
 			mode = nextMode;

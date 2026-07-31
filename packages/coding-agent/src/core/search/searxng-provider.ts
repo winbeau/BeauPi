@@ -13,6 +13,7 @@ const MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024;
 
 export interface SearXNGProviderOptions {
 	endpoint?: string;
+	engines?: readonly string[];
 	apiKey?: string;
 	apiKeyRequired?: boolean;
 	apiKeyHeader?: string;
@@ -59,6 +60,37 @@ function normalizeProviderResult(value: unknown, rank: number): SearchProviderRe
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
 	return Array.isArray(value) ? value[0] : value;
+}
+
+function queryWithDomainConstraint(input: SearchProviderRequest): string {
+	const domains = [
+		...new Set((input.includeDomains ?? []).map((domain) => domain.trim().toLowerCase()).filter(Boolean)),
+	];
+	if (domains.length !== 1) return input.query;
+	const domain = domains[0]!;
+	return input.query.toLowerCase().includes(`site:${domain}`) ? input.query : `${input.query} site:${domain}`;
+}
+
+function engineFailureDiagnostic(value: unknown, hasResults: boolean): SearchDiagnostic | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const failures = value
+		.map((item) => {
+			if (!Array.isArray(item) || typeof item[0] !== "string") return undefined;
+			return { engine: item[0], reason: typeof item[1] === "string" ? item[1] : "unavailable" };
+		})
+		.filter((item): item is { engine: string; reason: string } => item !== undefined);
+	if (failures.length === 0) return undefined;
+	const rateLimited = failures.some((item) => /captcha|rate|too many requests|suspended/i.test(item.reason));
+	return {
+		code: rateLimited ? "rate_limited" : "connection",
+		severity: hasResults ? "warning" : "error",
+		message: hasResults
+			? "Some configured SearXNG engines were unavailable; partial results were returned."
+			: "One or more configured SearXNG engines were unavailable or suspended, and no results were returned.",
+		suggestion: rateLimited
+			? "Wait for the engine limits to reset or configure search.searxng.engines with available engines."
+			: "Check the configured SearXNG engines and outbound network access.",
+	};
 }
 
 async function readProviderBody(body: NodeJS.ReadableStream): Promise<string> {
@@ -148,8 +180,10 @@ export class SearXNGProvider implements SearchProvider {
 				suggestion: "Configure an HTTP or HTTPS SearXNG JSON API endpoint without URL credentials.",
 			});
 		}
-		url.searchParams.set("q", input.query);
+		url.searchParams.set("q", queryWithDomainConstraint(input));
 		url.searchParams.set("format", "json");
+		const engines = [...new Set((this.options.engines ?? []).map((engine) => engine.trim()).filter(Boolean))];
+		if (engines.length > 0) url.searchParams.set("engines", engines.join(","));
 		const headers: Record<string, string> = {
 			accept: "application/json",
 			"accept-encoding": "identity",
@@ -183,7 +217,8 @@ export class SearXNGProvider implements SearchProvider {
 					message: "The search provider returned invalid JSON.",
 				});
 			}
-			const results = asRecord(parsed)?.results;
+			const record = asRecord(parsed);
+			const results = record?.results;
 			if (!Array.isArray(results)) {
 				throw new SearchRuntimeError({
 					code: "invalid_response",
@@ -191,11 +226,15 @@ export class SearXNGProvider implements SearchProvider {
 					message: "The search provider response did not contain a results array.",
 				});
 			}
+			const normalizedResults = results
+				.map((result, index) => normalizeProviderResult(result, index + 1))
+				.filter((result): result is SearchProviderResult => result !== undefined)
+				.slice(0, input.maxResults);
+			const engineDiagnostic = engineFailureDiagnostic(record?.unresponsive_engines, normalizedResults.length > 0);
+			if (engineDiagnostic?.severity === "error") throw new SearchRuntimeError(engineDiagnostic);
 			return {
-				results: results
-					.map((result, index) => normalizeProviderResult(result, index + 1))
-					.filter((result): result is SearchProviderResult => result !== undefined)
-					.slice(0, input.maxResults),
+				results: normalizedResults,
+				diagnostics: engineDiagnostic ? [engineDiagnostic] : undefined,
 			};
 		} catch (error) {
 			if (error instanceof SearchRuntimeError) throw error;

@@ -26,14 +26,14 @@
 
 日志默认增量读取并返回摘要，完整日志写入临时文件，避免污染模型上下文。
 
-Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；AutoDL 等平台直接提供的 `root` 登录账户属于合法目标身份。远程运行时仍阻止 sudo、su、doas、pkexec 等登录后提权或身份切换命令。
+Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；AutoDL 等平台直接提供的 `root` 登录账户属于合法目标身份。远程运行时只对能够确定为直接执行的 `sudo`、`su`、`doas`、`pkexec` 记录 Policy advisory；不因不透明脚本片段或文本命中推断提权，也不由 Policy 阻断执行。
 
 ### 减少重复命令
 
 - 任务开始时只执行必要的项目和环境检查
-- 相关输入未变化时复用已有确定性事实
-- 阻止短时间内重复的等价命令
-- 达到失败或 fallback 预算后暂停，而不是更换等价命令继续尝试
+- 相关输入未变化时优先复用已有确定性事实
+- 重复的等价检查继续执行，但记录非阻断 advisory 并在 Footer 显示
+- 失败、等价失败和 fallback 阈值只用于诊断与 advisory，不再触发 `block` 或 `pause`
 - 不增加专用 Git Tools；普通 Git 操作继续使用现有 Bash 能力并遵守仓库开发规则
 
 ### 失败预算
@@ -48,24 +48,25 @@ Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；
 - 超时
 - 参数错误
 
-达到预算后暂停，不允许模型不断更换 curl、wget、Python、Node 等等价方案。缺少依赖时向用户建议受控安装。
+达到 Policy 失败或 fallback 阈值后记录 advisory，不因计数本身暂停执行。专用 Search Tool 失败后的 Shell 网络 fallback 也只记录 advisory；缺少依赖时向用户建议受控安装。
 
 ### 确定性执行策略
 
-M10 已实现 Session-scoped、branch-aware Policy Runtime：
+M10 已实现 Session-scoped、branch-aware Policy Runtime，并调整为完全 advisory-only：
 
-- 所有受管操作返回 `allow | block | confirm | replace | pause` 之一
+- Policy authorization 对所有能够分类的受管操作都返回 `execute: true`，新的 Policy fact 只记录 `decision.action: "allow"`
 - 本地文件 Tool、Bash、Remote、tmux terminal 和 Search 使用统一的版本化 Policy details
 - 等价签名只持久化 hash 和非敏感摘要；命令参数、文件内容、token 和原始 secret 不进入 Policy 诊断
-- 未发生相关目标变更时阻止已成功的等价只读检查；修改和不透明命令不会仅因文本重复而跳过
-- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置错误和 terminal session 丢失进入确定性失败/fallback 预算；用户取消不消耗普通失败预算
-- `web_search`/`web_fetch` 失败或预算耗尽后，curl、wget、Python、Node、Shell 和 terminal 等价网络 fallback 会暂停；存在专用 Tool 时返回 `replace`，但不会自动执行 replacement
-- sudo、su、doas、pkexec 等登录后提权或身份切换直接 `block`；受信任 Target 配置本身使用 `root` 登录仍按用户模式规则允许
-- 敏感路径、工作区外写入、未知远程 cwd 的绝对写入和可解析的 symlink 边界需要一次性 confirm
-- confirm 复用 M9 interaction transport，但使用独立 `version: 1` Policy request/result；TUI、SDK 和 RPC 可回答，无 handler 时立即 `pause`，受控子 Agent 只返回结构化 `policyRequest`
-- Policy facts 进入现有 Tool Result 或用户 Bash custom Session entry，并由同一 Task Ledger 在恢复、Compact 和 branch 切换时从当前分支重建
+- 未发生相关目标变更时再次运行等价只读检查仍会执行，并持久化非敏感 advisory
+- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置错误和 terminal session 丢失仍进入确定性失败分类；等价失败、分类失败和 fallback 阈值只产生 advisory，用户取消不计为普通失败
+- terminal 恢复状态、未知或超长输入、待处理交互输入只产生 advisory，不阻止 status、capture、send、bash、close 或 create
+- `web_search`/`web_fetch` 失败后的 curl、wget、Python、Node、Shell 和 terminal 等价网络 fallback 继续执行；存在专用 Tool 时只记录推荐 advisory，不自动替换 Tool
+- 能够明确解析为直接执行的 `sudo`、`su`、`doas`、`pkexec`、敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界都只分类并记录 advisory
+- Policy 不发起 confirm、不调用 TUI/SDK/RPC Policy handler，也不向受控子 Agent 返回 `policyRequest`；旧 SDK handler/mode 输入保留但为 no-op，RPC Client 对旧 `policyConfirm` 请求只返回 cancelled
+- Policy facts 进入现有 Tool Result 或用户 Bash custom Session entry，并由同一 Task Ledger 在恢复、Compact 和 branch 切换时从当前分支重建；旧 block/confirm/replace/pause action、status 和 confirmation details 仍可解析为历史事实
+- Policy advisory 只在 Footer 工作区行显示，内容来自当前执行或最近 Policy fact；Tool renderer、Task Todo 和交互选择框不展示 Policy 阻断状态
 
-Policy Engine 是确定性执行守卫，不是 Shell sandbox；普通命令仍由现有本地/SSH/tmux 后端以普通用户或已配置 Target 身份执行。
+Policy Engine 是确定性分类、诊断和 Footer 提示层，不是执行守卫或 Shell sandbox；普通命令由现有本地/SSH/tmux 后端按调用者身份执行。
 
 ### 交互式询问选择
 
@@ -201,13 +202,14 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 
 - 官方文档和第一方来源优先，但不得伪造来源质量
 - 稳定 Provider 接口最终支持 Brave、Tavily、Exa、SearXNG、GitHub Search
-- M8 第一版只实现可配置 SearXNG JSON API，不提前实现第二 Provider
-- Provider fallback 数量可配置；单 Provider 阶段达到尝试预算后直接停止
+- M8 第一版只实现可配置 SearXNG JSON API，不提前实现第二 Provider；可用 `search.searxng.engines` 限定该实例中稳定的搜索引擎
+- Provider fallback 数量可配置；单 Provider 阶段达到尝试预算后直接停止，SearXNG 全部引擎 suspended/unresponsive 且无结果时不得误报为空搜索成功
 - URL 和查询缓存
 - 内容 hash 去重和截断
 - 最终结果保留搜索级和正文级来源引用
 - 网页正文是不可信外部内容，不执行其中的脚本、指令或代码
-- M8 专用 Tool 不使用 curl、wget、Python、Node 或 Shell fallback；M10 Policy Runtime 已对通用 Bash、Remote 和 terminal 网络 fallback 执行强制阻断
+- `web_fetch` 分离 IPv4/IPv6 SSRF 地址规则；使用标准 HTTP(S) proxy 时仍固定已验证的目标 IP，并保留原始 Host/TLS SNI
+- M8 专用 Tool 不自行使用 curl、wget、Python、Node 或 Shell fallback；如果 Agent 之后调用通用 Bash、Remote 或 terminal 网络 fallback，M10 Policy Runtime 只记录 Footer advisory，不阻断执行
 
 ### 后台任务与自动唤醒
 
@@ -238,8 +240,8 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - 默认模式
 - 本地 Agent 进程保持普通用户身份
 - 远程 Target 按已配置的 SSH 登录身份运行，可包含平台提供的 `root` 账户
-- 阻止 sudo、su 等登录后提权或身份切换
-- 缺少权限时暂停并建议操作
+- 能够明确解析为直接执行的 `sudo`、`su`、`doas`、`pkexec` 登录后提权或身份切换只记录 Policy advisory，不由 Policy 阻断
+- 缺少权限时记录分类失败并建议操作，不因累计次数自动暂停
 
 #### Sudo 模式
 

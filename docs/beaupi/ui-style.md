@@ -89,7 +89,6 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 ● Bash(npm run check)          运行中（accent）
 ● Bash(npm run check)          成功（绿色）
 ● Bash(npm run check)          失败（红色）
-! Bash(sudo apt install curl)  等待用户确认
 ```
 
 运行、成功和失败统一使用小圆点，通过 accent、绿色和红色区分；错误原因仍必须在结果文字中明确显示。
@@ -100,7 +99,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 - Terminal 系 Tool 在参数括号前显示 tmux 名称：`● Terminal Bash [pi5-env](npm run check)`；无额外参数时仍保留空括号，例如 `Terminal Status [pi5-env]()`
 - 结果使用 `  ⎿  ` 五列 gutter，后续换行与结果正文对齐
 - queued 状态显示灰色空心圆点；运行、成功和失败使用 accent、绿色和红色实心小圆点
-- 等待权限或 classifier 时在标题下显示 dim 状态
+- 普通 Tool 不显示 Policy classifier 或权限等待状态；Policy 只在 Footer 给出 advisory
 - 单行成功结果直接显示
 - 多行输出默认显示最后 3–10 行
 - 连续 Read/Search/List/Bash 默认聚合为一条摘要，Ctrl+O 后逐项展开
@@ -174,6 +173,16 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 - 40/80/120/160 列、暗色/亮色、CJK、emoji、长 label/description 和 resize 均不得横向溢出。
 
 BeauPi 不复制参考仓库的 React/Ink 组件；实现复用 Pi TUI 的 selector、editor、Container、Markdown 和 ANSI-aware 宽度 helper。
+
+### Policy advisory
+
+Policy 不再显示确认选择框，也不改变 Tool 的 queued/running/success/error 状态。重复执行、失败/fallback 阈值、敏感路径、工作区外写入、明确解析的直接身份切换命令、terminal 状态和 Search-to-Shell fallback 都继续执行，只在 Footer 工作区行显示当前执行或最近 Policy fact 的 advisory：
+
+```text
+~/Projects/pi (main) · policy: Local write outside workspace.
+```
+
+advisory 使用 warning 色；同时存在多个 advisory 时显示最后一条和附加计数。Tool 输出、Todo、SDK/RPC interaction 和子 Agent 结果不展示 Policy block/confirm/replace/pause 状态。
 
 ## Diff
 
@@ -314,7 +323,7 @@ Workflow: implement-review
 
 ```text
 38.8 tok/s · out 4,272 · in 8,976 · cache 537,088/0 · total 550,336 · 110.1s
-~/Projects/pi (main)
+~/Projects/pi (main) · policy: Repeated local read-only check.
 ↑120k ↓28k R1.2M CH98.9% $2.035 · 112k/272k 41.0% (auto)          gpt-5.6-sol · medium
 ```
 
@@ -349,15 +358,16 @@ Workflow: implement-review
 可追加低频但重要状态：
 
 ```text
-~/Projects/pi (main) · USER · ssh:dev
+~/Projects/pi (main) · policy: Repeated local read-only check. · ssh:dev
 ```
 
-默认只显示：
+默认显示：
 
 - cwd
 - Git branch
+- 当前执行或最近 Policy fact 的 advisory（仅在存在时显示，也是 Policy 唯一的 UI 展示位置）
 
-权限模式、远程目标仅在非默认状态时显示。
+重复执行 advisory 使用 warning 色且不表示阻断；同时存在多个 advisory 时显示最后一条和附加计数。权限模式、远程目标仅在非默认状态时显示。
 
 ### 第三行：Session 累计状态
 
@@ -392,9 +402,10 @@ Claude Code 参考实现的内建状态项使用 ` │ ` 分隔，并按 `Model 
 3. 第一行的 cache write
 4. 第一行只保留 TPS、output、elapsed
 5. 第二行隐藏默认 USER 模式和本地 target
-6. 第三行隐藏 CH
-7. 第三行隐藏 cost
-8. 模型名称从完整 ID 缩短
+6. 第二行优先隐藏 Policy advisory 的附加计数，再截断 advisory 文案
+7. 第三行隐藏 CH
+8. 第三行隐藏 cost
+9. 模型名称从完整 ID 缩短
 
 最小模式：
 
@@ -534,3 +545,4 @@ M2 已接入：
 10. 所有组件在暗色、亮色和 80/120/160 列终端下可读。
 11. Write Tool 折叠提示中的新增行数和总行数在写入过程中动态更新，样式调整不得移除该行为。
 12. 使用 tmux 截图进行视觉回归测试。
+13. Policy advisory 只出现在 Footer，不改变 Tool、Todo、子 Agent 或 SDK/RPC interaction 的展示状态。
