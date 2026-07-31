@@ -22,6 +22,7 @@ import {
 	type WebCitation,
 } from "../search/index.ts";
 import type { SessionEntry } from "../session-manager.ts";
+import { getWorkflowToolDetails, type WorkflowSnapshot, type WorkflowToolDetails } from "../workflow/index.ts";
 
 export const TASK_LEDGER_DETAILS_KEY = "taskLedger";
 export const TASK_LEDGER_DETAILS_VERSION = 1;
@@ -179,6 +180,7 @@ export interface TaskLedgerSnapshot {
 	network: readonly NetworkToolRecord[];
 	interactions: readonly TaskInteractionRecord[];
 	policy: readonly PolicyToolDetails[];
+	workflows: readonly WorkflowSnapshot[];
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -215,6 +217,8 @@ const TOOL_LABELS = Object.freeze({
 	delegate_task: "Agent",
 	ask_user_question: "Question",
 	workflow_run: "Workflow",
+	workflow_status: "Workflow Status",
+	workflow_cancel: "Workflow Cancel",
 	background_start: "Background",
 	target_select: "Target Select",
 	remote_exec: "Remote Exec",
@@ -591,6 +595,8 @@ export class TaskLedger {
 	private readonly networkRecords = new Map<string, NetworkToolRecord>();
 	private readonly interactionRecords = new Map<string, TaskInteractionRecord>();
 	private readonly policyRecords = new Map<string, PolicyToolDetails>();
+	private readonly workflowRecords = new Map<string, WorkflowSnapshot>();
+	private readonly workflowToolDetails = new Map<string, WorkflowToolDetails>();
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
@@ -614,6 +620,8 @@ export class TaskLedger {
 		this.networkRecords.clear();
 		this.interactionRecords.clear();
 		this.policyRecords.clear();
+		this.workflowRecords.clear();
+		this.workflowToolDetails.clear();
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
@@ -789,12 +797,28 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	recordWorkflowSnapshot(snapshot: WorkflowSnapshot): void {
+		this.workflowRecords.set(snapshot.workflowId, structuredClone(snapshot));
+		this.revision++;
+	}
+
+	setWorkflowSnapshots(snapshots: readonly WorkflowSnapshot[]): void {
+		this.workflowRecords.clear();
+		for (const snapshot of snapshots) this.workflowRecords.set(snapshot.workflowId, structuredClone(snapshot));
+		this.revision++;
+	}
+
 	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
 		const records = [...this.policyRecords.values()];
 		for (let index = records.length - 1; index >= 0; index--) {
 			if (records[index]?.toolCallId === toolCallId) return records[index];
 		}
 		return undefined;
+	}
+
+	getWorkflowDetails(toolCallId: string): WorkflowToolDetails | undefined {
+		const details = this.workflowToolDetails.get(`tool:${toolCallId}`);
+		return details ? structuredClone(details) : undefined;
 	}
 
 	getToolDetails(toolCallId: string): TaskLedgerToolDetails | undefined {
@@ -820,6 +844,7 @@ export class TaskLedger {
 		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
 		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
 		const policy = [...this.policyRecords.values()].map((record) => structuredClone(record));
+		const workflows = [...this.workflowRecords.values()].map((record) => structuredClone(record));
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
@@ -851,6 +876,7 @@ export class TaskLedger {
 			network,
 			interactions,
 			policy,
+			workflows,
 			verification,
 			todos,
 			documentContract,
@@ -954,6 +980,16 @@ export class TaskLedger {
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
 		const policyDetails = getPolicyToolDetails(details);
 		if (policyDetails) this.policyRecords.set(policyDetails.requestId, structuredClone(policyDetails));
+		const workflowDetails = getWorkflowToolDetails(details);
+		if (workflowDetails) {
+			this.workflowToolDetails.set(record.id, structuredClone(workflowDetails));
+			if (workflowDetails.workflow) {
+				this.workflowRecords.set(workflowDetails.workflow.workflowId, structuredClone(workflowDetails.workflow));
+			}
+			for (const workflow of workflowDetails.workflows ?? []) {
+				this.workflowRecords.set(workflow.workflowId, structuredClone(workflow));
+			}
+		}
 		const searchDetails = getSearchRuntimeToolDetails(details);
 		if (searchDetails && (toolName === "web_search" || toolName === "web_fetch")) {
 			this.networkRecords.set(record.id, {
@@ -1282,7 +1318,13 @@ export class TaskLedger {
 		verification: VerificationState,
 		now: number,
 	): TaskTodo[] {
-		if (this.startedAt === undefined && commands.length === 0 && !this.documentContract) return [];
+		if (
+			this.startedAt === undefined &&
+			commands.length === 0 &&
+			!this.documentContract &&
+			this.workflowRecords.size === 0
+		)
+			return [];
 		const firstCommand = commands[0];
 		const latestCommand = commands[commands.length - 1];
 		const mutationCommands = commands.filter((command) => MODIFY_TOOL_NAMES.has(command.toolName));
@@ -1343,6 +1385,45 @@ export class TaskLedger {
 				});
 			}
 		}
+
+		for (const workflow of this.workflowRecords.values()) {
+			for (const node of workflow.nodes) {
+				const status: TaskTodoStatus =
+					node.status === "completed"
+						? "completed"
+						: node.status === "running"
+							? "active"
+							: node.status === "failed" || node.status === "timed_out" || node.status === "lost"
+								? "failed"
+								: node.status === "skipped" || node.status === "cancelled"
+									? "blocked"
+									: "pending";
+				const updatedAt = Date.parse(node.completedAt ?? node.startedAt ?? node.createdAt) || now;
+				const incompleteDependencies = node.dependsOn.filter((dependencyId) => {
+					const dependency = workflow.nodes.find((candidate) => candidate.id === dependencyId);
+					return dependency?.status !== "completed";
+				});
+				todos.push({
+					id: `workflow:${workflow.workflowId}:${node.id}`,
+					label: `${workflow.definitionId}: ${node.id}`,
+					status,
+					sequence: 100 + todos.length,
+					updatedAt,
+					completedAt: node.status === "completed" ? updatedAt : undefined,
+					owner: node.profile,
+					blockedBy:
+						status === "blocked"
+							? [node.error?.code ?? node.status]
+							: status === "pending" && incompleteDependencies.length > 0
+								? incompleteDependencies
+								: undefined,
+					activity: node.error?.message ?? node.output?.summary,
+					source: "workflow",
+				});
+			}
+		}
+
+		if (this.startedAt === undefined && commands.length === 0 && !this.documentContract) return todos;
 
 		const discoveryCompletedAt =
 			firstCommand?.endedAt ?? (firstCommand?.status === "running" ? undefined : firstCommand?.startedAt);

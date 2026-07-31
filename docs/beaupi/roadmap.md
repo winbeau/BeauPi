@@ -8,12 +8,12 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M10 已完成。近期开发转入阶段 12（M11）多 Agent Workflow：
+M0–M11 已完成。近期开发转入阶段 13（M12）后台任务自动唤醒：
 
-1. 在已稳定的 AgentPool、Monitor 和 Policy Runtime 上定义 Workflow DAG 与节点结构化输入输出。
-2. 实现依赖、条件、并发限制和默认单写者策略；需要并行写入时使用 Worktree 隔离。
-3. 将真实节点状态接入现有 Monitor、Task Ledger、Todo、Footer 和统一 Tool renderer。
-4. Workflow 稳定后再推进后台自动唤醒和受控 sudo。
+1. 继续复用 M6/M11 的 MonitorRuntime 和结构化状态，不创建第二套进程监控器或 Workflow 唤醒循环。
+2. 在模型回合结束后保持本地/远程任务运行，并通过去重 Wake Queue 在 Coordinator 空闲时恢复现有 Session turn。
+3. 复用 M11 已稳定的取消、lost 恢复、Task Ledger、Footer 和 branch-aware 生命周期。
+4. 自动唤醒稳定后再推进受控 sudo。
 
 M10 已提供确定性分类、等价检查签名、失败/fallback 预算诊断、敏感路径与普通用户 advisory、Search-to-Shell advisory，以及 Session/Compact/branch 一致性。Policy authorization 始终返回 `execute: true`，不发起 TUI/SDK/RPC confirmation；当前执行或最近 Policy fact 的提示只显示在 Footer。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
 
@@ -232,6 +232,8 @@ M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operat
 
 ## 阶段 12：多 Agent Workflow
 
+状态：已完成（2026-07-31）。
+
 - 定义 Workflow YAML/JSON Schema
 - 实现 DAG 调度
 - 实现依赖、条件和并发限制
@@ -249,6 +251,8 @@ M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operat
 - docs-execute
 
 验收：只读节点可以并行；共享工作区写入节点不能并发；Workflow 状态在 TUI 中实时更新。
+
+M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置 Workflow 解析、无 `eval` 的有界条件、DAG/失败策略/取消/超时调度、跨并发 Workflow 的 shared 单写者、isolated Git Worktree 生命周期，以及 `workflow_run/status/cancel`。节点继续由 AgentPool 创建受控 AgentSession，只消费依赖结构化输出；Workflow/节点复用 Monitor activity log，并实时投影到 Task Ledger、Todo、Footer 和宽度安全的 DAG renderer。Compact、resume、branch 切换和未知运行状态恢复均只使用当前分支事实，不能确认时标记 `lost`。
 
 ## 阶段 13：后台任务与自动唤醒
 
@@ -325,4 +329,4 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
 10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成）
 
-当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择和 advisory-only Policy Engine 闭环。下一步推进 M11 Workflow，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor 和共享 Runtime 生命周期；自动唤醒与结构化 sudo 仍不提前实现。
+当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择、advisory-only Policy Engine 和多 Agent Workflow 闭环。下一步推进 M12 后台任务自动唤醒，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor、Workflow 和共享 Runtime 生命周期；结构化 sudo 仍不提前实现。

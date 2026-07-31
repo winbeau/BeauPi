@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0–M10 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question` 和 advisory-only Policy Runtime。当前优先主线转为 M11 多 Agent Workflow；自动唤醒和 sudo 继续后置。
+当前进度：M0–M11 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question`、advisory-only Policy Runtime 和多 Agent Workflow。当前优先主线转为 M12 后台任务自动唤醒；sudo 继续后置。
 
 ## 文档
 
@@ -12,6 +12,7 @@
 - [Document Runtime 设计](./document-runtime.md)
 - [开发路线](./roadmap.md)
 - [开发里程碑](./milestones.md)
+- [多 Agent Workflow](./workflows.md)
 - [后台任务与自动唤醒](./background-tasks.md)
 - [Claude Code 风格 TUI](./ui-style.md)
 - [Claude Code 风格 TUI 实施计划](./plans/README.md)
@@ -30,7 +31,7 @@ BeauPi 是一个文档驱动、工具优先、支持多 Agent 协作的终端编
 
 ## 当前优先级
 
-M5–M10 已交付六个可直接使用的能力闭环：
+M5–M11 已交付七个可直接使用的能力闭环：
 
 1. 进程内 `delegate_task` 子 Agent
 2. 本地进程、Tool 和子 Agent 的 Monitor 监控、增量日志和状态恢复
@@ -38,8 +39,9 @@ M5–M10 已交付六个可直接使用的能力闭环：
 4. 单一 SearXNG Provider 的 `web_search`/`web_fetch`、共享缓存、稳定引用和严格预算
 5. 内置 `ask_user_question` 的单选、多选、Other、notes、多问题 review、Markdown preview 及 SDK/RPC 回调
 6. Session-scoped、branch-aware Policy Runtime，对重复检查、失败预算、敏感路径、明确解析的直接身份切换命令和 Search-to-Shell fallback 做确定性分类，并只在 Footer 显示 advisory；Policy 不阻断执行或发起确认
+7. 版本化 YAML/JSON Workflow DAG、依赖条件、失败策略、并发与全局 shared 单写者、isolated Git Worktree、`workflow_run/status/cancel`，以及 Monitor、Task Ledger、Todo、Footer、Compact/resume/branch 生命周期接入
 
-下一步是 M11 多 Agent Workflow。M10 复用了现有 AgentSession、Tool registry、Task Ledger 和 Session/Compact/branch 生命周期，没有创建第二套执行或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。自动唤醒和结构化 sudo 继续后置。
+下一步是 M12 后台任务自动唤醒。M11 直接复用了现有 AgentPool、AgentSession、Tool registry、MonitorRuntime、Task Ledger 和 Session/Compact/branch 生命周期，没有创建第二套执行、监控、持久化或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。结构化 sudo 继续后置。
 
 ## 实现策略
 

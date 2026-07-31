@@ -7,6 +7,8 @@ export {
 	SubAgentMonitorAdapter,
 	ToolMonitorAdapter,
 	UnimplementedSshTmuxMonitorAdapter,
+	WorkflowMonitorAdapter,
+	type WorkflowMonitorSource,
 } from "./adapters.ts";
 export {
 	IncrementalLogReader,
@@ -17,6 +19,7 @@ export {
 	type MonitorListOptions,
 	type MonitorLogOptions,
 	type MonitorLogResult,
+	type MonitorRecordUpdate,
 	MonitorRegistry,
 	MonitorRuntime,
 	type MonitorRuntimeOptions,
@@ -55,4 +58,5 @@ export {
 	type MonitorTarget,
 	monitorStatusForAgentEvent,
 	monitorStatusLabel,
+	type WorkflowMonitorTarget,
 } from "./types.ts";

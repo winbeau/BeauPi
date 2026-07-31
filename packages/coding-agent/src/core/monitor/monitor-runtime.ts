@@ -8,6 +8,7 @@ import {
 	SubAgentMonitorAdapter,
 	ToolMonitorAdapter,
 	UnimplementedSshTmuxMonitorAdapter,
+	WorkflowMonitorAdapter,
 } from "./adapters.ts";
 import { IncrementalLogReader, type IncrementalLogReadResult } from "./log-reader.ts";
 import {
@@ -64,6 +65,16 @@ export interface MonitorLogResult extends IncrementalLogReadResult {
 	monitor: MonitorRecord;
 }
 
+export interface MonitorRecordUpdate {
+	status: MonitorStatus;
+	reason: MonitorEventReason;
+	timestamp?: number;
+	exitReason?: string;
+	exitCode?: number;
+	diagnostic?: string;
+	activity?: Omit<MonitorActivityEvent, "sequence">;
+}
+
 interface Waiter {
 	resolve: (record: MonitorRecord) => void;
 }
@@ -101,7 +112,13 @@ function asStatus(value: unknown): MonitorStatus | undefined {
 }
 
 function asKind(value: unknown): MonitorKind | undefined {
-	return value === "process" || value === "tool" || value === "sub-agent" || value === "ssh-tmux" ? value : undefined;
+	return value === "process" ||
+		value === "tool" ||
+		value === "sub-agent" ||
+		value === "ssh-tmux" ||
+		value === "workflow"
+		? value
+		: undefined;
 }
 
 function clone<T>(value: T): T {
@@ -124,6 +141,8 @@ function defaultName(target: MonitorRecordInput["target"]): string {
 			return target.profile ? `agent:${target.profile}` : `agent:${target.taskId}`;
 		case "ssh-tmux":
 			return target.sessionId ? `ssh-tmux:${target.sessionId}` : "ssh-tmux";
+		case "workflow":
+			return target.nodeId ? `workflow:${target.workflowId}:${target.nodeId}` : `workflow:${target.workflowId}`;
 	}
 }
 
@@ -137,6 +156,8 @@ function defaultSummary(target: MonitorRecordInput["target"]): string {
 			return `Monitor sub-agent ${target.profile ?? target.taskId}`;
 		case "ssh-tmux":
 			return "Monitor SSH/tmux target";
+		case "workflow":
+			return target.nodeId ? `Monitor Workflow node ${target.nodeId}` : `Monitor Workflow ${target.workflowId}`;
 	}
 }
 
@@ -171,7 +192,7 @@ function normalizeActivityLog(value: unknown): MonitorActivityEvent[] {
 			!record ||
 			typeof record.sequence !== "number" ||
 			typeof record.timestamp !== "number" ||
-			(record.kind !== "turn" && record.kind !== "tool" && record.kind !== "agent") ||
+			(record.kind !== "turn" && record.kind !== "tool" && record.kind !== "agent" && record.kind !== "workflow") ||
 			(record.outcome !== "started" && record.outcome !== "succeeded" && record.outcome !== "failed") ||
 			typeof record.message !== "string"
 		) {
@@ -313,6 +334,7 @@ export class MonitorRuntime {
 			["tool", options.adapters?.tool ?? new ToolMonitorAdapter()],
 			["sub-agent", options.adapters?.["sub-agent"] ?? new SubAgentMonitorAdapter(options.agentPool)],
 			["ssh-tmux", options.adapters?.["ssh-tmux"] ?? new UnimplementedSshTmuxMonitorAdapter()],
+			["workflow", options.adapters?.workflow ?? new WorkflowMonitorAdapter()],
 		]);
 		for (const [kind, adapter] of Object.entries(options.adapters ?? {}) as Array<[MonitorKind, MonitorAdapter]>) {
 			if (adapter) this.adapters.set(kind, adapter);
@@ -505,6 +527,22 @@ export class MonitorRuntime {
 
 	register(input: MonitorRecordInput): MonitorRecord {
 		return this.attach(input);
+	}
+
+	update(monitorId: string, update: MonitorRecordUpdate): MonitorRecord {
+		const record = this.requireRecord(monitorId);
+		let factsChanged = false;
+		if (update.diagnostic) factsChanged = this.addDiagnostic(record, update.diagnostic) || factsChanged;
+		if (update.activity) this.appendActivity(record, update.activity);
+		const changed = this.transition(
+			record,
+			update.status,
+			update.reason,
+			{ exitReason: update.exitReason, exitCode: update.exitCode },
+			update.timestamp ?? this.now(),
+		);
+		if (factsChanged && !changed) this.persist(record);
+		return this.snapshot(record);
 	}
 
 	status(monitorId: string): MonitorRecord {

@@ -220,6 +220,10 @@ export class TaskLedgerWidget implements Component {
 		const todoLimit = taskTodoLimit(rows);
 		const selection = selectTaskTodos(snapshot.todos, todoLimit);
 		const monitorSummary = monitorRuntime?.getSummary();
+		const runningWorkflows = snapshot.workflows.filter((workflow) => workflow.status === "running").length;
+		const attentionWorkflows = snapshot.workflows.filter(
+			(workflow) => workflow.status === "failed" || workflow.status === "lost",
+		).length;
 		const header = fitSingleLine(
 			[
 				{ text: theme.bold("Tasks"), required: true },
@@ -236,6 +240,17 @@ export class TaskLedgerWidget implements Component {
 					priority: 1,
 				},
 				{ text: theme.fg("dim", verificationLabel(snapshot)), separator: " · ", priority: 0 },
+				{
+					text:
+						runningWorkflows > 0 || attentionWorkflows > 0
+							? theme.fg(
+									attentionWorkflows > 0 ? "warning" : "accent",
+									`workflows ${runningWorkflows} running${attentionWorkflows > 0 ? ` · ${attentionWorkflows} attention` : ""}`,
+								)
+							: "",
+					separator: " · ",
+					priority: 2,
+				},
 				{
 					text:
 						monitorSummary && monitorSummary.total > 0

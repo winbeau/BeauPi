@@ -198,6 +198,11 @@ export class FooterComponent implements Component {
 			: "";
 		const taskLedger = this.session.taskLedger.getSnapshot();
 		const monitorSummary = this.session.monitorRuntime?.getSummary();
+		const workflows = taskLedger.workflows ?? [];
+		const runningWorkflows = workflows.filter((workflow) => workflow.status === "running").length;
+		const attentionWorkflows = workflows.filter(
+			(workflow) => workflow.status === "failed" || workflow.status === "lost",
+		).length;
 		const hasTaskActivity = taskLedger.startedAt !== undefined || taskLedger.commands.length > 0;
 		const modifiedFiles =
 			taskLedger.filesModified.length > 0
@@ -223,6 +228,17 @@ export class FooterComponent implements Component {
 				},
 				{
 					text: hasTaskActivity ? theme.fg("accent", taskLedger.phase) : "",
+					separator: " · ",
+					priority: 4,
+				},
+				{
+					text:
+						runningWorkflows > 0 || attentionWorkflows > 0
+							? theme.fg(
+									attentionWorkflows > 0 ? "warning" : "accent",
+									`wf ${runningWorkflows} run${attentionWorkflows > 0 ? ` · ${attentionWorkflows} attention` : ""}`,
+								)
+							: "",
 					separator: " · ",
 					priority: 4,
 				},

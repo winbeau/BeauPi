@@ -151,6 +151,10 @@ export interface DelegateTaskInput {
 		timeoutMs?: number;
 	};
 	cancelStrategy?: AgentCancellationStrategy;
+	/** Internal Workflow override; not exposed by delegate_task. */
+	cwd?: string;
+	/** Internal Workflow boundary that can further restrict, never broaden, Profile write access. */
+	allowFileModifications?: boolean;
 }
 
 const DELEGATE_TASK_PARAMETERS = Type.Object({
@@ -169,7 +173,13 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 type DelegateTaskParameters = Static<typeof DELEGATE_TASK_PARAMETERS>;
 
 const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
-const RESERVED_TOOL_NAMES = new Set(["delegate_task", "ask_user_question"]);
+const RESERVED_TOOL_NAMES = new Set([
+	"delegate_task",
+	"ask_user_question",
+	"workflow_run",
+	"workflow_status",
+	"workflow_cancel",
+]);
 
 function errorWithCode(code: string, message: string): AgentTaskError {
 	return { code, message };
@@ -344,6 +354,7 @@ function mergeBudget(profile: AgentProfile, input: DelegateTaskInput): AgentProf
 		maxTurns: minimum(profile.maxTurns, requestBudget?.maxTurns),
 		timeoutMs: minimum(profile.timeoutMs, requestBudget?.timeoutMs),
 		cancelStrategy: input.cancelStrategy ?? profile.cancelStrategy,
+		allowFileModifications: input.allowFileModifications === false ? false : profile.allowFileModifications,
 	};
 }
 
@@ -440,6 +451,14 @@ export class AgentPool {
 
 	get maxObservedConcurrency(): number {
 		return this.maxObservedConcurrencyValue;
+	}
+
+	hasProfile(profileId: string): boolean {
+		return this.profiles.has(profileId);
+	}
+
+	getProfileIds(): string[] {
+		return [...this.profiles.keys()];
 	}
 
 	/** Request cancellation for an active task without exposing child session state. */
@@ -674,20 +693,21 @@ export class AgentPool {
 			const blockedByBoundary = effectiveProfile.allowFileModifications === false ? ["bash", "edit", "write"] : [];
 			const toolAllowlist = allowedTools.filter((name) => !blockedByBoundary.includes(name));
 			const controlledLoader = createControlledResourceLoader(this.dependencies.resourceLoader, effectiveProfile);
+			const childCwd = input.cwd ?? this.dependencies.cwd;
 			const childResult = await this.dependencies.createSession({
-				cwd: this.dependencies.cwd,
+				cwd: childCwd,
 				agentDir: this.dependencies.agentDir,
 				model: this.dependencies.model,
 				modelRuntime: this.dependencies.modelRuntime,
 				resourceLoader: controlledLoader,
-				sessionManager: SessionManager.inMemory(this.dependencies.cwd),
+				sessionManager: SessionManager.inMemory(childCwd),
 				settingsManager: SettingsManager.inMemory({
 					compaction: { enabled: false },
 					retry: { enabled: false },
 					policy: this.dependencies.policySettings ? structuredClone(this.dependencies.policySettings) : undefined,
 				}),
 				tools: toolAllowlist,
-				excludeTools: ["delegate_task", "ask_user_question"],
+				excludeTools: ["delegate_task", "ask_user_question", "workflow_run", "workflow_status", "workflow_cancel"],
 				customTools: [...this.customTools],
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,

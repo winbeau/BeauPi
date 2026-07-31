@@ -120,26 +120,39 @@ Skill Registry 建立在 Pi 的 Skill discovery、Pi Package 和 `resources_disc
 
 ## Workflow Engine
 
-工作流是 DAG，每个节点声明：
+M11 `core/workflow/` 直接组合现有 AgentPool、MonitorRuntime、SessionManager 和 Tool registry，不创建第二个 Agent Runtime、ResourceLoader、Monitor、Task Ledger、Tool 执行链或输入循环。
+
+工作流使用 `version: 1` 的严格 TypeBox Schema，并可从对象、内置名称或序列化 YAML/JSON 加载。每个节点声明：
 
 ```typescript
-interface WorkflowNode {
+interface WorkflowNodeDefinition {
   id: string;
-  agent: string;
+  agent?: string;
+  profile?: string;
   task: string;
   dependsOn?: string[];
   condition?: string;
   writePolicy?: "none" | "isolated" | "shared";
+  timeoutMs?: number;
+  failurePolicy?: "fail-workflow" | "continue" | "skip-dependents";
+  budget?: { maxTokens?: number; maxTurns?: number };
+  cancelStrategy?: "abort" | "graceful";
 }
 ```
 
-默认规则：
+调度规则：
 
-- 同一时间只有一个共享工作区写入者
-- 只读 Agent 可以并发
-- 并行写入使用独立 Git Worktree
-- 节点只消费依赖节点的结构化输出
-- 节点失败根据策略暂停、跳过或终止
+- 先校验重复 ID、未知依赖、环、Profile、条件、额外字段和预算，再创建任何子 Agent 或 Worktree
+- 条件使用有界解析器：常量或 `deps.<id>.status|output.<path> ==|!= <JSON 标量>`，支持最多 16 个 `&&`/`||` 子句，不执行代码
+- 无依赖只读节点并行；Workflow 自身的 `maxConcurrency` 与 AgentPool 全局并发槽位同时生效
+- 同一 Workflow Runtime 跨并发 Workflow 最多一个 shared 写入者；shared 与同一工作区只读节点互斥，isolated 节点可并行
+- isolated 节点由 `WorkflowWorktreeManager` 通过现有无 shell `execCommand()` Git 调用创建；路径位于受控临时根，分支使用 `beaupi-workflow/*`，创建/清理串行且只删除 Runtime 自己生成的路径和分支
+- 失败/取消/Workflow 非成功终态立即清理 Worktree；成功 isolated Worktree 保留到 Session 结束，供 Coordinator 检查或整合，然后确定性清理
+- 节点 prompt 只附加依赖节点的结构化 `AgentTaskResult`、状态、错误和诊断，不附加完整 transcript
+- `fail-workflow` 取消其余节点，`continue` 允许依赖节点按条件继续，`skip-dependents` 跳过传递依赖
+- Workflow/节点快照只通过 `workflow_run/status/cancel` Tool Result 和现有 Monitor custom entries 持久化；恢复时无法确认的非终态标记为 `lost`
+
+`workflow_run` 同步等待 DAG 到达终态，不实现 M12 的后台自动唤醒；`workflow_status` 和 `workflow_cancel` 可由 SDK、并行 Tool 调用或后续回合查询/取消。详细契约见 [多 Agent Workflow](./workflows.md)。
 
 ## Document Runtime
 
@@ -242,7 +255,7 @@ M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract�
 - Tool 以稳定 `toolCallId` 去重，用户 Bash 以 Session entry id 重建。
 - 只记录当前 Session 可确定的 Tool、Shell、文件和验证事实。
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
-- Tasks Widget 和 Footer 只消费 Ledger snapshot，不维护独立 Plan/Workflow 状态。
+- M11 Workflow Runtime 将实时结构化快照投影到同一 Ledger；Workflow Tool Result 和 Monitor records 负责分支恢复，Tasks Widget 与 Footer 只消费 Ledger/Monitor snapshot，不读取或驱动调度器。
 
 ## Remote Terminal transport
 
@@ -262,9 +275,9 @@ terminal_create
 
 ## Monitor 与后台任务
 
-Monitor Runtime 是本地进程、Tool、子 Agent、SSH 连接和本地 tmux SSH terminal 的统一观察层，内部只有一个 session-scoped `MonitorRegistry` 保存 `MonitorRecord`；它不创建 Agent、Session、ResourceLoader 或第二套任务状态系统。Runtime 负责确定性状态、最后活动时间、资源快照、增量日志 cursor/hash、生命周期事件去重和可视化。它不从日志文本猜测业务结论，也不会在无变化时调用模型。
+Monitor Runtime 是本地进程、Tool、子 Agent、Workflow/节点、SSH 连接和本地 tmux SSH terminal 的统一观察层，内部只有一个 session-scoped `MonitorRegistry` 保存 `MonitorRecord`；它不创建 Agent、Session、ResourceLoader 或第二套任务状态系统。Runtime 负责确定性状态、最后活动时间、资源快照、增量日志 cursor/hash、生命周期事件去重和可视化。它不从日志文本猜测业务结论，也不会在无变化时调用模型。
 
-M6 的 Process adapter 只检查 PID、退出码、日志位置/identity/hash 和资源快照；Tool/Sub-Agent adapter 消费现有 `AgentSession`/`AgentPool` 生命周期事件。`starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 是唯一 Monitor 状态，无法确认恢复目标时使用 `lost`，不推断成功。M7 SSH/tmux adapter 以本地 tmux session 是否存在和 pane 内 SSH 是否存活作为 terminal 的确定性事实。
+M6 的 Process adapter 只检查 PID、退出码、日志位置/identity/hash 和资源快照；Tool/Sub-Agent adapter 消费现有 `AgentSession`/`AgentPool` 生命周期事件。`starting`、`running`、`healthy`、`stalled`、`completed`、`failed`、`cancelled`、`lost` 是唯一 Monitor 状态，无法确认恢复目标时使用 `lost`，不推断成功。M11 Workflow adapter 只消费 Workflow Runtime 的结构化状态和取消入口；节点 turn/Tool 活动进入现有有界 activity log，可继续通过 `monitor_status`、`monitor_logs`、`monitor_wait` 和 `monitor_stop` 查询。M7 SSH/tmux adapter 以本地 tmux session 是否存在和 pane 内 SSH 是否存活作为 terminal 的确定性事实。
 
 Background Task Manager 管理长进程、状态轮询、日志增量和唤醒队列，并复用 Monitor Runtime；进程完成或满足触发条件后，才通过现有 Session 消息机制重新触发 Agent turn。M6 先交付 Monitor，M12 再增加后台自动唤醒。
 

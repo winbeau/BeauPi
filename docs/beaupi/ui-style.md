@@ -315,6 +315,8 @@ Workflow: implement-review
 - 当前节点突出，已完成节点降低对比度
 - 失败节点显示简短原因
 
+M11 已接入真实 `WorkflowSnapshotComponent`：组件只消费版本化 DAG 快照，按依赖深度计算缩进，并行节点保持同级；当前节点加粗/accent、完成节点 dim、失败/超时/lost 节点保留宽度安全的简短原因。`workflow_run/status/cancel` 继续使用 minimal Tool shell；Task Ledger Todo 和 Footer 分别显示当前分支节点状态与 Workflow running/attention 聚合。暗色/亮色及 40/80/120/160 列均使用现有 ANSI-aware helper 校验无横向溢出。
+
 ## Footer
 
 ## 三行布局

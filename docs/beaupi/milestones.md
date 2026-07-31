@@ -604,6 +604,8 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 ## M11：多 Agent Workflow
 
+状态：已完成（2026-07-31）。
+
 ### 目标
 
 在已稳定的子 Agent、Monitor 和策略系统上实现 DAG 调度。
@@ -622,6 +624,17 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 ### 验收标准
 
 `implement-review` 能串行完成实现与审查；两个只读节点能够并行；两个共享工作区写入节点不会并发执行；节点状态和日志可在 Monitor 中查询。
+
+### 验收记录（2026-07-31）
+
+- `core/workflow/` 已提供 `version: 1` 的严格 TypeBox Schema、YAML/JSON/内置名称解析、重复 ID/未知依赖/环/Profile/条件/预算校验，以及五个内置 Workflow。
+- 条件解析器只接受常量或 `deps.<id>.status|output.<path> ==|!= <JSON 标量>`，支持有界 `&&`/`||`，不使用 `eval`/`new Function`；节点 prompt 只包含依赖的结构化输出、状态、错误和诊断。
+- DAG scheduler 同时服从 Workflow `maxConcurrency` 和 AgentPool 全局并发槽；只读节点可并行，shared 写入跨同时运行的 Workflow 全局单写且与同工作区只读节点互斥，isolated 写入可并行。
+- `WorkflowWorktreeManager` 通过现有无 shell `execCommand()` 执行 Git Worktree 操作，使用受控临时根和 `beaupi-workflow/*` 分支；创建/清理串行，只删除自身生成路径，失败/取消/非成功 Workflow 立即清理，成功节点在 Session 结束清理。
+- `workflow_run`、`workflow_status`、`workflow_cancel` 已默认注册到启用 AgentPool 的 Coordinator，使用严格参数和版本化 details；AbortSignal、节点超时、Workflow 取消和重复取消均返回确定终态。
+- Workflow/节点使用现有 Monitor kind/adapter、状态机和 activity log；`monitor_status/logs/wait/stop` 可直接查询或取消，不建立独立监控器。恢复时无法确认的运行状态标记 `lost`。
+- Workflow 实时快照和 Tool Result 进入现有 Task Ledger，并驱动 Todo、Footer、minimal Tool shell 和 DAG renderer；Compact、resume 和 tree branch 切换只恢复当前分支事实。
+- faux provider 与 fake Git/Monitor 场景覆盖 Schema/环、依赖/条件、并发、shared 互斥、isolated 隔离/清理、成功/失败/跳过/取消/超时、Tool、Monitor、Session、Profile 边界和暗/亮 40/80/120/160 列。
 
 ---
 
@@ -738,10 +751,10 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 ## 当前推荐开发入口
 
-M0–M10 已形成连续能力闭环。下一阶段推进 M11：
+M0–M11 已形成连续能力闭环。下一阶段推进 M12：
 
-1. 在现有 AgentPool、Monitor Runtime、Task Ledger 和 Policy Runtime 上实现 Workflow DAG，不创建第二套调度状态链。
-2. 先闭环节点依赖、条件、并发限制、取消/超时、默认单写者和 Worktree 隔离。
-3. 不提前实现 M12 自动唤醒或 M13 sudo，也不增加专用 Git Tools。
+1. 在现有 Monitor Runtime、Workflow 状态、Task Ledger 和 Policy Runtime 上增加后台任务管理，不创建第二套进程状态或 Session 唤醒链。
+2. 先闭环任务启动/接管、增量日志、完成/失败/超时/停滞事件、Wake Queue 去重和恢复。
+3. 不提前实现 M13 sudo，也不增加专用 Git Tools。
 
 继续复用现有 Runtime、Session、ResourceLoader、Task Ledger、Tool 执行链、统一状态符号和 TUI 宽度约束。

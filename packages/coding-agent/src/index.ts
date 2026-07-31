@@ -477,6 +477,7 @@ export {
 	type ProjectTrustStoreEntry,
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
+export * from "./core/workflow/index.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
@@ -544,6 +545,7 @@ export {
 	UserMessageComponent,
 	UserMessageSelectorComponent,
 	type VisualTruncateResult,
+	WorkflowSnapshotComponent,
 } from "./modes/interactive/components/index.ts";
 // Theme utilities for custom tools and extensions
 export {

@@ -36,6 +36,7 @@ import {
 	createWriteTool,
 	withFileMutationQueue,
 } from "./tools/index.ts";
+import { createWorkflowToolDefinitions, WorkflowRuntime } from "./workflow/index.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
 // or invoke low-level agent loops without supplying streamFn. Agent core remains
@@ -113,6 +114,8 @@ export interface CreateAgentSessionOptions {
 	monitorRuntime?: MonitorRuntime;
 	/** Inject a session-scoped M7 remote runtime, primarily for deterministic tests. */
 	remoteRuntime?: RemoteExecutionRuntime;
+	/** Inject a session-scoped M11 Workflow Runtime, primarily for deterministic tests. */
+	workflowRuntime?: WorkflowRuntime;
 }
 
 /** Result from createAgentSession */
@@ -313,6 +316,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			sessionManager,
 			agentPool: childAgentPool,
 		});
+	const workflowRuntime =
+		options.workflowRuntime ??
+		(childAgentPool
+			? new WorkflowRuntime({
+					cwd,
+					sessionManager,
+					agentPool: childAgentPool,
+					monitorRuntime,
+				})
+			: undefined);
 	const remoteRuntime =
 		options.remoteRuntime ??
 		new RemoteExecutionRuntime({
@@ -323,6 +336,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			monitorRuntime,
 		});
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
+	const workflowTools = workflowRuntime ? createWorkflowToolDefinitions(workflowRuntime) : [];
 	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
 	const searchTools = createSearchToolDefinitions(searchRuntime, {
 		budgetScopeId: searchBudgetScopeId,
@@ -334,6 +348,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
 		for (const monitorTool of monitorTools) {
 			if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
+		}
+		for (const workflowTool of workflowTools) {
+			if (!customTools.some((tool) => tool.name === workflowTool.name)) customTools.push(workflowTool);
 		}
 		for (const remoteTool of remoteTools) {
 			if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
@@ -353,7 +370,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"ask_user_question",
 		"web_search",
 		"web_fetch",
-		...(childAgentPool ? ["delegate_task"] : []),
+		...(childAgentPool ? ["delegate_task", "workflow_run", "workflow_status", "workflow_cancel"] : []),
 		"target_select",
 		"remote_exec",
 		"terminal_create",
@@ -517,6 +534,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRuntime,
 		agentPool: childAgentPool,
 		monitorRuntime,
+		workflowRuntime,
 		initialActiveToolNames,
 		disableDocumentTools: options.noTools === "builtin" && options.tools === undefined,
 		disableQuestionTool: options.noTools === "builtin" && options.tools === undefined,

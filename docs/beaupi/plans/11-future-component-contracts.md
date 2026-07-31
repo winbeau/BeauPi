@@ -2,7 +2,7 @@
 
 ## 实施状态
 
-M1 接入点已完成。`BeauPiActivityState`、状态符号和 Tool 状态映射已加入共享视觉 helper；Todo、Agent、Workflow 和 Background Runtime 仍按计划留给后续里程碑。
+M1 接入点已完成。`BeauPiActivityState`、状态符号和 Tool 状态映射已加入共享视觉 helper；M2 Todo、M5 Agent 和 M11 Workflow 已接入真实 Runtime，Background Runtime 仍留给 M12。
 
 ## 目的
 
@@ -66,6 +66,8 @@ Workflow: implement-review
 ```
 
 输入为 DAG 节点的结构化快照。组件不负责调度，也不读取 Workflow Engine。
+
+M11 已实现该契约：`WorkflowSnapshotComponent` 只接收 `WorkflowSnapshot`，按结构化 `dependsOn` 计算层级，使用共享状态色/符号和 ANSI-aware 宽度 helper；`workflow_run/status/cancel` renderer、Task Ledger Todo 和 Footer 不调用调度 API。
 
 ## Background 契约
 

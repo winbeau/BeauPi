@@ -156,6 +156,8 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - `web_fetch`
 - `delegate_task`
 - `workflow_run`
+- `workflow_status`
+- `workflow_cancel`
 - `dependency_check`
 - `privileged_exec`
 
@@ -174,23 +176,27 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 
 ### 多 Agent 工作流
 
-支持 DAG：
+M11 已在现有 AgentPool、MonitorRuntime、Task Ledger 和 Session 生命周期上实现版本化 Workflow DAG：
 
-- 节点依赖
-- 并行节点
-- 条件节点
-- 超时和取消
-- 每 Agent 模型和工具配置
-- 单写者策略
-- Worktree 并行写入隔离
+- Workflow 输入支持严格 TypeBox 校验后的对象，或内置名称/序列化 YAML/JSON；当前版本为 `version: 1`
+- 节点支持 `id`、`agent`/`profile`、`task`、`dependsOn`、`condition`、`writePolicy`、`timeoutMs`、`failurePolicy`、预算和取消策略
+- 校验重复 ID、未知依赖、环、未知 Profile、无效条件、额外字段和越界预算
+- 条件只支持 `always`、`all_succeeded`、`any_failed`，以及 `deps.<id>.status|output.<path> ==|!= <JSON 标量>` 的有界 `&&`/`||` 表达式；不使用 `eval` 或 `new Function`
+- 节点只接收依赖节点的结构化状态、输出、错误和诊断，不接收子 Agent transcript
+- 无依赖只读节点并行；同一 Workflow Runtime 跨同时运行的 Workflow 最多一个 shared 写入者，shared 与同工作区只读节点互斥
+- isolated 写入使用确定性临时路径和 `beaupi-workflow/*` 分支的 Git Worktree；创建和清理串行，失败/取消/Workflow 失败立即清理，成功 Worktree 保留到 Session 结束再清理
+- `workflow_run`、`workflow_status`、`workflow_cancel` 返回版本化结构化快照；AbortSignal、超时和重复取消确定性结束
+- Workflow 与节点复用现有 Monitor records/增量活动日志；Task Ledger、Todo、Footer、Compact、resume 和 branch 只投影当前分支事实，无法确认的恢复状态标记为 `lost`
 
-首批工作流：
+首批内置工作流：
 
 - `research`
 - `implement-review`
 - `parallel-review`
 - `debug`
 - `docs-execute`
+
+详细格式与安全边界见 [多 Agent Workflow](./workflows.md)。
 
 ### 联网搜索
 

@@ -20,6 +20,7 @@
 - Added BeauPi M9 `ask_user_question` with strict bounded schemas, single/multi-select, built-in Other and notes editors, multi-question review, Markdown preview, configurable keybindings, versioned Session/Task Ledger facts, SDK/RPC callbacks, and controlled sub-agent clarification boundaries.
 - Added the M10 session-scoped, branch-aware Policy Runtime with conservative Shell/path/error classification, stable redacted signatures, repeated-operation and failure/fallback advisories, Task Ledger facts, and current-branch Session restoration.
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
+- Added BeauPi M11 multi-agent Workflows with a strict versioned YAML/JSON DAG schema, bounded dependency conditions, AgentPool scheduling, shared single-writer coordination, isolated Git Worktrees, five built-in Workflows, `workflow_run/status/cancel`, Monitor and Task Ledger lifecycle integration, and a responsive DAG renderer.
 
 ### Changed
 
@@ -39,6 +40,7 @@
 - Changed the built-in sub-agent profiles to use only wall-clock timeouts by default, removing their token and turn caps; custom profiles can still opt into additional budgets.
 - Changed the BeauPi roadmap to mark the Policy Engine complete and advance the active milestone to multi-agent Workflow.
 - Changed Policy to advisory-only behavior: every managed operation reaches its original executor, former block/confirm/replace/pause conditions become non-sensitive Footer-only advisories, TUI/SDK/RPC confirmation handlers are not invoked, controlled sub-agents omit Policy requests, and Tool/Todo rendering ignores Policy status metadata while legacy Session Policy details remain parseable.
+- Changed the BeauPi roadmap to mark multi-agent Workflow complete and advance the active milestone to background task auto-wake.
 
 ### Fixed
 

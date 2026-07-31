@@ -133,6 +133,7 @@ import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts"
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+import { attachWorkflowToolDetails, getWorkflowToolDetails, type WorkflowRuntime } from "./workflow/index.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -267,6 +268,8 @@ export interface AgentSessionConfig {
 	monitorRuntime?: MonitorRuntime;
 	/** Optional M7 remote runtime. Created here when omitted. */
 	remoteRuntime?: RemoteExecutionRuntime;
+	/** Optional M11 Workflow Runtime. Present for Coordinator sessions with an Agent Pool. */
+	workflowRuntime?: WorkflowRuntime;
 }
 
 export interface ExtensionBindings {
@@ -362,6 +365,7 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _unsubscribeQuestionRuntime?: () => void;
 	private _unsubscribePolicyRuntime?: () => void;
+	private _unsubscribeWorkflowRuntime?: () => void;
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
 	private _pendingPromptPreflights = new Set<Promise<void>>();
@@ -420,6 +424,7 @@ export class AgentSession {
 	private _agentPool?: AgentPool;
 	readonly monitorRuntime: MonitorRuntime;
 	readonly remoteRuntime: RemoteExecutionRuntime;
+	readonly workflowRuntime?: WorkflowRuntime;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -478,6 +483,13 @@ export class AgentSession {
 				sessionManager: config.sessionManager,
 				agentPool: this._agentPool,
 			});
+		this.workflowRuntime = config.workflowRuntime;
+		if (this.workflowRuntime) {
+			this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
+			this._unsubscribeWorkflowRuntime = this.workflowRuntime.subscribe((snapshot) => {
+				this.taskLedger.recordWorkflowSnapshot(snapshot);
+			});
+		}
 		this.remoteRuntime =
 			config.remoteRuntime ??
 			new RemoteExecutionRuntime({
@@ -638,7 +650,9 @@ export class AgentSession {
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
 			const remoteDetails = getRemoteToolDetails(result.details);
-			const runtimeError = searchDetails?.ok === false || remoteDetails?.ok === false;
+			const workflowDetails = getWorkflowToolDetails(result.details);
+			const runtimeError =
+				searchDetails?.ok === false || remoteDetails?.ok === false || workflowDetails?.ok === false;
 			const policyDetails = await this.policyRuntime.finalizeTool({
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
@@ -683,6 +697,7 @@ export class AgentSession {
 				? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
 				: hookResult.details;
 			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
+			if (workflowDetails) details = attachWorkflowToolDetails(details, workflowDetails);
 			if (policyDetails) details = attachPolicyToolDetails(details, policyDetails);
 			authoritativeDetails = details;
 			return {
@@ -822,6 +837,10 @@ export class AgentSession {
 			const policyDetails = this.taskLedger.getPolicyDetails(event.message.toolCallId);
 			if (policyDetails) {
 				event.message.details = attachPolicyToolDetails(event.message.details, policyDetails);
+			}
+			const workflowDetails = this.taskLedger.getWorkflowDetails(event.message.toolCallId);
+			if (workflowDetails) {
+				event.message.details = attachWorkflowToolDetails(event.message.details, workflowDetails);
 			}
 		}
 
@@ -1050,6 +1069,7 @@ export class AgentSession {
 			this.questionRuntime.cancelPending();
 			this.agent.abort();
 			void this.remoteRuntime.dispose();
+			void this.workflowRuntime?.dispose();
 			this.monitorRuntime.dispose();
 			this._agentPool?.dispose();
 		} catch {
@@ -1064,6 +1084,8 @@ export class AgentSession {
 		this._unsubscribeQuestionRuntime = undefined;
 		this._unsubscribePolicyRuntime?.();
 		this._unsubscribePolicyRuntime = undefined;
+		this._unsubscribeWorkflowRuntime?.();
+		this._unsubscribeWorkflowRuntime = undefined;
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
 	}
@@ -3463,7 +3485,10 @@ export class AgentSession {
 			this.agent.state.messages = sessionContext.messages;
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
 			this.policyRuntime.rebuild(this.sessionManager.getBranch());
+			await this.workflowRuntime?.cancelActiveWorkflows();
 			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
+			await this.workflowRuntime?.rebuild(this.sessionManager.getBranch());
+			if (this.workflowRuntime) this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 			const documentContract = await this.documentRuntime.validateCurrentContract();
 			this.taskLedger.setDocumentRuntimeContract(documentContract);

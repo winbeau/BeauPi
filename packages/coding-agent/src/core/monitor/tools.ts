@@ -14,6 +14,7 @@ const monitorAttachSchema = Type.Object({
 		Type.Literal("tool"),
 		Type.Literal("sub-agent"),
 		Type.Literal("ssh-tmux"),
+		Type.Literal("workflow"),
 	]),
 	pid: Type.Optional(Type.Integer({ minimum: 1 })),
 	toolCallId: Type.Optional(Type.String({ minLength: 1 })),
@@ -21,6 +22,8 @@ const monitorAttachSchema = Type.Object({
 	profile: Type.Optional(Type.String({ minLength: 1 })),
 	targetId: Type.Optional(Type.String({ minLength: 1 })),
 	sessionId: Type.Optional(Type.String({ minLength: 1 })),
+	workflowId: Type.Optional(Type.String({ minLength: 1 })),
+	nodeId: Type.Optional(Type.String({ minLength: 1 })),
 	name: Type.Optional(Type.String({ minLength: 1 })),
 	taskSummary: Type.Optional(Type.String({ minLength: 1 })),
 	logPath: Type.Optional(Type.String({ minLength: 1 })),
@@ -30,7 +33,13 @@ const monitorAttachSchema = Type.Object({
 
 const monitorListSchema = Type.Object({
 	kind: Type.Optional(
-		Type.Union([Type.Literal("process"), Type.Literal("tool"), Type.Literal("sub-agent"), Type.Literal("ssh-tmux")]),
+		Type.Union([
+			Type.Literal("process"),
+			Type.Literal("tool"),
+			Type.Literal("sub-agent"),
+			Type.Literal("ssh-tmux"),
+			Type.Literal("workflow"),
+		]),
 	),
 	status: Type.Optional(
 		Type.Union([
@@ -225,6 +234,15 @@ function attachTarget(runtime: MonitorRuntime, params: MonitorAttachInput) {
 				stallTimeoutMs: params.stallTimeoutMs,
 				timeoutMs: params.timeoutMs,
 			};
+		case "workflow":
+			if (!params.workflowId) throw new Error("monitor_attach Workflow targets require workflowId");
+			return {
+				target: { kind: "workflow" as const, workflowId: params.workflowId, nodeId: params.nodeId, logPath },
+				name: params.name,
+				taskSummary: params.taskSummary,
+				stallTimeoutMs: params.stallTimeoutMs,
+				timeoutMs: params.timeoutMs,
+			};
 	}
 }
 
@@ -233,7 +251,7 @@ function createAttachTool(runtime: MonitorRuntime): ToolDefinition<typeof monito
 		name: "monitor_attach",
 		label: "monitor_attach",
 		description:
-			"Attach the session Monitor Runtime to a local process, Tool, sub-agent, or reserved SSH/tmux target.",
+			"Attach the session Monitor Runtime to a local process, Tool, sub-agent, Workflow, or SSH/tmux target.",
 		promptSnippet: "Attach a target to the session Monitor Runtime",
 		promptGuidelines: [
 			"Monitor facts are deterministic; do not infer business state from log text.",

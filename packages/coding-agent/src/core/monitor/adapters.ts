@@ -170,6 +170,34 @@ export class FakeSubAgentAdapter extends SubAgentMonitorAdapter {
 	}
 }
 
+export interface WorkflowMonitorSource {
+	poll(workflowId: string, nodeId: string | undefined): MonitorAdapterSnapshot;
+	cancel(workflowId: string): boolean;
+}
+
+/** Event-driven Workflow adapter backed by the existing Workflow Runtime. */
+export class WorkflowMonitorAdapter implements MonitorAdapter {
+	readonly kind = "workflow" as const;
+	private readonly source?: WorkflowMonitorSource;
+
+	constructor(source?: WorkflowMonitorSource) {
+		this.source = source;
+	}
+
+	poll(record: MonitorRecord): MonitorAdapterSnapshot {
+		if (record.target.kind !== "workflow") return { availability: "unknown" };
+		return this.source?.poll(record.target.workflowId, record.target.nodeId) ?? { availability: "unknown" };
+	}
+
+	stop(record: MonitorRecord): MonitorStopResult {
+		if (record.target.kind !== "workflow") return { accepted: false, reason: "not_a_workflow" };
+		if (!this.source) return { accepted: false, reason: "workflow_runtime_unavailable" };
+		return this.source.cancel(record.target.workflowId)
+			? { accepted: true, reason: "workflow_cancel_requested" }
+			: { accepted: false, reason: "workflow_not_active" };
+	}
+}
+
 /** Reserved M7 adapter shape. M6 never opens a remote connection. */
 export interface SshTmuxMonitorAdapter extends MonitorAdapter {
 	readonly kind: "ssh-tmux";

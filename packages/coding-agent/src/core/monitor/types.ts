@@ -4,7 +4,7 @@ export const MONITOR_RECORD_VERSION = 1;
 export const MONITOR_SESSION_ENTRY_TYPE = "beaupi.monitor.record";
 export const MONITOR_ACTIVITY_LOG_LIMIT = 32;
 
-export type MonitorKind = "process" | "tool" | "sub-agent" | "ssh-tmux";
+export type MonitorKind = "process" | "tool" | "sub-agent" | "ssh-tmux" | "workflow";
 
 export type MonitorStatus =
 	| "starting"
@@ -30,6 +30,7 @@ export type MonitorEventReason =
 	| "timeout"
 	| "target_lost"
 	| "log_missing"
+	| "skipped"
 	| "stopped";
 
 export interface MonitorResourceSnapshot {
@@ -40,7 +41,7 @@ export interface MonitorResourceSnapshot {
 	processCount?: number;
 }
 
-export type MonitorActivityKind = "turn" | "tool" | "agent";
+export type MonitorActivityKind = "turn" | "tool" | "agent" | "workflow";
 export type MonitorActivityOutcome = "started" | "succeeded" | "failed";
 
 export interface MonitorActivityEvent {
@@ -97,7 +98,25 @@ export interface SshTmuxMonitorTarget {
 	logPath?: string;
 }
 
-export type MonitorTarget = ProcessMonitorTarget | ToolMonitorTarget | SubAgentMonitorTarget | SshTmuxMonitorTarget;
+export interface WorkflowMonitorTarget {
+	kind: "workflow";
+	workflowId: string;
+	nodeId?: string;
+	definitionId?: string;
+	profile?: string;
+	dependsOn?: string[];
+	condition?: string;
+	writePolicy?: "none" | "shared" | "isolated";
+	failurePolicy?: "fail-workflow" | "continue" | "skip-dependents";
+	logPath?: string;
+}
+
+export type MonitorTarget =
+	| ProcessMonitorTarget
+	| ToolMonitorTarget
+	| SubAgentMonitorTarget
+	| SshTmuxMonitorTarget
+	| WorkflowMonitorTarget;
 
 export interface MonitorRecord {
 	version: typeof MONITOR_RECORD_VERSION;
