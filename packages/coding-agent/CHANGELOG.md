@@ -21,6 +21,7 @@
 - Added the M10 session-scoped, branch-aware Policy Runtime with conservative Shell/path/error classification, stable redacted signatures, repeated-operation and failure/fallback advisories, Task Ledger facts, and current-branch Session restoration.
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 - Added BeauPi M11 multi-agent Workflows with a strict versioned YAML/JSON DAG schema, bounded dependency conditions, AgentPool scheduling, shared single-writer coordination, isolated Git Worktrees, five built-in Workflows, `workflow_run/status/cancel`, Monitor and Task Ledger lifecycle integration, and a responsive DAG renderer.
+- Added BeauPi M12 session-scoped background tasks with six `background_*` Tools, runner-owned local process and existing SSH/tmux Monitor attachment, deterministic triggers, a persistent deduplicated Wake Queue, idle/follow-up AgentSession auto-wake, bounded AgentPool progress reviews, branch-aware recovery, Task Ledger integration, and responsive TUI rendering.
 
 ### Changed
 
