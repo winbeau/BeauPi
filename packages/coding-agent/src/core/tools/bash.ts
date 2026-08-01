@@ -418,7 +418,7 @@ export function createBashToolDefinition(
 				: []),
 			...(privilegeRuntime
 				? [
-						"sudo commands in bash are routed to the controlled privilege terminal and require per-request user confirmation.",
+						"sudo commands in bash are staged in the controlled tmux terminal; they do not execute until the user presses Enter, and Escape cancels.",
 					]
 				: []),
 		],

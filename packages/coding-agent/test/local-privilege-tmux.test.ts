@@ -43,9 +43,15 @@ describe("local privilege tmux fixture", () => {
 			}
 			if (args[0] === "send-keys" && args.includes("-l")) {
 				const literal = args.at(-1) ?? "";
+				const stage = literal.match(/__BEAUPI_PRIV_STAGE_[A-Za-z0-9]+__/)?.[0] ?? "";
+				capture = `\n${stage}\n$ sudo id`;
+			}
+			if (args[0] === "send-keys" && args.at(-1) === "Enter") {
+				const literalCall = calls.find((call) => call[0] === "send-keys" && call.includes("-l"));
+				const literal = literalCall?.at(-1) ?? "";
 				const begin = literal.match(/__BEAUPI_PRIV_BEGIN_[A-Za-z0-9]+__/)?.[0] ?? "";
 				const end = literal.match(/__BEAUPI_PRIV_END_[A-Za-z0-9]+__/)?.[0] ?? "";
-				capture = `\n${begin}\nUnable to disable terminal echo\n${end}:125\n`;
+				capture += `\n${begin}\nUnable to disable terminal echo\n${end}:125\n`;
 			}
 			return {
 				stdout: args[0] === "capture-pane" ? capture : "",
@@ -70,8 +76,10 @@ describe("local privilege tmux fixture", () => {
 			logPath: join(cwd, "logs", "privilege.log"),
 		});
 
-		await expect(session.start()).rejects.toThrow("echo could not be disabled");
+		await session.start();
+		expect(await session.capture()).toMatchObject({ state: "waiting_for_user" });
 		await expect(session.sendSensitive(Buffer.from("M13-never-send"))).rejects.toThrow("not accepting input");
+		await expect(session.execute()).rejects.toThrow("echo could not be disabled");
 		expect(calls.some((args) => args[0] === "load-buffer")).toBe(false);
 	});
 
@@ -100,6 +108,11 @@ describe("local privilege tmux fixture", () => {
 			const session = await adapter.create(request);
 			try {
 				await session.start();
+				expect(await session.capture()).toMatchObject({
+					state: "waiting_for_user",
+					content: expect.stringContaining(request.command),
+				});
+				await session.execute();
 				expect(await session.capture()).toMatchObject({ state: "authenticating" });
 				await session.sendSensitive(Buffer.from(`${token}\r`, "utf8"));
 				expect(await session.capture()).toMatchObject({ state: "running" });

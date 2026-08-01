@@ -958,12 +958,12 @@ export class TaskLedger {
 			const waitingForUser = this.pendingPrivilegeInteraction.state === "waiting_for_user";
 			todos.push({
 				id: `privilege:${this.pendingPrivilegeInteraction.requestId}`,
-				label: waitingForUser ? "Permission required for sudo command" : "Running controlled sudo command",
+				label: waitingForUser ? "Sudo command staged for user execution" : "Running controlled sudo command",
 				status: waitingForUser ? "blocked" : "active",
 				sequence: -110,
 				updatedAt: Date.parse(this.pendingPrivilegeInteraction.createdAt) || now,
 				owner: waitingForUser ? "user" : "agent",
-				blockedBy: waitingForUser ? ["per-request confirmation"] : undefined,
+				blockedBy: waitingForUser ? ["press Enter in controlled tmux or Escape to cancel"] : undefined,
 				source: "privileged_exec",
 			});
 		}

@@ -49,6 +49,10 @@ function diagnostic(code: PrivilegeDiagnosticV1["code"], message: string): Privi
 	return { code, message: [...message.normalize("NFKC")].slice(0, 2_000).join("") };
 }
 
+function hasUnsafeTerminalControl(command: string): boolean {
+	return /[\u0000-\u0008\u000b-\u000d\u000e-\u001f\u007f-\u009f]/u.test(command);
+}
+
 function targetKey(request: PrivilegeExecuteInputV1): string {
 	return request.target.execution === "local"
 		? "local"
@@ -311,7 +315,7 @@ export class PrivilegeRuntime {
 		let validationIssue: PrivilegeDiagnosticV1 | undefined;
 		if (
 			!request.command.trim() ||
-			request.command.includes("\0") ||
+			hasUnsafeTerminalControl(request.command) ||
 			inspection.kind === "none" ||
 			inspection.opaque
 		) {
@@ -392,15 +396,23 @@ export class PrivilegeRuntime {
 			const control: PrivilegeTerminalControl = {
 				start: async () => {
 					if (active.session || active.state !== "waiting_for_user") {
-						throw new Error("Privilege command has already started");
+						throw new Error("Privilege command has already been staged");
+					}
+					if (active.controller.signal.aborted) throw new Error("Privilege request cancelled");
+					active.session = await this.terminalAdapter.create(request, active.controller.signal);
+					await active.session.start();
+					this.emit();
+				},
+				execute: async () => {
+					if (!active.session || active.state !== "waiting_for_user" || active.confirmedAt) {
+						throw new Error("Privilege command is not waiting for user execution");
 					}
 					if (active.controller.signal.aborted) throw new Error("Privilege request cancelled");
 					active.confirmedAt = this.now().toISOString();
 					await this.audit(active, "confirmed", { confirmed: true, logPath: request.logPath });
 					active.state = "starting";
 					this.emit();
-					active.session = await this.terminalAdapter.create(request, active.controller.signal);
-					await active.session.start();
+					await active.session.execute();
 					active.startedAt = this.now().toISOString();
 					active.state = "running";
 					if (request.target.execution === "local" && request.target.monitorId && this.monitorRuntime) {
@@ -425,7 +437,7 @@ export class PrivilegeRuntime {
 					await active.session?.cancel();
 				},
 				wait: async () => {
-					if (!active.session) throw new Error("Privilege command has not started");
+					if (!active.session || !active.startedAt) throw new Error("Privilege command has not started");
 					active.waitPromise ??= active.session.wait().then((result) => {
 						active.result = result;
 						return result;
@@ -436,7 +448,10 @@ export class PrivilegeRuntime {
 			onUpdate?.(
 				finish(
 					"interaction_required",
-					diagnostic("interaction_required", "Waiting for user confirmation"),
+					diagnostic(
+						"interaction_required",
+						"Sudo command is staged in the controlled tmux terminal; press Enter to execute or Escape to cancel",
+					),
 					undefined,
 					false,
 				),
@@ -494,10 +509,10 @@ export class PrivilegeRuntime {
 				);
 				return finish("interaction_error", issue);
 			}
-			if (!active.session) {
+			if (!active.session || !active.startedAt) {
 				return finish(
 					"interaction_error",
-					diagnostic("interaction_error", "Privilege interaction completed before command start"),
+					diagnostic("interaction_error", "Privilege interaction completed before user execution"),
 				);
 			}
 			const commandResult = active.result ?? (await control.wait());

@@ -206,18 +206,36 @@ function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function privilegeTerminalWrapper(command: string, beginMarker: string, endMarker: string): string {
+function privilegeTerminalWrapper(
+	command: string,
+	stageMarker: string,
+	beginMarker: string,
+	endMarker: string,
+): string {
 	const encoded = Buffer.from(command, "utf8").toString("base64");
 	return [
 		"__beaupi_restore_echo(){ stty echo >/dev/null 2>&1; }",
 		"trap '__beaupi_restore_echo || true' EXIT HUP INT TERM",
-		"stty -echo",
-		"__beaupi_echo_status=$?",
-		`printf '\\n%s\\n' ${shellQuote(beginMarker)}`,
-		`if [ "$__beaupi_echo_status" -ne 0 ]; then printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi`,
+		`printf '\\n%s\\n' ${shellQuote(stageMarker)}`,
+		`printf '$ %s' "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
+		"if IFS= read -r __beaupi_execute; then stty -echo; __beaupi_echo_status=$?; printf '\\n%s\\n' " +
+			shellQuote(beginMarker) +
+			`; if [ "$__beaupi_echo_status" -ne 0 ]; then printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi; else __beaupi_privilege_status=130; fi`,
 		"trap - EXIT HUP INT TERM",
 		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
 	].join("; ");
+}
+
+function stagedCommandCapture(capture: string, stageMarker: string): string | undefined {
+	const lines = capture
+		.replaceAll("\r", "")
+		.split("\n")
+		.map((line) => line.trimEnd());
+	const index = lines.lastIndexOf(stageMarker);
+	if (index === -1) return undefined;
+	const output = lines.slice(index + 1);
+	while (output.at(-1) === "") output.pop();
+	return output.join("\n");
 }
 
 function incrementalCapture(previous: string, current: string): string {
@@ -664,6 +682,7 @@ export class RemoteExecutionRuntime {
 		const target = this.assertTarget(terminal.targetId);
 		const connection = await this.connect(target.id, signal);
 		const token = randomUUID().replaceAll("-", "");
+		const stageMarker = `__BEAUPI_PRIV_STAGE_${token}__`;
 		const beginMarker = `__BEAUPI_PRIV_BEGIN_${token}__`;
 		const endMarker = `__BEAUPI_PRIV_END_${token}__`;
 		const controller = new AbortController();
@@ -671,6 +690,9 @@ export class RemoteExecutionRuntime {
 		if (signal?.aborted) controller.abort();
 		else signal?.addEventListener("abort", forwardAbort, { once: true });
 		let startAttempted = false;
+		let prepared = false;
+		let executionReleased = false;
+		let executed = false;
 		let startedAt: number | undefined;
 		let completed = false;
 		let disposed = false;
@@ -709,7 +731,8 @@ export class RemoteExecutionRuntime {
 						.catch(() => undefined);
 					if (!capture || capture.exitCode !== 0) return false;
 					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-					if (parsed.exitCode !== undefined) return !/Unable to restore terminal echo/.test(parsed.output);
+					if (parsed.exitCode !== undefined)
+						return !/Unable to (?:disable|restore) terminal echo/.test(parsed.output);
 					await delay(50);
 				}
 				return false;
@@ -740,7 +763,7 @@ export class RemoteExecutionRuntime {
 				terminal.busy = true;
 				const sent = await connection.tmuxSend(
 					terminal.paneId,
-					`${privilegeTerminalWrapper(request.command, beginMarker, endMarker)}\n`,
+					`${privilegeTerminalWrapper(request.command, stageMarker, beginMarker, endMarker)}\n`,
 					{ signal: controller.signal },
 				);
 				if (sent.exitCode !== 0) {
@@ -756,6 +779,33 @@ export class RemoteExecutionRuntime {
 						terminal.busy = true;
 						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
 					}
+					if (stagedCommandCapture(capture.stdout, stageMarker) !== undefined) break;
+					if (this.now() >= deadline) {
+						reusable = false;
+						terminal.busy = true;
+						throw new RemoteExecutionError({
+							code: "terminal_busy",
+							message: "Privilege command staging timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						});
+					}
+					await delay(50);
+				}
+				prepared = true;
+			},
+			execute: async () => {
+				if (!prepared || executed || completed)
+					throw new Error("Remote privilege command is not waiting for execution");
+				const executionStartedAt = this.now();
+				executionReleased = true;
+				const sent = await connection.tmuxSendKey(terminal.paneId, "Enter", { signal: controller.signal });
+				if (sent.exitCode !== 0) throw this.tmuxError(sent, target.id, terminalId, "terminal_session_lost");
+				const deadline = this.now() + REMOTE_PRIVILEGE_START_TIMEOUT_MS;
+				while (true) {
+					const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
+					if (capture.exitCode !== 0)
+						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
 					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
 					if (parsed.output.includes("Unable to disable terminal echo")) {
 						reusable = false;
@@ -780,15 +830,16 @@ export class RemoteExecutionRuntime {
 					}
 					await delay(50);
 				}
-				startedAt = this.now();
+				executed = true;
+				startedAt = executionStartedAt;
 			},
 			sendSensitive: async (input) => {
-				if (startedAt === undefined || completed)
+				if (!executed || startedAt === undefined || completed)
 					throw new Error("Remote privilege terminal is not accepting input");
 				await connection.tmuxSendSensitive(terminal.paneId, Buffer.from(input), { signal: controller.signal });
 			},
 			capture: async (): Promise<PrivilegeTerminalFrameV1> => {
-				if (startedAt === undefined) return { content: "", state: "starting" };
+				if (!prepared) return { content: "", state: "starting" };
 				const [capture, screen, status] = await Promise.all([
 					connection.tmuxCapture(terminal.paneId, { signal: controller.signal }),
 					connection.tmuxCaptureScreen(terminal.paneId, { signal: controller.signal }),
@@ -798,7 +849,12 @@ export class RemoteExecutionRuntime {
 					return { content: "", state: "lost" };
 				}
 				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-				const content = parsed.found ? redactOutput(parsed.output) : "";
+				const content = executed
+					? parsed.found
+						? redactOutput(parsed.output)
+						: ""
+					: (stagedCommandCapture(capture.stdout, stageMarker) ?? "");
+				if (!executed) return { content, state: "waiting_for_user" };
 				const authenticating =
 					status.cursorY === undefined
 						? /(?:password|passphrase)[^:\r\n]*:/i.test(content)
@@ -816,11 +872,17 @@ export class RemoteExecutionRuntime {
 			cancel: async () => {
 				if (completed) return;
 				controller.abort();
+				if (!executionReleased) {
+					await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+					reusable = true;
+					terminal.busy = false;
+					return;
+				}
 				reusable = await restoreEcho();
 				terminal.busy = !reusable;
 			},
 			wait: async () => {
-				if (startedAt === undefined) throw new Error("Remote privilege command has not started");
+				if (!executed || startedAt === undefined) throw new Error("Remote privilege command has not started");
 				const deadline = request.timeoutMs === undefined ? undefined : startedAt + request.timeoutMs;
 				while (true) {
 					try {
@@ -939,7 +1001,10 @@ export class RemoteExecutionRuntime {
 				if (disposed) return;
 				disposed = true;
 				signal?.removeEventListener("abort", forwardAbort);
-				if (startedAt !== undefined && !completed) reusable = await restoreEcho();
+				if (prepared && !executionReleased && !completed) {
+					await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+					reusable = true;
+				} else if (executionReleased && !completed) reusable = await restoreEcho();
 				terminal.busy = !reusable;
 			},
 		};

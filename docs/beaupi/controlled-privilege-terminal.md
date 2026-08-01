@@ -7,14 +7,14 @@ M13 在现有 `AgentSession`、Bash、Remote Runtime、本地 tmux SSH terminal�
 ## 用户流程
 
 1. `privileged_exec`、local `bash` 或 `terminal_bash` 提交一个可确定解析的完整 sudo command。
-2. TUI 显示 `Permission required`、request source、target、cwd、只读 command 和 audit path。
-3. 用户必须为这一条 request 单独按确认键；取消不会执行。
-4. Runtime 创建或占用一个 controlling TTY，先关闭 terminal echo，再启动 command。
+2. TUI 第一帧直接打开双分割线 tmux 视图，创建受控 pane 并填充完整只读 command；此时 command 尚未执行。
+3. 用户按 Enter 后才释放这一条已填充 command；按 Escape 则取消并关闭临时视图，sudo 不会执行。
+4. Runtime 在执行时关闭 terminal echo，再通过 controlling TTY 启动 command。
 5. sudo 直接从 controlling TTY 读取认证输入。输入不经过 Tool 参数、Session、Monitor、Task Ledger、RPC 或模型上下文。
 6. tmux 当前光标离开认证提示后，临时终端视图自动 detach，原提示词编辑器恢复；command 继续由同一个 Runtime 和 Monitor 跟踪。密码错误并再次出现提示时不会 detach。
 7. command 完成、失败、取消或超时后，echo 被恢复，结果按 Bash 语义返回，并写入无秘密审计。
 
-系统 sudo ticket 可以让 sudo 不再显示密码 prompt，但不会跳过 BeauPi 的逐请求确认。
+系统 sudo ticket 可以让 sudo 不再显示密码 prompt，但不会跳过 tmux 中由用户按 Enter 触发执行的边界。
 
 ## 路由
 
@@ -53,7 +53,7 @@ Session custom entry `beaupi.privilege.fact` 只用于当前 branch 的历史投
 
 ## 非交互模式
 
-Print、JSON 和 RPC 不安装 privilege interaction handler。sudo request 返回 `interaction_required`，不会读取 stdin 或执行 command。SDK host 必须提供进程内 `PrivilegeInteractionHandler`，并由自己的可信 UI 调用 `control.start()`；handler 不应请求或接收密码，认证字节只能由用户直接输入 controlling TTY。
+Print、JSON 和 RPC 不安装 privilege interaction handler。sudo request 返回 `interaction_required`，不会读取 stdin 或执行 command。SDK host 必须提供进程内 `PrivilegeInteractionHandler`，由可信 UI 调用 `control.start()` 填充命令，并仅在用户选择执行后调用 `control.execute()`；handler 不应请求或接收密码，认证字节只能由用户直接输入 controlling TTY。
 
 ## 明确不提供
 

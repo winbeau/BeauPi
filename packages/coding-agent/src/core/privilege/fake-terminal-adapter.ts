@@ -18,6 +18,7 @@ export class FakePrivilegeTerminalAdapter implements PrivilegeTerminalAdapter {
 	private waitPending = false;
 	createCalls = 0;
 	startCalls = 0;
+	executeCalls = 0;
 	cancelCalls = 0;
 	resizeCalls: Array<{ columns: number; rows: number }> = [];
 	requests: PrivilegeRequestV1[] = [];
@@ -42,6 +43,7 @@ export class FakePrivilegeTerminalAdapter implements PrivilegeTerminalAdapter {
 		this.createCalls++;
 		this.requests.push(structuredClone(request));
 		let started = false;
+		let executed = false;
 		let cancelled = false;
 		let resolveWait: ((result: PrivilegeCommandResultV1) => void) | undefined;
 		const pendingWait = new Promise<PrivilegeCommandResultV1>((resolve) => {
@@ -69,17 +71,29 @@ export class FakePrivilegeTerminalAdapter implements PrivilegeTerminalAdapter {
 				started = true;
 				this.startCalls++;
 			},
+			execute: async () => {
+				if (!started || executed) throw new Error("Fake privilege session is not waiting for execution");
+				executed = true;
+				this.executeCalls++;
+			},
 			sendSensitive: async (input) => {
-				if (!started) throw new Error("Fake privilege session has not started");
+				if (!executed) throw new Error("Fake privilege session has not started");
 				this.receivedInput.push(Buffer.from(input));
 			},
-			capture: async () => structuredClone(cancelled ? { content: "", state: "complete" as const } : this.frame),
+			capture: async () =>
+				structuredClone(
+					cancelled
+						? { content: "", state: "complete" as const }
+						: executed
+							? this.frame
+							: { content: `$ ${request.command}`, state: "waiting_for_user" as const },
+				),
 			resize: async (columns, rows) => {
 				this.resizeCalls.push({ columns, rows });
 			},
 			cancel,
 			wait: async () => {
-				if (!started) throw new Error("Fake privilege session has not started");
+				if (!executed) throw new Error("Fake privilege session has not started");
 				if (cancelled) return cancelledResult();
 				return this.waitPending ? pendingWait : structuredClone(this.result);
 			},

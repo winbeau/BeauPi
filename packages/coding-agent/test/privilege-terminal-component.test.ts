@@ -35,22 +35,28 @@ function request(): PrivilegeInteractionRequest {
 
 function controls() {
 	let resolveWait: (result: PrivilegeCommandResultV1) => void = () => {};
+	let executed = false;
 	const promise = new Promise<PrivilegeCommandResultV1>((resolve) => {
 		resolveWait = resolve;
 	});
-	const capture = vi.fn<PrivilegeTerminalControl["capture"]>(async () => ({
-		content: "Password: ",
-		state: "authenticating",
-	}));
+	const execute = vi.fn(async () => {
+		executed = true;
+	});
+	const capture = vi.fn<PrivilegeTerminalControl["capture"]>(async () =>
+		executed
+			? { content: "Password: ", state: "authenticating" }
+			: { content: `$ ${request().command}`, state: "waiting_for_user" },
+	);
 	const control: PrivilegeTerminalControl = {
 		start: vi.fn(async () => {}),
+		execute,
 		sendSensitive: vi.fn(async () => {}),
 		capture,
 		resize: vi.fn(async () => {}),
 		cancel: vi.fn(async () => {}),
 		wait: vi.fn(() => promise),
 	};
-	return { control, capture, resolveWait };
+	return { control, capture, execute, resolveWait };
 }
 
 async function flush(): Promise<void> {
@@ -60,7 +66,7 @@ async function flush(): Promise<void> {
 describe("PrivilegeTerminalComponent", () => {
 	beforeAll(() => initTheme("dark"));
 
-	it("renders the read-only per-request review without horizontal overflow", () => {
+	it("renders the staged command inside two dividers on the first frame", () => {
 		for (const width of [40, 80, 120, 160]) {
 			const fixture = controls();
 			const component = new PrivilegeTerminalComponent({
@@ -71,32 +77,37 @@ describe("PrivilegeTerminalComponent", () => {
 				onDone: vi.fn(),
 			});
 			const rendered = component.render(width);
-			expect(stripAnsi(rendered.join("\n"))).toContain("Permission required");
-			expect(stripAnsi(rendered.join("\n"))).toContain("every sudo comm");
+			const plain = rendered.map(stripAnsi);
+			expect(plain.filter((line) => line.includes("─"))).toHaveLength(2);
+			expect(plain.join("\n")).toContain("sudo install");
+			expect(plain.join("\n")).not.toContain("Permission required");
 			expect(rendered.every((line) => visibleWidth(line) <= width)).toBe(true);
+			component.dispose();
 		}
 	});
 
-	it("does not start before the configured confirm key and never renders sensitive input", async () => {
-		const tui = fakeTui();
+	it("stages automatically but executes only with the configured run key", async () => {
 		const fixture = controls();
 		const done = vi.fn<(response: PrivilegeInteractionResponse) => void>();
-		const keybindings = new KeybindingsManager({ "app.privilege.confirm": "ctrl+y" });
 		const component = new PrivilegeTerminalComponent({
-			tui,
-			keybindings,
+			tui: fakeTui(),
+			keybindings: new KeybindingsManager({ "app.privilege.confirm": "ctrl+y" }),
 			request: request(),
 			control: fixture.control,
 			onDone: done,
 		});
 
-		component.handleInput("\r");
 		await flush();
-		expect(fixture.control.start).not.toHaveBeenCalled();
-		component.handleInput("\u0019");
 		await flush();
 		expect(fixture.control.start).toHaveBeenCalledTimes(1);
-		expect(fixture.control.resize).toHaveBeenCalledWith(80, 3);
+		expect(fixture.execute).not.toHaveBeenCalled();
+		component.handleInput("\r");
+		await flush();
+		expect(fixture.execute).not.toHaveBeenCalled();
+		component.handleInput("\u0019");
+		await flush();
+		expect(fixture.execute).toHaveBeenCalledTimes(1);
+		expect(fixture.control.wait).toHaveBeenCalledTimes(1);
 
 		const secret = "M13-tui-secret-fixture";
 		component.handleInput(secret);
@@ -110,39 +121,33 @@ describe("PrivilegeTerminalComponent", () => {
 		expect(JSON.stringify(done.mock.calls)).not.toContain(secret);
 	});
 
-	it("renders a two-divider tmux pane and resizes it with captured output", async () => {
-		const tui = fakeTui(80, 30);
+	it("resizes the staged pane with captured command output", async () => {
 		const fixture = controls();
 		fixture.capture.mockResolvedValue({
-			content: "Password:\nline 2\nline 3\nline 4\nline 5\nline 6",
-			state: "authenticating",
+			content: "$ sudo command\nline 2\nline 3\nline 4\nline 5\nline 6",
+			state: "waiting_for_user",
 		});
 		const component = new PrivilegeTerminalComponent({
-			tui,
+			tui: fakeTui(80, 30),
 			keybindings: new KeybindingsManager(),
 			request: request(),
 			control: fixture.control,
 			onDone: vi.fn(),
 		});
 
-		component.handleInput("\r");
 		await flush();
 		await flush();
 		const rendered = component.render(80);
 		const plain = rendered.map(stripAnsi);
 
-		expect(plain.filter((line) => line.includes("─"))).toHaveLength(2);
-		expect(plain[0]).toContain("sudo · Authenticating");
+		expect(plain[0]).toContain("sudo · Ready");
 		expect(fixture.control.resize).toHaveBeenLastCalledWith(80, 6);
 		expect(rendered.every((line) => visibleWidth(line) <= 80)).toBe(true);
 		component.dispose();
 	});
 
-	it("detaches the editor replacement after authentication while the command keeps waiting", async () => {
+	it("cancels a staged command with Escape without executing it", async () => {
 		const fixture = controls();
-		fixture.capture
-			.mockResolvedValueOnce({ content: "Password: ", state: "authenticating" })
-			.mockResolvedValue({ content: "Password: ", state: "running" });
 		const done = vi.fn<(response: PrivilegeInteractionResponse) => void>();
 		const component = new PrivilegeTerminalComponent({
 			tui: fakeTui(),
@@ -152,20 +157,49 @@ describe("PrivilegeTerminalComponent", () => {
 			onDone: done,
 		});
 
-		component.handleInput("\r");
 		await flush();
+		component.handleInput("\u001b");
+		await flush();
+
+		expect(fixture.execute).not.toHaveBeenCalled();
+		expect(fixture.control.cancel).toHaveBeenCalledTimes(1);
+		expect(done).toHaveBeenCalledWith({ status: "cancelled" });
+	});
+
+	it("detaches after authentication while the command keeps waiting", async () => {
+		const fixture = controls();
+		let executedFrames = 0;
+		fixture.capture.mockImplementation(async () => {
+			if (fixture.execute.mock.calls.length === 0) {
+				return { content: `$ ${request().command}`, state: "waiting_for_user" };
+			}
+			return executedFrames++ === 0
+				? { content: "Password: ", state: "authenticating" }
+				: { content: "Password: ", state: "running" };
+		});
+		const done = vi.fn<(response: PrivilegeInteractionResponse) => void>();
+		const component = new PrivilegeTerminalComponent({
+			tui: fakeTui(),
+			keybindings: new KeybindingsManager(),
+			request: request(),
+			control: fixture.control,
+			onDone: done,
+		});
+
+		await flush();
+		component.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 90));
 		component.handleInput("secret\r");
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 250));
 
 		expect(fixture.control.sendSensitive).toHaveBeenCalledWith(Buffer.from("secret\r"));
-		expect(fixture.control.wait).toHaveBeenCalledTimes(1);
 		expect(done).toHaveBeenCalledWith({ status: "completed" });
 		fixture.resolveWait({ output: "done\n", exitCode: 0, startedAt: 1, completedAt: 2 });
 		await flush();
 		expect(done).toHaveBeenCalledTimes(1);
 	});
 
-	it("cancels on dispose after start without retaining typed bytes", async () => {
+	it("cancels on dispose after staging", async () => {
 		const fixture = controls();
 		const component = new PrivilegeTerminalComponent({
 			tui: fakeTui(),
@@ -174,11 +208,10 @@ describe("PrivilegeTerminalComponent", () => {
 			control: fixture.control,
 			onDone: vi.fn(),
 		});
-		component.handleInput("\r");
 		await flush();
 		component.dispose();
 		await flush();
+		expect(fixture.execute).not.toHaveBeenCalled();
 		expect(fixture.control.cancel).toHaveBeenCalledTimes(1);
-		fixture.resolveWait({ output: "", exitCode: null, cancelled: true, startedAt: 1, completedAt: 2 });
 	});
 });

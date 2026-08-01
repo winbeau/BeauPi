@@ -42,6 +42,7 @@ describe("M13 Privilege AgentSession lifecycle", () => {
 			privilegeTerminalAdapter: adapter,
 			privilegeHandler: async (_request, control) => {
 				await control.start();
+				await control.execute();
 				await control.sendSensitive(secret);
 				await control.wait();
 				return { status: "completed" };

@@ -2,7 +2,7 @@
 
 ## 目标
 
-实现“询问 + 输入框 + 临时终端”一体化权限组件：先展示只读命令并等待用户 Enter，再用受控 PTY替换提示词编辑器；认证完成后 detach临时视图，command继续由 Monitor跟踪，最终由 Tool renderer显示结果。
+实现“已填充命令 + 临时终端”一体化权限组件：第一帧直接用受控 PTY替换提示词编辑器并显示只读命令；用户 Enter 后才执行，Escape取消；认证完成后 detach临时视图，command继续由 Monitor跟踪，最终由 Tool renderer显示结果。
 
 ## 现有接入点
 
@@ -14,9 +14,9 @@
 ## Component 状态机
 
 ```text
-review
+staging -> waiting_for_user
   ├─ Enter -> starting -> authenticating/running
-  └─ Cancel -> cancelled
+  └─ Escape -> cancelled（command未执行）
 running
   ├─ secure input -> pane
   ├─ password prompt remains -> keep terminal attached
@@ -26,19 +26,13 @@ complete
   └─ Tool result renderer
 ```
 
-### Review 状态
+### Staged 状态
 
-显示：
-
-- `Permission required`、request source和“每条sudo命令都需要确认”。
-- `Local` 或 target+terminalId。
-- cwd。
-- 完整命令（只读、ANSI-aware wrap）。
-- 审计日志路径。
-- “Authentication input is private and is not recorded.”
-- Enter run、Cancel。
-
-命令看起来像预填 shell line，但不使用可编辑 `Editor`；只有 Enter调用 `control.start()`。
+- 第一帧已经是上下两条分割线之间的tmux pane，不再显示独立`Permission required`页面。
+- `control.start()`只创建/占用pane并显示`$ <完整命令>`，wrapper停在门控read，sudo尚未执行。
+- 命令只读、ANSI-aware wrap，不使用可编辑`Editor`，普通字符输入在此状态被忽略。
+- Enter调用`control.execute()`释放门控；Escape调用cancel并关闭pane，command不会执行。
+- `Local`或target+terminalId、执行提示和可配置keybinding显示在分割线标题/底部hint中。
 
 ### Running 状态
 
@@ -71,8 +65,8 @@ handler必须：
 
 禁止硬编码。向 `DEFAULT_APP_KEYBINDINGS` 添加：
 
-- `app.privilege.confirm`：默认 `enter`，review时启动。
-- `app.privilege.cancel`：默认 `escape`，review时拒绝；running时发送受控取消并等待cleanup。
+- `app.privilege.confirm`：默认 `enter`，waiting_for_user时执行已填充command。
+- `app.privilege.cancel`：默认 `escape`，staged时取消且不执行；running时发送受控取消并等待cleanup。
 - `app.privilege.scrollUp`/`scrollDown`：可复用 `tui.select.pageUp/pageDown` 或新增明确 action。
 - `app.privilege.details`：可复用 `app.tools.expand` 展示完整command/audit details。
 
@@ -97,8 +91,8 @@ handler必须：
 
 ## 测试
 
-- Enter前 `control.start()`零调用；Enter后恰好一次。
-- cancel before start、cancel during prompt、AbortSignal、dispose。
+- component首帧自动调用一次`control.start()`完成stage；Enter前`control.execute()`零调用，Enter后恰好一次。
+- Escape staged command、cancel during prompt、AbortSignal、dispose。
 - input只进入fake `sendSensitive`，render/cache/response无input。
 - capture更新、terminal exit、send failure、echo recovery warning。
 - editor文本和焦点在overlay关闭后恢复。

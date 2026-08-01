@@ -76,12 +76,12 @@ export function createPrivilegedExecToolDefinition(
 		name: "privileged_exec",
 		label: "privileged_exec",
 		description:
-			"Execute one complete sudo command in a controlled local or existing remote terminal. Every request requires user confirmation; authentication input stays in the controlling TTY.",
-		promptSnippet: "Execute a sudo command through the controlled privilege terminal",
+			"Stage one complete sudo command in a controlled local or existing remote tmux terminal. The command is displayed but not executed until the user presses Enter; Escape cancels, and authentication input stays in the controlling TTY.",
+		promptSnippet: "Stage a sudo command for user-controlled execution in the secure tmux terminal",
 		promptGuidelines: [
-			"Use privileged_exec only with a complete command that already contains sudo; do not add password, confirmation, mode, grant, or duration fields.",
-			"Never ask for, receive, repeat, log, or transmit a sudo password; sudo reads authentication input from its controlling TTY.",
-			"Each privileged_exec request requires a separate user confirmation even when system sudo credentials are cached.",
+			"Use privileged_exec whenever a complete command requires sudo; the command is only staged in the controlled tmux terminal, and the user retains final execution control with Enter or cancels with Escape.",
+			"Pass one complete command that already contains sudo; do not add password, confirmation, mode, grant, or duration fields.",
+			"Never ask for, receive, repeat, log, or transmit a sudo password; sudo reads authentication input from its controlling TTY after the user executes the staged command.",
 		],
 		parameters: PRIVILEGED_EXEC_PARAMETERS,
 		executionMode: "sequential",

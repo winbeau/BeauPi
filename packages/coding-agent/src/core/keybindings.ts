@@ -97,7 +97,7 @@ export const KEYBINDINGS = {
 	"app.question.toggle": { defaultKeys: "space", description: "Toggle question option" },
 	"app.question.notes": { defaultKeys: "n", description: "Edit question notes" },
 	"app.question.submit": { defaultKeys: "enter", description: "Confirm question selection" },
-	"app.privilege.confirm": { defaultKeys: "enter", description: "Confirm one sudo command" },
+	"app.privilege.confirm": { defaultKeys: "enter", description: "Execute staged sudo command" },
 	"app.privilege.cancel": { defaultKeys: "escape", description: "Cancel sudo command" },
 	"app.privilege.scrollUp": { defaultKeys: "pageUp", description: "Scroll privilege terminal up" },
 	"app.privilege.scrollDown": { defaultKeys: "pageDown", description: "Scroll privilege terminal down" },

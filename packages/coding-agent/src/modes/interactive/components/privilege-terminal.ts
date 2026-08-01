@@ -26,10 +26,11 @@ export interface PrivilegeTerminalComponentOptions {
 	) => void;
 }
 
-type ViewState = "review" | "starting" | "authenticating" | "running" | "cancelling" | "error";
+type ViewState = "staging" | "waiting_for_user" | "starting" | "authenticating" | "running" | "cancelling" | "error";
 
 const POLL_MS = 75;
-const NO_PROMPT_DETACH_FRAMES = 8;
+const POST_AUTH_DETACH_FRAMES = 3;
+const NO_PROMPT_DETACH_FRAMES = 40;
 
 function wrap(value: string, width: number): string[] {
 	return value.split("\n").flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
@@ -56,8 +57,8 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 	private readonly request: PrivilegeInteractionRequest;
 	private readonly control: PrivilegeTerminalControl;
 	private readonly onDone: PrivilegeTerminalComponentOptions["onDone"];
-	private state: ViewState = "review";
-	private output = "";
+	private state: ViewState = "staging";
+	private output: string;
 	private scrollOffset = 0;
 	private startedAt: number | undefined;
 	private pollTimer: NodeJS.Timeout | undefined;
@@ -76,20 +77,27 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		this.control = options.control;
 		this.onDone = options.onDone;
 		this.renderWidth = Math.max(1, options.tui.terminal.columns);
+		this.output = `$ ${this.request.command}`;
+		queueMicrotask(() => void this.prepare());
 	}
 
 	handleInput(data: string): void {
 		if (this.closed) return;
-		if (this.state === "review") {
-			if (this.keybindings.matches(data, "app.privilege.confirm")) void this.start();
-			else if (this.keybindings.matches(data, "app.privilege.cancel")) this.finish({ status: "cancelled" });
-			return;
-		}
 		if (this.keybindings.matches(data, "app.privilege.cancel")) {
 			void this.cancel();
 			return;
 		}
-		if (this.state === "starting" || this.state === "cancelling" || this.state === "error") return;
+		if (this.state === "waiting_for_user") {
+			if (this.keybindings.matches(data, "app.privilege.confirm")) void this.execute();
+			return;
+		}
+		if (
+			this.state === "staging" ||
+			this.state === "starting" ||
+			this.state === "cancelling" ||
+			this.state === "error"
+		)
+			return;
 		const page = this.paneRows(this.renderWidth);
 		if (this.keybindings.matches(data, "app.privilege.scrollUp")) this.scrollOffset += page;
 		else if (this.keybindings.matches(data, "app.privilege.scrollDown"))
@@ -110,44 +118,23 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 				? "Local"
 				: `${this.request.target.targetId ?? "selected"} · ${this.request.target.terminalId ?? "terminal"}`;
 		const title =
-			this.state === "review"
-				? "Permission required"
-				: this.state === "starting"
-					? "Starting sudo"
-					: this.state === "authenticating"
-						? "Authenticating"
-						: this.state === "cancelling"
-							? "Cancelling"
-							: this.state === "error"
-								? "Privilege terminal error"
-								: "Running as root";
-		if (this.state === "review") {
-			const lines = [theme.bold(theme.fg("warning", title))];
-			lines.push(
-				theme.fg("muted", `Source: ${this.request.sourceTool} · every sudo command requires confirmation`),
-				theme.fg("muted", `Target: ${target}`),
-				theme.fg("muted", `cwd: ${this.request.cwd}`),
-				"",
-				theme.bold("Command (read-only)"),
-				...wrap(theme.fg("toolOutput", this.request.command), available),
-				"",
-				theme.fg("muted", `Audit: ${this.request.auditPath}`),
-				theme.fg("success", "Authentication input is private and is not recorded."),
-				"",
-				this.hints(["app.privilege.confirm", "app.privilege.cancel"]),
-			);
-			return lines.map((line) => truncateToWidth(line, available, "…"));
-		}
-
-		const elapsed = this.startedAt === undefined ? 0 : (Date.now() - this.startedAt) / 1000;
+			this.state === "staging"
+				? "Preparing"
+				: this.state === "waiting_for_user"
+					? "Ready — Enter to run"
+					: this.state === "starting"
+						? "Starting sudo"
+						: this.state === "authenticating"
+							? "Authenticating"
+							: this.state === "cancelling"
+								? "Cancelling"
+								: this.state === "error"
+									? "Privilege terminal error"
+									: "Running as root";
+		const elapsed = this.startedAt === undefined ? "" : ` · ${((Date.now() - this.startedAt) / 1000).toFixed(1)}s`;
 		const outputLines = this.output
 			? wrap(theme.fg("toolOutput", this.output), available)
-			: [
-					theme.fg(
-						"muted",
-						this.state === "starting" ? "Starting secure tmux terminal…" : "Waiting for terminal output…",
-					),
-				];
+			: [theme.fg("muted", "Preparing secure tmux terminal…")];
 		const paneRows = this.paneRows(available, outputLines.length);
 		const maxOffset = Math.max(0, outputLines.length - paneRows);
 		this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
@@ -155,18 +142,29 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		const start = Math.max(0, end - paneRows);
 		const visible = outputLines.slice(start, end);
 		while (visible.length < paneRows) visible.push("");
-		if (this.state === "authenticating" && this.focused && this.scrollOffset === 0 && visible.length > 0) {
+		if (
+			(this.state === "waiting_for_user" || this.state === "authenticating") &&
+			this.focused &&
+			this.scrollOffset === 0 &&
+			visible.length > 0
+		) {
 			const cursorIndex = Math.min(outputLines.length, visible.length) - 1;
 			visible[cursorIndex] =
 				truncateToWidth(visible[cursorIndex] ?? "", Math.max(1, available - 1), "") +
 				CURSOR_MARKER +
 				theme.fg("accent", "▌");
 		}
+		const actions: Keybinding[] =
+			this.state === "waiting_for_user"
+				? ["app.privilege.confirm", "app.privilege.cancel"]
+				: this.state === "authenticating" || this.state === "running"
+					? ["app.privilege.cancel", "app.privilege.scrollUp", "app.privilege.scrollDown"]
+					: ["app.privilege.cancel"];
 		const lines = [
-			divider(`sudo · ${title} · ${target} · ${elapsed.toFixed(1)}s`, available),
+			divider(`sudo · ${title} · ${target}${elapsed}`, available),
 			...visible,
 			divider("", available),
-			this.hints(["app.privilege.cancel", "app.privilege.scrollUp", "app.privilege.scrollDown"]),
+			this.hints(actions),
 		];
 		return lines.map((line) => truncateToWidth(line, available, "…"));
 	}
@@ -175,7 +173,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 
 	dispose(): void {
 		this.stopPolling();
-		if (!this.closed && this.state !== "review") void this.control.cancel().catch(() => undefined);
+		if (!this.closed) void this.control.cancel().catch(() => undefined);
 		this.closed = true;
 	}
 
@@ -215,23 +213,36 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		await this.control.resize(columns, rows);
 	}
 
-	private async start(): Promise<void> {
-		if (this.state !== "review" || this.closed) return;
-		this.state = "starting";
-		this.startedAt = Date.now();
+	private async prepare(): Promise<void> {
+		if (this.state !== "staging" || this.closed) return;
 		this.tui.requestRender();
 		try {
 			await this.control.start();
 			if (this.closed) return;
-			this.state = "running";
+			this.state = "waiting_for_user";
 			await this.syncTerminalSize();
 			this.startPolling();
+			this.tui.requestRender();
+		} catch {
+			if (!this.closed) this.finish({ status: "error", diagnostic: "Privilege terminal failed to stage command" });
+		}
+	}
+
+	private async execute(): Promise<void> {
+		if (this.state !== "waiting_for_user" || this.closed) return;
+		this.state = "starting";
+		this.startedAt = Date.now();
+		this.tui.requestRender();
+		try {
+			await this.control.execute();
+			if (this.closed) return;
+			if (this.state === "starting") this.state = "running";
 			void this.control
 				.wait()
 				.then((result) => this.complete(result))
 				.catch(() => this.finish({ status: "error", diagnostic: "Privilege terminal command failed" }));
 		} catch {
-			this.finish({ status: "error", diagnostic: "Privilege terminal failed to start" });
+			if (!this.closed) this.finish({ status: "error", diagnostic: "Privilege terminal failed to execute command" });
 		}
 	}
 
@@ -252,17 +263,21 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 				this.finish({ status: "error", diagnostic: "Privilege tmux pane was lost" });
 				return;
 			}
-			if (frame.state === "authenticating") {
+			if (frame.state === "waiting_for_user") {
+				this.runningFrames = 0;
+				if (this.startedAt === undefined) this.state = "waiting_for_user";
+			} else if (frame.state === "authenticating") {
 				this.sawAuthentication = true;
 				this.runningFrames = 0;
 				this.state = "authenticating";
 			} else if (frame.state === "starting") {
 				this.runningFrames = 0;
-				this.state = "starting";
+				if (this.startedAt !== undefined) this.state = "starting";
 			} else if (frame.state === "running") {
 				this.state = "running";
 				this.runningFrames++;
-				if (this.sawAuthentication || this.runningFrames >= NO_PROMPT_DETACH_FRAMES) {
+				const detachFrames = this.sawAuthentication ? POST_AUTH_DETACH_FRAMES : NO_PROMPT_DETACH_FRAMES;
+				if (this.runningFrames >= detachFrames) {
 					this.finish({ status: "completed" });
 					return;
 				}
@@ -270,7 +285,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 			await this.syncTerminalSize();
 			this.tui.requestRender();
 		} catch {
-			this.finish({ status: "error", diagnostic: "Privilege terminal capture failed" });
+			if (!this.closed) this.finish({ status: "error", diagnostic: "Privilege terminal capture failed" });
 		} finally {
 			this.polling = false;
 		}

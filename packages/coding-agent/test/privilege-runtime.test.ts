@@ -52,7 +52,7 @@ describe("PrivilegeRuntime", () => {
 		expect(audit.events.map((event) => event.event)).toEqual(["requested", "blocked"]);
 	});
 
-	it("does not start before confirmation and requires a fresh confirmation for every request", async () => {
+	it("stages every request before a fresh user execution", async () => {
 		const adapter = new FakePrivilegeTerminalAdapter();
 		adapter.setResult({ output: "uid=0(root)\n", exitCode: 0 });
 		const audit = new FakeAuditWriter();
@@ -66,7 +66,10 @@ describe("PrivilegeRuntime", () => {
 		runtime.setHandler(async (interaction, control) => {
 			confirmations.push(interaction.requestId);
 			expect(adapter.startCalls).toBe(confirmations.length - 1);
+			expect(adapter.executeCalls).toBe(confirmations.length - 1);
 			await control.start();
+			expect(adapter.executeCalls).toBe(confirmations.length - 1);
+			await control.execute();
 			await control.wait();
 			return { status: "completed" };
 		});
@@ -80,6 +83,7 @@ describe("PrivilegeRuntime", () => {
 		expect(new Set(confirmations).size).toBe(2);
 		expect(adapter.createCalls).toBe(2);
 		expect(adapter.startCalls).toBe(2);
+		expect(adapter.executeCalls).toBe(2);
 		expect(audit.events.filter((event) => event.event === "confirmed")).toHaveLength(2);
 	});
 
@@ -92,6 +96,7 @@ describe("PrivilegeRuntime", () => {
 			auditWriter: new FakeAuditWriter(),
 			handler: async (_interaction, control) => {
 				await control.start();
+				await control.execute();
 				await control.wait();
 				return { status: "completed" };
 			},
@@ -122,6 +127,7 @@ describe("PrivilegeRuntime", () => {
 		});
 		runtime.setHandler(async (_interaction, control) => {
 			await control.start();
+			await control.execute();
 			await control.sendSensitive(secret);
 			await control.wait();
 			return { status: "completed" };
@@ -148,6 +154,7 @@ describe("PrivilegeRuntime", () => {
 		const controller = new AbortController();
 		runtime.setHandler(async (_interaction, control) => {
 			await control.start();
+			await control.execute();
 			controller.abort();
 			await control.wait();
 			return { status: "completed" };
@@ -194,6 +201,7 @@ describe("PrivilegeRuntime", () => {
 				auditWriter: new FakeAuditWriter(),
 				handler: async (_interaction, control) => {
 					await control.start();
+					await control.execute();
 					await control.wait();
 					return { status: "completed" };
 				},
@@ -218,6 +226,9 @@ describe("PrivilegeRuntime", () => {
 		});
 
 		for (const command of [
+			"sudo id\u001b[2J",
+			"sudo id\rprintf spoofed",
+			"sudo id\b",
 			"su -",
 			"doas id",
 			"pkexec bash",

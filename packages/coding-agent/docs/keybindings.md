@@ -107,7 +107,7 @@ Used by the built-in controlled sudo terminal. Confirmation applies to exactly o
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
-| `app.privilege.confirm` | `enter` | Confirm and start one displayed sudo command |
+| `app.privilege.confirm` | `enter` | Execute the sudo command already staged in tmux |
 | `app.privilege.cancel` | `escape` | Cancel the current privilege request or running command |
 | `app.privilege.scrollUp` | `pageUp` | Scroll captured privilege terminal output up |
 | `app.privilege.scrollDown` | `pageDown` | Scroll captured privilege terminal output down |

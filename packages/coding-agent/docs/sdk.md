@@ -588,7 +588,7 @@ If neither `questionHandler` nor an injected `questionRuntime` is provided, the 
 
 #### Controlled sudo terminal
 
-`privileged_exec` executes one complete, deterministically parsed sudo command in a controlled local or existing remote terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Each request requires a separate host confirmation, including when the system sudo credential is cached.
+`privileged_exec` stages one complete, deterministically parsed sudo command in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the command: the user presses Enter to release that exact staged command, or Escape to cancel, including when the system sudo credential is cached.
 
 ```typescript
 import {
@@ -599,13 +599,13 @@ import {
 const privilegeHandler: PrivilegeInteractionHandler = async (request, control, signal) => {
   if (signal?.aborted) return { status: "cancelled" };
 
-  // Display request.command, request.sourceTool, request.target, request.cwd,
-  // and request.auditPath in a trusted, read-only host UI.
-  const confirmed = await confirmOneRequest(request);
-  if (!confirmed) return { status: "cancelled" };
-
+  // Stage request.command in a trusted, read-only terminal view.
   await control.start();
-  // Direct terminal keystrokes may be forwarded with control.sendSensitive().
+  const execute = await waitForEnterOrEscape(request);
+  if (!execute) return { status: "cancelled" };
+
+  await control.execute();
+  // Authentication keystrokes may be forwarded with control.sendSensitive().
   // Do not ask for or receive a password through application forms or callbacks.
   await control.wait();
   return { status: "completed" };

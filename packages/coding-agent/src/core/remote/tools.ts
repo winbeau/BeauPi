@@ -498,7 +498,7 @@ function createTerminalBashTool(
 			"When the working directory is known, use one concise command such as cd <workdir> && <command>; do not add a preliminary pwd.",
 			"Only use terminal_send and terminal_capture for genuinely interactive input or terminal diagnosis.",
 			"Do not add explanatory echo commands, repeated status probes, sleeps, extra capture calls, or nested bash -lc wrappers.",
-			"sudo commands in terminal_bash are routed to the controlled privilege terminal and require per-request user confirmation.",
+			"sudo commands in terminal_bash are staged in the controlled tmux terminal; they do not execute until the user presses Enter, and Escape cancels.",
 			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 		],
 		parameters: terminalBashSchema,

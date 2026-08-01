@@ -85,7 +85,7 @@ export interface PrivilegeCommandResultV1 {
 export interface PrivilegeTerminalFrameV1 {
 	content: string;
 	cursor?: number;
-	state: "starting" | "authenticating" | "running" | "complete" | "lost";
+	state: "starting" | "waiting_for_user" | "authenticating" | "running" | "complete" | "lost";
 }
 
 export function isPrivilegeAuthenticationPrompt(screen: string, cursorY: number | undefined): boolean {
@@ -96,6 +96,7 @@ export function isPrivilegeAuthenticationPrompt(screen: string, cursorY: number 
 
 export interface PrivilegeCommandSession {
 	start(): Promise<void>;
+	execute(): Promise<void>;
 	sendSensitive(input: Buffer): Promise<void>;
 	capture(): Promise<PrivilegeTerminalFrameV1>;
 	resize(columns: number, rows: number): Promise<void>;
@@ -111,6 +112,7 @@ export interface PrivilegeTerminalAdapter {
 
 export interface PrivilegeTerminalControl {
 	start(): Promise<void>;
+	execute(): Promise<void>;
 	sendSensitive(input: Buffer): Promise<void>;
 	capture(): Promise<PrivilegeTerminalFrameV1>;
 	resize(columns: number, rows: number): Promise<void>;

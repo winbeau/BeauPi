@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求确认的受控 sudo，不提供 sudo mode、root shell 或 Session grant。
+7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：命令先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；不提供 sudo mode、root shell 或 Session grant。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -696,7 +696,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 - local Bash 和 `terminal_bash` 的 sudo 自动路由到统一 `PrivilegeRuntime`
 - 结构化 `privileged_exec`
-- 每条 sudo 命令的只读预览、用户 Enter 确认和受控 PTY 输入
+- 每条 sudo 命令直接填充到双分割线 tmux、用户 Enter 执行或 Escape 取消，以及受控 PTY 输入
 - `terminal_send` sudo bypass 拦截
 - 非交互模式和无可控 PTY 的远程 one-shot 路径默认阻止
 - JSONL 审计日志
@@ -705,12 +705,12 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 ### 验收标准
 
-Agent 进程始终以普通用户运行；每个 sudo request 都经过受控权限终端和逐次用户确认；密码不进入 Agent 数据链；本地与远程提权均有审计记录。
+Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权限终端中填充而不执行，并只由用户按 Enter 释放；密码不进入 Agent 数据链；本地与远程提权均有审计记录。
 
 ### 验收记录（2026-08-01）
 
 - `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一进入 session-scoped `PrivilegeRuntime`；普通执行器和 one-shot SSH 路径不能旁路。
-- 每个 request 独立显示只读命令并等待用户确认；不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
+- 每个 request 第一帧直接在双分割线 tmux 中显示只读命令；Enter 执行、Escape 取消，不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
 - local 与 existing remote terminal 复用本地 tmux PTY 和 secure stdin buffer；认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
 - `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、echo cleanup、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
 - M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。

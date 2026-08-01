@@ -44,20 +44,34 @@ function minimalEnvironment(): string {
 	return ["env", "-i", ...entries.map(([name, value]) => `${name}=${shellQuote(value)}`)].join(" ");
 }
 
-function wrapper(command: string, beginMarker: string, endMarker: string): string {
+function wrapper(command: string, stageMarker: string, beginMarker: string, endMarker: string): string {
 	const encoded = Buffer.from(command, "utf8").toString("base64");
 	return [
 		"__beaupi_restore_echo(){ stty echo >/dev/null 2>&1; }",
 		"trap '__beaupi_restore_echo || true' EXIT HUP INT TERM",
-		`if ! stty -echo; then printf '\\n%s\\n' ${shellQuote(beginMarker)}; printf '%s\\n' 'Unable to disable terminal echo'; printf '\\n%s:%s\\n' ${shellQuote(endMarker)} 125; exit 125; fi`,
-		`printf '\\n%s\\n' ${shellQuote(beginMarker)}`,
-		`eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
-		"__beaupi_privilege_status=$?",
-		"if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi",
+		`printf '\\n%s\\n' ${shellQuote(stageMarker)}`,
+		`printf '$ %s' "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
+		"if IFS= read -r __beaupi_execute; then if ! stty -echo; then printf '\\n%s\\n' " +
+			shellQuote(beginMarker) +
+			"; printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else printf '\\n%s\\n' " +
+			shellQuote(beginMarker) +
+			`; eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi; else __beaupi_privilege_status=130; fi`,
 		"trap - EXIT HUP INT TERM",
 		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
 		'exit "$__beaupi_privilege_status"',
 	].join("; ");
+}
+
+function stagedCommandCapture(capture: string, stageMarker: string): string | undefined {
+	const lines = capture
+		.replaceAll("\r", "")
+		.split("\n")
+		.map((line) => line.trimEnd());
+	const index = lines.lastIndexOf(stageMarker);
+	if (index === -1) return undefined;
+	const output = lines.slice(index + 1);
+	while (output.at(-1) === "") output.pop();
+	return output.join("\n");
 }
 
 export interface RemotePrivilegeSessionHost {
@@ -77,12 +91,15 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 	private readonly transport: LocalTmuxTransport;
 	private readonly now: () => number;
 	private readonly sessionId: string;
+	private readonly stageMarker: string;
 	private readonly beginMarker: string;
 	private readonly endMarker: string;
 	private readonly controller = new AbortController();
 	private readonly sourceSignal: AbortSignal | undefined;
 	private paneId: string | undefined;
 	private startAttempted = false;
+	private prepared = false;
+	private executed = false;
 	private startedAt: number | undefined;
 	private completed = false;
 	private disposed = false;
@@ -98,6 +115,7 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 		this.sourceSignal = options.signal;
 		this.sessionId = sessionIdFor(request);
 		const token = randomUUID().replaceAll("-", "");
+		this.stageMarker = `__BEAUPI_PRIV_STAGE_${token}__`;
 		this.beginMarker = `__BEAUPI_PRIV_BEGIN_${token}__`;
 		this.endMarker = `__BEAUPI_PRIV_END_${token}__`;
 		if (options.signal?.aborted) this.controller.abort();
@@ -153,10 +171,9 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 			if (!status.exists || !status.paneId)
 				throw new TerminalTransportError("display-message", "Privilege pane was lost during startup");
 			this.paneId = status.paneId;
-			const releasedAt = this.now();
 			const released = await this.transport.sendLiteral(
 				this.paneId,
-				`${wrapper(this.request.command, this.beginMarker, this.endMarker)}\n`,
+				`${wrapper(this.request.command, this.stageMarker, this.beginMarker, this.endMarker)}\n`,
 				{ signal: this.controller.signal },
 			);
 			if (released.exitCode !== 0) {
@@ -175,24 +192,44 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 				const capture = await this.transport.capture(this.paneId, { signal: this.controller.signal });
 				if (capture.exitCode !== 0)
 					throw new TerminalTransportError("capture-pane", "Privilege pane was lost during startup");
-				const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
-				if (parsed.output.includes("Unable to disable terminal echo")) {
-					throw new TerminalTransportError("stty", "Privilege terminal echo could not be disabled");
-				}
-				if (parsed.found) break;
+				if (stagedCommandCapture(capture.stdout, this.stageMarker) !== undefined) break;
 				if (this.now() >= deadline)
-					throw new TerminalTransportError("capture-pane", "Privilege terminal echo handshake timed out");
+					throw new TerminalTransportError("capture-pane", "Privilege command staging timed out");
 				await delay(POLL_MS);
 			}
-			this.startedAt = releasedAt;
+			this.prepared = true;
 		} catch (error) {
 			await this.transport.close(this.sessionId).catch(() => undefined);
 			throw error;
 		}
 	}
 
+	async execute(): Promise<void> {
+		if (!this.paneId || !this.prepared || this.executed || this.completed)
+			throw new Error("Privilege command is not waiting for execution");
+		const startedAt = this.now();
+		const released = await this.transport.sendKey(this.paneId, "Enter", { signal: this.controller.signal });
+		if (released.exitCode !== 0)
+			throw new TerminalTransportError("send-keys", "Could not execute staged privilege command", released.exitCode);
+		const deadline = this.now() + START_TIMEOUT_MS;
+		while (true) {
+			const capture = await this.transport.capture(this.paneId, { signal: this.controller.signal });
+			if (capture.exitCode !== 0)
+				throw new TerminalTransportError("capture-pane", "Privilege pane was lost during execution");
+			const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
+			if (parsed.output.includes("Unable to disable terminal echo"))
+				throw new TerminalTransportError("stty", "Privilege terminal echo could not be disabled");
+			if (parsed.found) break;
+			if (this.now() >= deadline)
+				throw new TerminalTransportError("capture-pane", "Privilege terminal echo handshake timed out");
+			await delay(POLL_MS);
+		}
+		this.executed = true;
+		this.startedAt = startedAt;
+	}
+
 	async sendSensitive(input: Buffer): Promise<void> {
-		if (!this.paneId || this.startedAt === undefined || this.completed)
+		if (!this.paneId || !this.executed || this.startedAt === undefined || this.completed)
 			throw new Error("Privilege terminal is not accepting input");
 		await this.transport.sendSensitive(this.paneId, input, { signal: this.controller.signal });
 	}
@@ -208,7 +245,12 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 			return { content: "", state: "lost" };
 		}
 		const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
-		const content = parsed.found ? parsed.output : capture.stdout;
+		const content = this.executed
+			? parsed.found
+				? parsed.output
+				: capture.stdout
+			: (stagedCommandCapture(capture.stdout, this.stageMarker) ?? "");
+		if (!this.executed) return { content, state: "waiting_for_user" };
 		const authenticating =
 			status.cursorY === undefined
 				? /(?:password|passphrase)[^:\r\n]*:/i.test(content)
@@ -233,7 +275,8 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 	}
 
 	async wait(): Promise<PrivilegeCommandResultV1> {
-		if (!this.paneId || this.startedAt === undefined) throw new Error("Privilege command session has not started");
+		if (!this.paneId || !this.executed || this.startedAt === undefined)
+			throw new Error("Privilege command session has not started");
 		const deadline = this.request.timeoutMs === undefined ? undefined : this.startedAt + this.request.timeoutMs;
 		let output = "";
 		while (true) {

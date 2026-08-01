@@ -74,6 +74,8 @@ describe("remote controlled privilege terminal", () => {
 		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, { output: "uid=0(root)\n", exitCode: 0 });
 		fixture.privilegeRuntime.setHandler(async (_request, control) => {
 			await control.start();
+			expect(await control.capture()).toMatchObject({ state: "waiting_for_user" });
+			await control.execute();
 			expect(await control.capture()).toMatchObject({ state: "authenticating" });
 			await control.sendSensitive(secret);
 			await control.wait();
@@ -116,6 +118,7 @@ describe("remote controlled privilege terminal", () => {
 		});
 		fixture.privilegeRuntime.setHandler(async (_request, control) => {
 			await control.start();
+			await control.execute();
 			throw new Error("unreachable");
 		});
 
@@ -141,6 +144,7 @@ describe("remote controlled privilege terminal", () => {
 		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, { prompt: false, output: "routed\n" });
 		fixture.privilegeRuntime.setHandler(async (_request, control) => {
 			await control.start();
+			await control.execute();
 			await control.wait();
 			return { status: "completed" };
 		});
@@ -167,6 +171,7 @@ describe("remote controlled privilege terminal", () => {
 		fixture.privilegeRuntime.setHandler(async (_request, control) => {
 			confirmations++;
 			await control.start();
+			await control.execute();
 			await control.wait();
 			return { status: "completed" };
 		});

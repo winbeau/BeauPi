@@ -20,6 +20,7 @@ function runtime() {
 		auditWriter: { pathFor: () => "/tmp/audit.jsonl", append: async () => {} },
 		handler: async (_request, control) => {
 			await control.start();
+			await control.execute();
 			await control.wait();
 			return { status: "completed" };
 		},
