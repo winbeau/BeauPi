@@ -354,6 +354,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		cancelPendingExtensionRequests();
 		session = runtimeHost.session;
 		session.setQuestionInteractionHandler(createQuestionPromise);
+		session.setPrivilegeInteractionHandler(undefined);
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",

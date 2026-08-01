@@ -1,9 +1,12 @@
 export {
 	classifyPolicyFailure,
 	classifyPolicyOperation,
+	hasPotentialShellPrivilege,
+	inspectShellPrivilege,
 	type PolicyOperationAnalysis,
 	type PolicyOperationInput,
 	policyFailureLimit,
+	type ShellPrivilegeInspection,
 } from "./classifier.ts";
 export {
 	createPolicyConfigProvider,

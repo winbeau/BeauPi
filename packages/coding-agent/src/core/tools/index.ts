@@ -149,6 +149,7 @@ export const allToolNames: Set<string> = new Set([
 	"docs_read",
 	"docs_resolve_task",
 	"ask_user_question",
+	"privileged_exec",
 	"web_search",
 	"web_fetch",
 	"background_start",

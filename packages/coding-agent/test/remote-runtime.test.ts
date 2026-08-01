@@ -141,7 +141,7 @@ describe("M7 execution targets", () => {
 		});
 		setup.runtime.selectTarget("fake");
 		await expect(setup.runtime.remoteExec("sudo id")).rejects.toMatchObject({
-			diagnostic: { code: "remote_command" },
+			diagnostic: { code: "terminal_required" },
 		});
 		await expect(setup.runtime.remoteExec("printf ok")).resolves.toMatchObject({ exitCode: 0 });
 		const entries = setup.sessionManager.getBranch();
@@ -159,7 +159,7 @@ describe("M7 execution targets", () => {
 			targetId: "fake",
 		});
 		await expect(setup.runtime.remoteExec("su - app")).rejects.toMatchObject({
-			diagnostic: { code: "remote_command" },
+			diagnostic: { code: "terminal_required" },
 		});
 	});
 
@@ -361,6 +361,31 @@ describe("M7 fake tmux lifecycle", () => {
 		lostSetup.adapter.closeFakeTerminal(lostTerminal.terminalId);
 		const lost = await lostSetup.runtime.terminalStatus(lostTerminal.terminalId);
 		expect(lost.status).toBe("lost");
+	});
+
+	it("blocks complete, fragmented, and opaque terminal_send lines before Enter", async () => {
+		const setup = createSetup();
+		setup.runtime.selectTarget("fake");
+		const created = await setup.runtime.terminalCreate({ terminalId: "guarded-terminal" });
+
+		await expect(setup.runtime.terminalSend(created.terminalId, "sudo id\n")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_required" },
+		});
+		await setup.runtime.terminalSend(created.terminalId, "su");
+		await expect(setup.runtime.terminalSend(created.terminalId, "do id\n")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_required" },
+		});
+		await setup.runtime.terminalSend(created.terminalId, "ss\b");
+		await expect(setup.runtime.terminalSend(created.terminalId, "udo id\n")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_required" },
+		});
+		await expect(setup.runtime.terminalSend(created.terminalId, "echo safe\u001b[D")).rejects.toMatchObject({
+			diagnostic: { code: "terminal_required" },
+		});
+
+		expect(setup.adapter.tmuxKeyCalls.filter((call) => call.key === "C-u")).toHaveLength(4);
+		const capture = await setup.runtime.terminalCapture(created.terminalId);
+		expect(capture.content).not.toContain("sudo id\n");
 	});
 
 	it("executes Bash-like commands through an interactive terminal and consumes their captured output", async () => {

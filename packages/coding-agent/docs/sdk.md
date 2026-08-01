@@ -492,7 +492,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`
+- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`, `privileged_exec`
 - Default built-ins include coding, document, and `ask_user_question`; runtime-specific search, remote, monitor, and AgentPool tools are added when configured
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
@@ -586,6 +586,40 @@ Each answer contains `header`, `selectedLabels`, optional `customAnswer`, and op
 
 If neither `questionHandler` nor an injected `questionRuntime` is provided, the Tool returns `interaction_required` immediately. It never reads stdin. `runPrintMode()` clears question handlers for both text and JSON output, so those modes always remain non-interactive. Use `excludeTools: ["ask_user_question"]` to remove it entirely. Controlled AgentPool children never receive this Tool; they return a machine-readable `clarificationRequest` through `delegate_task` instead.
 
+#### Controlled sudo terminal
+
+`privileged_exec` executes one complete, deterministically parsed sudo command in a controlled local or existing remote terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Each request requires a separate host confirmation, including when the system sudo credential is cached.
+
+```typescript
+import {
+  createAgentSession,
+  type PrivilegeInteractionHandler,
+} from "@earendil-works/pi-coding-agent";
+
+const privilegeHandler: PrivilegeInteractionHandler = async (request, control, signal) => {
+  if (signal?.aborted) return { status: "cancelled" };
+
+  // Display request.command, request.sourceTool, request.target, request.cwd,
+  // and request.auditPath in a trusted, read-only host UI.
+  const confirmed = await confirmOneRequest(request);
+  if (!confirmed) return { status: "cancelled" };
+
+  await control.start();
+  // Direct terminal keystrokes may be forwarded with control.sendSensitive().
+  // Do not ask for or receive a password through application forms or callbacks.
+  await control.wait();
+  return { status: "completed" };
+};
+
+const { session } = await createAgentSession({ privilegeHandler });
+```
+
+The SDK also accepts `privilegeRuntime` or `privilegeTerminalAdapter` for custom trusted hosts and deterministic tests. Authentication input must only travel from the user's terminal to `control.sendSensitive(Buffer)` and the controlling TTY. It must not be placed in Tool parameters, argv, environment variables, Session entries, logs, RPC messages, or errors.
+
+Without a handler, sudo returns structured `interaction_required` and does not create a pane or execute the command. Print, JSON, and RPC modes clear the handler and remain non-interactive. Controlled AgentPool children never receive `privileged_exec`; sudo attempted through their `bash` tool is also non-executing because no handler is installed.
+
+Unsupported paths include `sudo -S`/`--stdin`, `su`, `doas`, `pkexec`, `runuser`, namespace/chroot identity switches, and one-shot remote sudo. A configured SSH target whose login user is already `root` should run the command without sudo through the normal remote terminal tools.
+
 ### Custom Tools
 
 ```typescript
@@ -644,7 +678,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use only a wall-clock timeout by default; custom profiles may opt into token or turn caps. Both `delegate_task` and `ask_user_question` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events.
+When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use only a wall-clock timeout by default; custom profiles may opt into token or turn caps. `delegate_task`, `ask_user_question`, and `privileged_exec` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead, and a child cannot execute sudo without a Coordinator-owned interaction handler. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events.
 
 ### Extensions
 

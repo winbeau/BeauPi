@@ -116,12 +116,22 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import {
 	attachPolicyToolDetails,
+	hasPotentialShellPrivilege,
 	POLICY_FACT_ENTRY_TYPE,
 	type PolicyInteractionHandler,
 	PolicyRuntime,
 	type PolicyRuntimeEvent,
 	resolvePolicyConfig,
 } from "./policy/index.ts";
+import {
+	attachPrivilegeToolDetails,
+	getPrivilegeToolDetails,
+	JsonlPrivilegeAuditWriter,
+	PRIVILEGE_FACT_ENTRY_TYPE,
+	type PrivilegeInteractionHandler,
+	PrivilegeRuntime,
+	TmuxPrivilegeTerminalAdapter,
+} from "./privilege/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { LunaTerminalOutputReviewer } from "./remote/output-reviewer.ts";
@@ -271,6 +281,8 @@ export interface AgentSessionConfig {
 	questionRuntime?: QuestionRuntime;
 	/** Session-scoped deterministic Policy Runtime. */
 	policyRuntime?: PolicyRuntime;
+	/** Session-scoped controlled privilege Runtime. */
+	privilegeRuntime?: PrivilegeRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
 	/** Optional session-scoped M12 Background Task Manager. Created here when omitted. */
@@ -366,6 +378,7 @@ export class AgentSession {
 	readonly documentRuntime: DocumentRuntime;
 	readonly questionRuntime: QuestionRuntime;
 	readonly policyRuntime: PolicyRuntime;
+	readonly privilegeRuntime: PrivilegeRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -374,6 +387,7 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _unsubscribeQuestionRuntime?: () => void;
 	private _unsubscribePolicyRuntime?: () => void;
+	private _unsubscribePrivilegeRuntime?: () => void;
 	private _unsubscribeWorkflowRuntime?: () => void;
 	private _unsubscribeBackgroundRuntime?: () => void;
 	private _isAgentRunActive = false;
@@ -545,6 +559,22 @@ export class AgentSession {
 				getPreferredProvider: () => this.agent.state.model?.provider,
 			}),
 		);
+		this.privilegeRuntime =
+			config.privilegeRuntime ??
+			new PrivilegeRuntime({
+				sessionId: config.sessionManager.getSessionId(),
+				cwd: config.cwd,
+				terminalAdapter: new TmuxPrivilegeTerminalAdapter({
+					remoteHost: this.remoteRuntime,
+					shellPath: config.settingsManager.getShellPath(),
+				}),
+				auditWriter: new JsonlPrivilegeAuditWriter(getAgentDir()),
+				isRootTarget: (targetId) => this.remoteRuntime.isRootTarget(targetId),
+				monitorRuntime: this.monitorRuntime,
+			});
+		this._unsubscribePrivilegeRuntime = this.privilegeRuntime.subscribe((pending) => {
+			this.taskLedger.setPendingPrivilegeInteraction(pending);
+		});
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
@@ -585,6 +615,10 @@ export class AgentSession {
 
 	setPolicyInteractionHandler(handler: PolicyInteractionHandler | undefined): void {
 		this.policyRuntime.setHandler(handler);
+	}
+
+	setPrivilegeInteractionHandler(handler: PrivilegeInteractionHandler | undefined): void {
+		this.privilegeRuntime.setHandler(handler);
 	}
 
 	/** Validate the branch-restored contract before the first provider request. */
@@ -690,11 +724,13 @@ export class AgentSession {
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
 			const remoteDetails = getRemoteToolDetails(result.details);
+			const privilegeDetails = getPrivilegeToolDetails(result.details);
 			const workflowDetails = getWorkflowToolDetails(result.details);
 			const backgroundDetails = getBackgroundToolDetails(result.details);
 			const runtimeError =
 				searchDetails?.ok === false ||
 				remoteDetails?.ok === false ||
+				privilegeDetails?.ok === false ||
 				workflowDetails?.ok === false ||
 				backgroundDetails?.ok === false;
 			const policyDetails = await this.policyRuntime.finalizeTool({
@@ -743,6 +779,7 @@ export class AgentSession {
 			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
 			if (workflowDetails) details = attachWorkflowToolDetails(details, workflowDetails);
 			if (backgroundDetails) details = attachBackgroundToolDetails(details, backgroundDetails);
+			if (privilegeDetails) details = attachPrivilegeToolDetails(details, privilegeDetails);
 			if (policyDetails) details = attachPolicyToolDetails(details, policyDetails);
 			authoritativeDetails = details;
 			return {
@@ -882,6 +919,10 @@ export class AgentSession {
 			const policyDetails = this.taskLedger.getPolicyDetails(event.message.toolCallId);
 			if (policyDetails) {
 				event.message.details = attachPolicyToolDetails(event.message.details, policyDetails);
+			}
+			const privilegeDetails = this.taskLedger.getPrivilegeDetails(event.message.toolCallId);
+			if (privilegeDetails) {
+				event.message.details = attachPrivilegeToolDetails(event.message.details, privilegeDetails);
 			}
 			const workflowDetails = this.taskLedger.getWorkflowDetails(event.message.toolCallId);
 			if (workflowDetails) {
@@ -1115,8 +1156,9 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.questionRuntime.cancelPending();
+			this.privilegeRuntime.cancelPending();
 			this.agent.abort();
-			void this.remoteRuntime.dispose();
+			void this.privilegeRuntime.dispose().finally(() => this.remoteRuntime.dispose());
 			void this.workflowRuntime?.dispose();
 			this.backgroundRuntime.dispose();
 			this.monitorRuntime.dispose();
@@ -1133,6 +1175,8 @@ export class AgentSession {
 		this._unsubscribeQuestionRuntime = undefined;
 		this._unsubscribePolicyRuntime?.();
 		this._unsubscribePolicyRuntime = undefined;
+		this._unsubscribePrivilegeRuntime?.();
+		this._unsubscribePrivilegeRuntime = undefined;
 		this._unsubscribeWorkflowRuntime?.();
 		this._unsubscribeWorkflowRuntime = undefined;
 		this._unsubscribeBackgroundRuntime?.();
@@ -1930,6 +1974,7 @@ export class AgentSession {
 	async abort(): Promise<void> {
 		this.abortRetry();
 		this.questionRuntime.cancelPending();
+		this.privilegeRuntime.cancelPending();
 		this.agent.abort();
 		if (this._pendingPromptPreflights.size > 0 && this._extensionCommandExecutionDepth === 0) {
 			await Promise.all(this._pendingPromptPreflights);
@@ -2962,7 +3007,7 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, privilegeRuntime: this.privilegeRuntime },
 					documentRuntime: this.documentRuntime,
 					questionRuntime: this.questionRuntime,
 				});
@@ -3009,6 +3054,7 @@ export class AgentSession {
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		this.questionRuntime.cancelPending();
+		this.privilegeRuntime.cancelPending();
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
@@ -3197,6 +3243,47 @@ export class AgentSession {
 		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
 
 		try {
+			if (hasPotentialShellPrivilege(resolvedCommand)) {
+				const privilegeResult = await this.privilegeRuntime.execute(
+					{
+						toolCallId: executionId,
+						sourceTool: "bash",
+						route: "local_bash",
+						command: resolvedCommand,
+						target: { execution: "local" },
+						cwd: this.sessionManager.getCwd(),
+					},
+					abortController.signal,
+				);
+				const privilege = privilegeResult.details;
+				const output = privilegeResult.content
+					.filter((item) => item.type === "text")
+					.map((item) => item.text)
+					.join("\n");
+				if (output) {
+					onChunk?.(output);
+					this._emit({ type: "bash_execution_update", id: options?.id, delta: output });
+				}
+				const policy = await this.policyRuntime.finalizeTool({
+					toolCallId: executionId,
+					toolName: "bash",
+					details: privilege,
+					isError: !privilege.ok,
+					signal: abortController.signal,
+				});
+				const result: BashResult = {
+					output,
+					exitCode: typeof privilege.exitCode === "number" ? privilege.exitCode : undefined,
+					cancelled: privilege.status === "cancelled",
+					truncated: privilege.truncation?.truncated === true,
+					fullOutputPath: privilege.fullOutputPath,
+					error: privilege.ok ? undefined : (privilege.diagnostic?.code ?? privilege.status),
+					policy,
+					privilege,
+				};
+				this.recordBashResult(command, result, { ...options, executionId });
+				return result;
+			}
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
@@ -3278,6 +3365,12 @@ export class AgentSession {
 			this.sessionManager.appendCustomEntry(
 				POLICY_FACT_ENTRY_TYPE,
 				attachPolicyToolDetails(undefined, result.policy),
+			);
+		}
+		if (result.privilege) {
+			this.sessionManager.appendCustomEntry(
+				PRIVILEGE_FACT_ENTRY_TYPE,
+				attachPrivilegeToolDetails(undefined, result.privilege),
 			);
 		}
 
@@ -3534,6 +3627,7 @@ export class AgentSession {
 			// Update agent state
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
+			this.privilegeRuntime.cancelPending();
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
 			this.policyRuntime.rebuild(this.sessionManager.getBranch());
 			await this.workflowRuntime?.cancelActiveWorkflows();

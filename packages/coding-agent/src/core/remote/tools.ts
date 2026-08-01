@@ -5,6 +5,8 @@ import { Compile } from "typebox/compile";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { hasPotentialShellPrivilege, inspectShellPrivilege } from "../policy/index.ts";
+import type { PrivilegeRuntime, PrivilegeToolDetailsV1 } from "../privilege/index.ts";
 import { type BashToolDetails, createBashToolDefinition } from "../tools/bash.ts";
 import { createEditToolDefinition } from "../tools/edit.ts";
 import { createReadToolDefinition } from "../tools/read.ts";
@@ -475,7 +477,12 @@ function createTerminalCreateTool(
 
 function createTerminalBashTool(
 	runtime: RemoteExecutionRuntime,
-): ToolDefinition<typeof terminalBashSchema, TerminalBashToolDetails, TerminalBashRenderState> {
+	privilegeRuntime?: PrivilegeRuntime,
+): ToolDefinition<
+	typeof terminalBashSchema,
+	TerminalBashToolDetails | PrivilegeToolDetailsV1,
+	TerminalBashRenderState
+> {
 	const bashRenderer = createBashToolDefinition(runtime.cwd, {
 		operations: runtime.createBashOperations(),
 		exposeSessionEnvironment: false,
@@ -491,13 +498,34 @@ function createTerminalBashTool(
 			"When the working directory is known, use one concise command such as cd <workdir> && <command>; do not add a preliminary pwd.",
 			"Only use terminal_send and terminal_capture for genuinely interactive input or terminal diagnosis.",
 			"Do not add explanatory echo commands, repeated status probes, sleeps, extra capture calls, or nested bash -lc wrappers.",
-			NO_PRIVILEGE_CHANGE_GUIDELINE,
+			"sudo commands in terminal_bash are routed to the controlled privilege terminal and require per-request user confirmation.",
 			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 		],
 		parameters: terminalBashSchema,
 		executionMode: "sequential",
-		execute: async (_toolCallId, params, signal) => {
+		execute: async (_toolCallId, params, signal, onUpdate) => {
 			validate<TerminalBashInput>("terminal_bash", validators.terminalBash, params);
+			if (hasPotentialShellPrivilege(params.command) && privilegeRuntime) {
+				const terminal = runtime.getTerminalContext(params.terminalId);
+				return privilegeRuntime.execute(
+					{
+						toolCallId: _toolCallId,
+						sourceTool: "terminal_bash",
+						route: "terminal_bash",
+						command: params.command,
+						target: {
+							execution: "terminal",
+							targetId: terminal.targetId,
+							terminalId: params.terminalId,
+							monitorId: terminal.monitorId,
+						},
+						cwd: runtime.cwd,
+						timeoutMs: params.timeout ? params.timeout * 1000 : undefined,
+					},
+					signal,
+					onUpdate,
+				);
+			}
 			const result = await runtime.terminalBash(params.terminalId, params.command, {
 				signal,
 				timeoutMs: params.timeout ? params.timeout * 1000 : undefined,
@@ -525,8 +553,9 @@ function createTerminalBashTool(
 				context.state.startedAt = Date.now();
 				context.state.endedAt = undefined;
 			}
+			const privilege = inspectShellPrivilege(args.command);
 			return renderTerminalCall(
-				"Terminal Bash",
+				privilege.sudo ? "Sudo Terminal Bash" : "Terminal Bash",
 				args.terminalId,
 				`${singleLineSummary(args.command)}${args.timeout ? ` · timeout ${args.timeout}s` : ""}`,
 				currentTheme,
@@ -717,7 +746,10 @@ function rename(definition: object, name: string): ToolDefinition {
 }
 
 /** Built-in M7 tools plus explicit remote file operation adapters. */
-export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): ToolDefinition[] {
+export function createRemoteToolDefinitions(
+	runtime: RemoteExecutionRuntime,
+	privilegeRuntime?: PrivilegeRuntime,
+): ToolDefinition[] {
 	const read = createReadToolDefinition(runtime.cwd, { operations: runtime.createReadOperations() });
 	const write = createWriteToolDefinition(runtime.cwd, { operations: runtime.createWriteOperations() });
 	const edit = createEditToolDefinition(runtime.cwd, { operations: runtime.createEditOperations() });
@@ -736,7 +768,7 @@ export function createRemoteToolDefinitions(runtime: RemoteExecutionRuntime): To
 		createTargetSelectTool(runtime),
 		createRemoteExecTool(runtime),
 		createTerminalCreateTool(runtime),
-		createTerminalBashTool(runtime),
+		createTerminalBashTool(runtime, privilegeRuntime),
 		createTerminalSendTool(runtime),
 		createTerminalCaptureTool(runtime),
 		createTerminalStatusTool(runtime),

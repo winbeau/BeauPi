@@ -4,13 +4,20 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import type { MonitorAdapterSnapshot } from "../monitor/types.ts";
+import { hasPotentialShellPrivilege } from "../policy/index.ts";
+import type {
+	PrivilegeCommandResultV1,
+	PrivilegeCommandSession,
+	PrivilegeRequestV1,
+	PrivilegeTerminalFrameV1,
+} from "../privilege/types.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { SettingsManager } from "../settings-manager.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditOperations } from "../tools/edit.ts";
 import type { ReadOperations } from "../tools/read.ts";
 import type { WriteOperations } from "../tools/write.ts";
-import { OpenSshTmuxAdapter } from "./adapter.ts";
+import { OpenSshTmuxAdapter, parseTerminalCommandCapture } from "./adapter.ts";
 import {
 	deterministicTerminalReport,
 	lineCount,
@@ -32,6 +39,8 @@ import {
 	type TmuxCreateOptions,
 } from "./types.ts";
 
+const REMOTE_PRIVILEGE_START_TIMEOUT_MS = 5_000;
+
 interface RemoteTerminalState {
 	terminalId: string;
 	targetId: string;
@@ -43,6 +52,8 @@ interface RemoteTerminalState {
 	busy: boolean;
 	lastCapture: string;
 	captureCursor: number;
+	pendingInput: string;
+	pendingInputOpaque: boolean;
 }
 
 export interface RemoteExecutionRuntimeOptions {
@@ -141,11 +152,35 @@ function safeId(value: string, label: string): string {
 	return value;
 }
 
+function containsPotentialPrivilege(command: string): boolean {
+	return hasPotentialShellPrivilege(command);
+}
+
+function applyTerminalInput(current: string, currentOpaque: boolean, input: string): { line: string; opaque: boolean } {
+	let line = current;
+	let opaque = currentOpaque;
+	for (const character of input) {
+		if (character === "\u0003" || character === "\u0015") {
+			line = "";
+			opaque = false;
+		} else if (character === "\b" || character === "\u007f") {
+			line = [...line].slice(0, -1).join("");
+		} else if (character === "\u0017") {
+			line = line.replace(/\s*\S+\s*$/, "");
+		} else if (character === "\t" || character === "\u001b" || character < " ") {
+			opaque = true;
+		} else {
+			line += character;
+		}
+	}
+	return { line, opaque };
+}
+
 function assertNoPrivilegeChange(command: string): void {
-	if (/(^|[;&|\n]\s*|\s)(sudo|su|doas|pkexec|runuser|setpriv|nsenter|chroot|machinectl)(\s|$)/i.test(command)) {
+	if (containsPotentialPrivilege(command)) {
 		throw new RemoteExecutionError({
-			code: "remote_command",
-			message: "Privilege-changing commands are not supported; use the target's configured SSH login identity",
+			code: "terminal_required",
+			message: "Privilege-changing remote commands require an existing interactive terminal and PrivilegeRuntime",
 		});
 	}
 }
@@ -168,6 +203,20 @@ function hashText(value: string): string {
 
 function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function privilegeTerminalWrapper(command: string, beginMarker: string, endMarker: string): string {
+	const encoded = Buffer.from(command, "utf8").toString("base64");
+	return [
+		"__beaupi_restore_echo(){ stty echo >/dev/null 2>&1; }",
+		"trap '__beaupi_restore_echo || true' EXIT HUP INT TERM",
+		"stty -echo",
+		"__beaupi_echo_status=$?",
+		`printf '\\n%s\\n' ${shellQuote(beginMarker)}`,
+		`if [ "$__beaupi_echo_status" -ne 0 ]; then printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi`,
+		"trap - EXIT HUP INT TERM",
+		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
+	].join("; ");
 }
 
 function incrementalCapture(previous: string, current: string): string {
@@ -249,8 +298,18 @@ export class RemoteExecutionRuntime {
 		return target ? structuredClone(target) : undefined;
 	}
 
+	isRootTarget(targetId: string | undefined): boolean {
+		const resolved = targetId ?? this.selectedTargetId;
+		return resolved ? this.targets.get(resolved)?.user === "root" : false;
+	}
+
 	listTargets(): ExecutionTargetConfig[] {
 		return this.targets.list();
+	}
+
+	getTerminalContext(terminalId: string): { targetId: string; monitorId: string; logPath: string } {
+		const terminal = this.assertTerminal(terminalId);
+		return { targetId: terminal.targetId, monitorId: terminal.monitorId, logPath: terminal.logPath };
 	}
 
 	selectTarget(targetId: string): ExecutionTargetConfig {
@@ -471,6 +530,8 @@ export class RemoteExecutionRuntime {
 				busy: false,
 				lastCapture: initialCapture?.exitCode === 0 ? initialCapture.stdout : "",
 				captureCursor: 0,
+				pendingInput: "",
+				pendingInputOpaque: false,
 			});
 			this.setMonitorSnapshot(monitor.id, {
 				availability: "confirmed",
@@ -505,15 +566,60 @@ export class RemoteExecutionRuntime {
 		if (terminal.busy) {
 			throw new RemoteExecutionError({
 				code: "terminal_busy",
-				message: `Terminal ${JSON.stringify(terminalId)} is already running a terminal_bash command`,
+				message: `Terminal ${JSON.stringify(terminalId)} is already running a controlled command`,
 				operationId: terminalId,
 			});
 		}
-		assertNoPrivilegeChange(input);
 		const target = this.assertTarget(terminal.targetId);
 		const connection = await this.connect(target.id, signal);
-		const result = await connection.tmuxSend(terminal.paneId, input, { signal });
-		if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
+		if (input.includes("\0")) {
+			throw new RemoteExecutionError({
+				code: "terminal_invalid",
+				message: "terminal_send input cannot contain NUL bytes",
+				operationId: terminalId,
+			});
+		}
+		const parts = input.split(/(\r\n|\r|\n)/);
+		for (let index = 0; index < parts.length; index += 2) {
+			const segment = parts[index] ?? "";
+			const delimiter = parts[index + 1];
+			if (delimiter !== undefined) {
+				const pending = applyTerminalInput(terminal.pendingInput, terminal.pendingInputOpaque, segment);
+				if (pending.opaque || containsPotentialPrivilege(pending.line)) {
+					await connection.tmuxSendKey(terminal.paneId, "C-u", { signal }).catch(() => undefined);
+					terminal.pendingInput = "";
+					terminal.pendingInputOpaque = false;
+					throw new RemoteExecutionError({
+						code: "terminal_required",
+						message: "Blocked a pending privilege-changing terminal line; use terminal_bash or privileged_exec",
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
+				const result = await connection.tmuxSend(terminal.paneId, `${segment}${delimiter}`, { signal });
+				if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
+				terminal.pendingInput = "";
+				terminal.pendingInputOpaque = false;
+				continue;
+			}
+			if (!segment) continue;
+			const pending = applyTerminalInput(terminal.pendingInput, terminal.pendingInputOpaque, segment);
+			if (pending.opaque) {
+				await connection.tmuxSendKey(terminal.paneId, "C-u", { signal }).catch(() => undefined);
+				terminal.pendingInput = "";
+				terminal.pendingInputOpaque = false;
+				throw new RemoteExecutionError({
+					code: "terminal_required",
+					message: "Blocked opaque terminal input before it reached the shell",
+					targetId: target.id,
+					operationId: terminalId,
+				});
+			}
+			const result = await connection.tmuxSend(terminal.paneId, segment, { signal });
+			if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
+			terminal.pendingInput = pending.line;
+			terminal.pendingInputOpaque = false;
+		}
 		this.setMonitorSnapshot(terminal.monitorId, {
 			availability: "confirmed",
 			running: true,
@@ -526,6 +632,310 @@ export class RemoteExecutionRuntime {
 			terminalId,
 			monitorId: terminal.monitorId,
 			status: this.monitorRuntime.status(terminal.monitorId).status,
+		};
+	}
+
+	async createPrivilegeCommandSession(
+		request: PrivilegeRequestV1,
+		signal?: AbortSignal,
+	): Promise<PrivilegeCommandSession> {
+		const terminalId = request.target.terminalId;
+		if (!terminalId)
+			throw new RemoteExecutionError({
+				code: "terminal_not_found",
+				message: "Privilege request requires terminalId",
+			});
+		const terminal = this.assertTerminal(terminalId);
+		if (!terminal.interactive) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is not an interactive shell`,
+				operationId: terminalId,
+			});
+		}
+		if (terminal.busy || terminal.pendingInput.length > 0 || terminal.pendingInputOpaque) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is busy or has pending input`,
+				operationId: terminalId,
+			});
+		}
+		const target = this.assertTarget(terminal.targetId);
+		const connection = await this.connect(target.id, signal);
+		const token = randomUUID().replaceAll("-", "");
+		const beginMarker = `__BEAUPI_PRIV_BEGIN_${token}__`;
+		const endMarker = `__BEAUPI_PRIV_END_${token}__`;
+		const controller = new AbortController();
+		const forwardAbort = (): void => controller.abort();
+		if (signal?.aborted) controller.abort();
+		else signal?.addEventListener("abort", forwardAbort, { once: true });
+		let startAttempted = false;
+		let startedAt: number | undefined;
+		let completed = false;
+		let disposed = false;
+		let finalized = false;
+		let reusable = true;
+		let lastOutput = "";
+		const finalize = async (
+			result: PrivilegeCommandResultV1,
+			remoteDiagnostic?: RemoteDiagnostic,
+		): Promise<PrivilegeCommandResultV1> => {
+			if (!finalized) {
+				finalized = true;
+				reusable = !/Unable to (?:disable|restore) terminal echo/.test(result.output);
+				terminal.busy = !reusable;
+				const output = redactOutput(result.output);
+				await this.recordTerminalCommandOutput(terminal, connection, {
+					command: request.command,
+					output,
+					exitCode: result.exitCode,
+					diagnostic: remoteDiagnostic,
+					startedAt: result.startedAt,
+					completedAt: result.completedAt,
+				});
+				result.output = output;
+			}
+			return result;
+		};
+		let restorePromise: Promise<boolean> | undefined;
+		const restoreEcho = (): Promise<boolean> => {
+			restorePromise ??= (async () => {
+				await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+				const deadline = this.now() + 2_000;
+				while (this.now() < deadline) {
+					const capture = await connection
+						.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 })
+						.catch(() => undefined);
+					if (!capture || capture.exitCode !== 0) return false;
+					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+					if (parsed.exitCode !== undefined) return !/Unable to restore terminal echo/.test(parsed.output);
+					await delay(50);
+				}
+				return false;
+			})();
+			return restorePromise;
+		};
+		return {
+			start: async () => {
+				if (startAttempted) throw new Error("Remote privilege command already started");
+				startAttempted = true;
+				const status = await connection.tmuxStatus(terminal.paneId, { signal: controller.signal });
+				if (!status.exists) {
+					throw new RemoteExecutionError({
+						code: "terminal_session_lost",
+						message: `Local tmux pane for terminal ${JSON.stringify(terminalId)} no longer exists`,
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
+				if (terminal.shellCommand && status.currentCommand && status.currentCommand !== terminal.shellCommand) {
+					throw new RemoteExecutionError({
+						code: "terminal_busy",
+						message: `Terminal ${JSON.stringify(terminalId)} is currently running another command`,
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
+				terminal.busy = true;
+				const sent = await connection.tmuxSend(
+					terminal.paneId,
+					`${privilegeTerminalWrapper(request.command, beginMarker, endMarker)}\n`,
+					{ signal: controller.signal },
+				);
+				if (sent.exitCode !== 0) {
+					reusable = false;
+					terminal.busy = true;
+					throw this.tmuxError(sent, target.id, terminalId, "terminal_session_lost");
+				}
+				const deadline = this.now() + REMOTE_PRIVILEGE_START_TIMEOUT_MS;
+				while (true) {
+					const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
+					if (capture.exitCode !== 0) {
+						reusable = false;
+						terminal.busy = true;
+						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
+					}
+					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+					if (parsed.output.includes("Unable to disable terminal echo")) {
+						reusable = false;
+						terminal.busy = true;
+						throw new RemoteExecutionError({
+							code: "terminal_busy",
+							message: "Privilege terminal echo could not be disabled",
+							targetId: target.id,
+							operationId: terminalId,
+						});
+					}
+					if (parsed.found) break;
+					if (this.now() >= deadline) {
+						reusable = false;
+						terminal.busy = true;
+						throw new RemoteExecutionError({
+							code: "terminal_busy",
+							message: "Privilege terminal echo handshake timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						});
+					}
+					await delay(50);
+				}
+				startedAt = this.now();
+			},
+			sendSensitive: async (input) => {
+				if (startedAt === undefined || completed)
+					throw new Error("Remote privilege terminal is not accepting input");
+				await connection.tmuxSendSensitive(terminal.paneId, Buffer.from(input), { signal: controller.signal });
+			},
+			capture: async (): Promise<PrivilegeTerminalFrameV1> => {
+				if (startedAt === undefined) return { content: "", state: "starting" };
+				const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
+				if (capture.exitCode !== 0) return { content: "", state: "lost" };
+				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+				const content = parsed.found ? redactOutput(parsed.output) : "";
+				return {
+					content,
+					state:
+						parsed.exitCode !== undefined
+							? "complete"
+							: /(?:password|passphrase)\s*:/i.test(content)
+								? "authenticating"
+								: "running",
+				};
+			},
+			resize: async (columns, rows) => {
+				if (completed) return;
+				const result = await connection.tmuxResize(terminal.paneId, columns, rows, { signal: controller.signal });
+				if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
+			},
+			cancel: async () => {
+				if (completed) return;
+				controller.abort();
+				reusable = await restoreEcho();
+				terminal.busy = !reusable;
+			},
+			wait: async () => {
+				if (startedAt === undefined) throw new Error("Remote privilege command has not started");
+				const deadline = request.timeoutMs === undefined ? undefined : startedAt + request.timeoutMs;
+				while (true) {
+					try {
+						const capture = await connection.tmuxCapture(terminal.paneId);
+						const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+						if (parsed.found) lastOutput = parsed.output;
+						if (parsed.exitCode !== undefined) {
+							completed = true;
+							const echoFailure = /Unable to (?:disable|restore) terminal echo/.test(lastOutput);
+							return finalize({
+								output: lastOutput,
+								exitCode: parsed.exitCode,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: echoFailure
+									? { code: "echo_recovery_failed", message: "Privilege terminal echo could not be secured" }
+									: undefined,
+							});
+						}
+					} catch (error) {
+						const remoteIssue = diagnosticForError(error, target.id, terminalId);
+						completed = true;
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: { code: "terminal_lost", message: remoteIssue.message },
+							},
+							remoteIssue,
+						);
+					}
+					if (controller.signal.aborted) {
+						reusable = await restoreEcho();
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "remote_cancelled",
+							message: "Privileged terminal command cancelled",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								cancelled: true,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: reusable
+									? { code: "cancelled", message: remoteIssue.message }
+									: { code: "echo_recovery_failed", message: "Privilege terminal echo recovery failed" },
+							},
+							remoteIssue,
+						);
+					}
+					if (deadline !== undefined && this.now() >= deadline) {
+						reusable = await restoreEcho();
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "remote_timeout",
+							message: "Privileged terminal command timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								timedOut: true,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: reusable
+									? { code: "timeout", message: remoteIssue.message }
+									: { code: "echo_recovery_failed", message: "Privilege terminal echo recovery failed" },
+							},
+							remoteIssue,
+						);
+					}
+					const status = await connection
+						.tmuxStatus(terminal.paneId)
+						.catch(() => ({ exists: false, attached: false }));
+					if (!status.exists) {
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "terminal_session_lost",
+							message: "Privilege terminal pane was lost",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: { code: "terminal_lost", message: remoteIssue.message },
+							},
+							remoteIssue,
+						);
+					}
+					await delay(50);
+				}
+			},
+			dispose: async () => {
+				if (disposed) return;
+				disposed = true;
+				signal?.removeEventListener("abort", forwardAbort);
+				if (startedAt !== undefined && !completed) reusable = await restoreEcho();
+				terminal.busy = !reusable;
+			},
 		};
 	}
 
@@ -550,10 +960,10 @@ export class RemoteExecutionRuntime {
 				operationId: terminalId,
 			});
 		}
-		if (terminal.busy) {
+		if (terminal.busy || terminal.pendingInput.length > 0 || terminal.pendingInputOpaque) {
 			throw new RemoteExecutionError({
 				code: "terminal_busy",
-				message: `Terminal ${JSON.stringify(terminalId)} is already running a terminal_bash command`,
+				message: `Terminal ${JSON.stringify(terminalId)} is already running a command or has pending input`,
 				operationId: terminalId,
 			});
 		}
@@ -1045,14 +1455,14 @@ function commandInRemoteCwd(command: string, target: ExecutionTargetConfig): str
 
 function redactCommand(command: string): string {
 	return command
-		.replace(/(password|passphrase|token|secret|authorization|identityfile)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]")
+		.replace(/(password|passphrase|token|secret|authorization|identityfile)[ \t]*[=:][ \t]*[^\s]+/gi, "$1=[redacted]")
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
 }
 
 function redactOutput(output: string): string {
 	return output
 		.replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-key]")
-		.replace(/(password|passphrase|token|secret|authorization)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]")
+		.replace(/(password|passphrase|token|secret|authorization)[ \t]*[=:][ \t]*[^\s]+/gi, "$1=[redacted]")
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
 }
 

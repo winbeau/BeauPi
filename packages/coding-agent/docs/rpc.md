@@ -513,6 +513,8 @@ This means:
 1. Bash output is included in the LLM context on the **next prompt**, not immediately
 2. Multiple bash commands can be executed before a prompt; all outputs will be included
 
+RPC mode is non-interactive for controlled sudo. A `bash` command containing sudo returns `data.privilege.status: "interaction_required"` and does not execute or read authentication input from RPC stdin. `privileged_exec` Tool calls have the same headless behavior. Use interactive mode, or embed `AgentSession` directly with an in-process `PrivilegeInteractionHandler`; never send a password in an RPC command or extension UI response.
+
 #### abort_bash
 
 Abort a running bash command.

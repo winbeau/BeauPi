@@ -15,7 +15,9 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { hasPotentialShellPrivilege, inspectShellPrivilege } from "../policy/index.ts";
 import type { PolicyFailureCategory } from "../policy/types.ts";
+import { getPrivilegeToolDetails, type PrivilegeRuntime, type PrivilegeToolDetailsV1 } from "../privilege/index.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -98,6 +100,9 @@ export interface BashOperations {
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+			if (hasPotentialShellPrivilege(command)) {
+				throw new Error("Privilege-changing commands must be executed through PrivilegeRuntime");
+			}
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
 				throw new Error("aborted");
@@ -210,6 +215,8 @@ export interface BashToolOptions {
 	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Session-scoped controlled privilege router. */
+	privilegeRuntime?: PrivilegeRuntime;
 }
 
 const BASH_CALL_ANIMATION_INTERVAL_MS = 120;
@@ -220,6 +227,7 @@ type BashRenderState = {
 	startedAt: number | undefined;
 	endedAt: number | undefined;
 	interval: NodeJS.Timeout | undefined;
+	privileged?: boolean;
 };
 
 function singleLineCommand(command: string): string {
@@ -237,12 +245,14 @@ class BashCallRenderComponent implements Component {
 	private animationFrame = 0;
 	private animationInterval: NodeJS.Timeout | undefined;
 	private requestRender: () => void = () => {};
+	private privileged = false;
 
 	setCall(
 		args: { command?: string; timeout?: number } | undefined,
 		currentTheme: Theme,
 		running: boolean,
 		requestRender: () => void,
+		privileged: boolean,
 	): void {
 		const command = str(args?.command);
 		if (command !== this.command) this.animationFrame = 0;
@@ -251,6 +261,7 @@ class BashCallRenderComponent implements Component {
 		this.currentTheme = currentTheme;
 		this.running = running;
 		this.requestRender = requestRender;
+		this.privileged = privileged;
 		if (!running) this.stopAnimation();
 	}
 
@@ -258,7 +269,7 @@ class BashCallRenderComponent implements Component {
 		const availableWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
 		if (availableWidth === 0 || !this.currentTheme) return [];
 
-		const title = this.currentTheme.fg("toolTitle", this.currentTheme.bold("Bash"));
+		const title = this.currentTheme.fg("toolTitle", this.currentTheme.bold(this.privileged ? "Sudo Bash" : "Bash"));
 		const prefix = `${title}(`;
 		const suffix = ")";
 		const timeoutSuffix = this.timeout ? this.currentTheme.fg("muted", ` · timeout ${this.timeout}s`) : "";
@@ -390,19 +401,27 @@ function rebuildBashResultRenderComponent(
 export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
-): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
+): ToolDefinition<typeof bashSchema, BashToolDetails | PrivilegeToolDetailsV1 | undefined, BashRenderState> {
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
 	const spawnHook = options?.spawnHook;
+	const privilegeRuntime = options?.privilegeRuntime;
 	return {
 		name: "bash",
 		label: "bash",
 		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
-		promptGuidelines: exposeSessionEnvironment
-			? ["Inspect PI_* environment variables for current model and session details."]
-			: undefined,
+		promptGuidelines: [
+			...(exposeSessionEnvironment
+				? ["Inspect PI_* environment variables for current model and session details."]
+				: []),
+			...(privilegeRuntime
+				? [
+						"sudo commands in bash are routed to the controlled privilege terminal and require per-request user confirmation.",
+					]
+				: []),
+		],
 		parameters: bashSchema,
 		async execute(
 			_toolCallId,
@@ -412,6 +431,24 @@ export function createBashToolDefinition(
 			ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+			const potentialPrivilege = hasPotentialShellPrivilege(resolvedCommand);
+			if (potentialPrivilege) {
+				if (!privilegeRuntime)
+					throw new Error("Privilege-changing commands must be executed through PrivilegeRuntime");
+				return await privilegeRuntime.execute(
+					{
+						toolCallId: _toolCallId,
+						sourceTool: "bash",
+						route: "local_bash",
+						command: resolvedCommand,
+						target: { execution: "local" },
+						cwd,
+						timeoutMs: timeout === undefined ? undefined : resolveTimeoutMs(timeout),
+					},
+					signal,
+					onUpdate,
+				);
+			}
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, exposeSessionEnvironment, ctx);
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
 			let acceptingOutput = true;
@@ -559,11 +596,18 @@ export function createBashToolDefinition(
 				context.lastComponent instanceof BashCallRenderComponent
 					? context.lastComponent
 					: new BashCallRenderComponent();
-			component.setCall(args, currentTheme, context.executionStarted && context.isPartial, context.invalidate);
+			component.setCall(
+				args,
+				currentTheme,
+				context.executionStarted && context.isPartial,
+				context.invalidate,
+				state.privileged === true || inspectShellPrivilege(args.command ?? "").sudo,
+			);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
 			const state = context.state;
+			state.privileged = getPrivilegeToolDetails(result.details) !== undefined;
 			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
 				state.interval = setInterval(() => context.invalidate(), 1000);
 			}
@@ -576,9 +620,11 @@ export function createBashToolDefinition(
 			}
 			const component =
 				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
+			const privilegeDetails = getPrivilegeToolDetails(result.details);
+			const renderableResult = privilegeDetails ? { ...result, details: privilegeDetails } : result;
 			rebuildBashResultRenderComponent(
 				component,
-				result as any,
+				renderableResult as any,
 				options,
 				context.showImages,
 				context.isError,

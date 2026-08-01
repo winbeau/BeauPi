@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import type { PolicyToolDetails } from "./policy/types.ts";
+import type { PrivilegeToolDetailsV1 } from "./privilege/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -42,6 +43,8 @@ export interface BashResult {
 	error?: string;
 	/** Versioned M10 Policy fact for this user Bash execution. */
 	policy?: PolicyToolDetails;
+	/** Versioned M13 privilege fact for controlled sudo execution. */
+	privilege?: PrivilegeToolDetailsV1;
 }
 
 // ============================================================================

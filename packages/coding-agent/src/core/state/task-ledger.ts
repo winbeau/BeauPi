@@ -19,6 +19,12 @@ import {
 } from "../documents/types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
 import { getPolicyToolDetails, POLICY_FACT_ENTRY_TYPE, type PolicyToolDetails } from "../policy/index.ts";
+import {
+	getPrivilegeToolDetails,
+	type PendingPrivilegeInteraction,
+	PRIVILEGE_FACT_ENTRY_TYPE,
+	type PrivilegeToolDetailsV1,
+} from "../privilege/index.ts";
 import type { PendingQuestionInteraction } from "../question.ts";
 import {
 	getSearchRuntimeToolDetails,
@@ -186,6 +192,7 @@ export interface TaskLedgerSnapshot {
 	network: readonly NetworkToolRecord[];
 	interactions: readonly TaskInteractionRecord[];
 	policy: readonly PolicyToolDetails[];
+	privilege: readonly PrivilegeToolDetailsV1[];
 	workflows: readonly WorkflowSnapshot[];
 	background?: BackgroundRuntimeSnapshotV1;
 	verification: VerificationState;
@@ -237,6 +244,7 @@ const TOOL_LABELS = Object.freeze({
 	remote_bash: "Remote Bash",
 	terminal_create: "Terminal Create",
 	terminal_bash: "Terminal Bash",
+	privileged_exec: "Sudo Bash",
 	terminal_send: "Terminal Send",
 	terminal_capture: "Terminal Capture",
 	terminal_status: "Terminal Status",
@@ -376,7 +384,7 @@ function summarizeToolArgs(toolName: string, args: unknown): string | undefined 
 }
 
 function getCommandFromArgs(toolName: string, args: unknown): string | undefined {
-	if (toolName !== "bash") return undefined;
+	if (toolName !== "bash" && toolName !== "terminal_bash" && toolName !== "privileged_exec") return undefined;
 	const command = asRecord(args)?.command;
 	return typeof command === "string" && command.trim() ? command : undefined;
 }
@@ -607,6 +615,7 @@ export class TaskLedger {
 	private readonly networkRecords = new Map<string, NetworkToolRecord>();
 	private readonly interactionRecords = new Map<string, TaskInteractionRecord>();
 	private readonly policyRecords = new Map<string, PolicyToolDetails>();
+	private readonly privilegeRecords = new Map<string, PrivilegeToolDetailsV1>();
 	private readonly workflowRecords = new Map<string, WorkflowSnapshot>();
 	private readonly workflowToolDetails = new Map<string, WorkflowToolDetails>();
 	private readonly backgroundToolDetails = new Map<string, BackgroundToolDetailsV1>();
@@ -631,6 +640,7 @@ export class TaskLedger {
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
+	private pendingPrivilegeInteraction: PendingPrivilegeInteraction | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -651,6 +661,7 @@ export class TaskLedger {
 		this.networkRecords.clear();
 		this.interactionRecords.clear();
 		this.policyRecords.clear();
+		this.privilegeRecords.clear();
 		this.workflowRecords.clear();
 		this.workflowToolDetails.clear();
 		this.backgroundToolDetails.clear();
@@ -675,6 +686,7 @@ export class TaskLedger {
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
+		this.pendingPrivilegeInteraction = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
@@ -686,6 +698,11 @@ export class TaskLedger {
 			if (entry.type === "custom" && entry.customType === POLICY_FACT_ENTRY_TYPE) {
 				const details = getPolicyToolDetails(entry.data);
 				if (details) this.policyRecords.set(details.requestId, structuredClone(details));
+				continue;
+			}
+			if (entry.type === "custom" && entry.customType === PRIVILEGE_FACT_ENTRY_TYPE) {
+				const details = getPrivilegeToolDetails(entry.data);
+				if (details) this.privilegeRecords.set(details.requestId, structuredClone(details));
 				continue;
 			}
 			if (entry.type !== "message") continue;
@@ -806,6 +823,7 @@ export class TaskLedger {
 	): TaskLedgerToolDetails {
 		const id = `shell:${executionId}`;
 		if (result.policy) this.policyRecords.set(result.policy.requestId, structuredClone(result.policy));
+		if (result.privilege) this.privilegeRecords.set(result.privilege.requestId, structuredClone(result.privilege));
 		let record = this.commands.get(id);
 		if (!record) {
 			this.startShell(executionId, command, endedAt);
@@ -847,6 +865,19 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	setPendingPrivilegeInteraction(pending: PendingPrivilegeInteraction | undefined): void {
+		if (!pending && !this.pendingPrivilegeInteraction) return;
+		if (
+			pending &&
+			this.pendingPrivilegeInteraction?.requestId === pending.requestId &&
+			this.pendingPrivilegeInteraction.state === pending.state
+		) {
+			return;
+		}
+		this.pendingPrivilegeInteraction = pending ? structuredClone(pending) : undefined;
+		this.revision++;
+	}
+
 	recordWorkflowSnapshot(snapshot: WorkflowSnapshot): void {
 		this.workflowRecords.set(snapshot.workflowId, structuredClone(snapshot));
 		this.revision++;
@@ -867,6 +898,14 @@ export class TaskLedger {
 		const records = [...this.policyRecords.values()];
 		for (let index = records.length - 1; index >= 0; index--) {
 			if (records[index]?.toolCallId === toolCallId) return records[index];
+		}
+		return undefined;
+	}
+
+	getPrivilegeDetails(toolCallId: string): PrivilegeToolDetailsV1 | undefined {
+		const records = [...this.privilegeRecords.values()];
+		for (let index = records.length - 1; index >= 0; index--) {
+			if (records[index]?.toolCallId === toolCallId) return structuredClone(records[index]);
 		}
 		return undefined;
 	}
@@ -904,12 +943,30 @@ export class TaskLedger {
 		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
 		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
 		const policy = [...this.policyRecords.values()].map((record) => structuredClone(record));
+		const privilege = [...this.privilegeRecords.values()].map((record) => structuredClone(record));
 		const workflows = [...this.workflowRecords.values()].map((record) => structuredClone(record));
 		const background = structuredClone(this.backgroundSnapshot);
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
 		const todos = this.buildTodos(commands, filesModified, verification, now);
+		if (
+			this.pendingPrivilegeInteraction?.state === "waiting_for_user" ||
+			this.pendingPrivilegeInteraction?.state === "starting" ||
+			this.pendingPrivilegeInteraction?.state === "running"
+		) {
+			const waitingForUser = this.pendingPrivilegeInteraction.state === "waiting_for_user";
+			todos.push({
+				id: `privilege:${this.pendingPrivilegeInteraction.requestId}`,
+				label: waitingForUser ? "Permission required for sudo command" : "Running controlled sudo command",
+				status: waitingForUser ? "blocked" : "active",
+				sequence: -110,
+				updatedAt: Date.parse(this.pendingPrivilegeInteraction.createdAt) || now,
+				owner: waitingForUser ? "user" : "agent",
+				blockedBy: waitingForUser ? ["per-request confirmation"] : undefined,
+				source: "privileged_exec",
+			});
+		}
 		if (this.pendingInteraction) {
 			todos.push({
 				id: `interaction:${this.pendingInteraction.requestId}`,
@@ -937,6 +994,7 @@ export class TaskLedger {
 			network,
 			interactions,
 			policy,
+			privilege,
 			workflows,
 			background,
 			verification,
@@ -1042,6 +1100,8 @@ export class TaskLedger {
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
 		const policyDetails = getPolicyToolDetails(details);
 		if (policyDetails) this.policyRecords.set(policyDetails.requestId, structuredClone(policyDetails));
+		const privilegeDetails = getPrivilegeToolDetails(details);
+		if (privilegeDetails) this.privilegeRecords.set(privilegeDetails.requestId, structuredClone(privilegeDetails));
 		const backgroundDetails = getBackgroundToolDetails(details);
 		if (backgroundDetails) this.backgroundToolDetails.set(record.id, structuredClone(backgroundDetails));
 		const workflowDetails = getWorkflowToolDetails(details);
@@ -1074,16 +1134,20 @@ export class TaskLedger {
 			toolName === "ask_user_question" ? getQuestionInteractionRecord(details, record.args, endedAt) : undefined;
 		if (interaction) this.interactionRecords.set(interaction.id, interaction);
 		const resultStatus =
-			policyDetails?.status === "cancelled"
+			privilegeDetails?.status === "cancelled"
 				? "cancelled"
-				: policyDetails && !policyDetails.executed
+				: privilegeDetails && !privilegeDetails.ok
 					? "failed"
-					: toolName === "ask_user_question" &&
-							(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
+					: policyDetails?.status === "cancelled"
 						? "cancelled"
-						: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
+						: policyDetails && !policyDetails.executed
 							? "failed"
-							: fallbackStatus;
+							: toolName === "ask_user_question" &&
+									(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
+								? "cancelled"
+								: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
+									? "failed"
+									: fallbackStatus;
 		const suppliedFilesRead =
 			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, resultStatus);
 		const suppliedFilesModified =

@@ -199,6 +199,14 @@ await showMenu();  // "Back" = just call again
 
 See [overlay-qa-tests.ts](../examples/extensions/overlay-qa-tests.ts) for comprehensive examples covering anchors, margins, stacking, responsive visibility, and animation.
 
+### Controlled Privilege Overlay
+
+Interactive mode installs a built-in `PrivilegeTerminalComponent` for controlled sudo requests. At 56 columns and wider it uses a centered overlay; narrower terminals use the editor-area fallback so the command and controls remain usable without horizontal overflow.
+
+The review state shows `Permission required`, request source, target, cwd, a read-only command, audit path, and the statement that every sudo command requires confirmation. `app.privilege.confirm` starts exactly that request; `app.privilege.cancel` cancels it. Running/authenticating states forward raw terminal bytes only through `PrivilegeTerminalControl.sendSensitive(Buffer)` and never store them in component state, render output, cache, Session, or response objects.
+
+This component is a trusted built-in boundary, not an extension password prompt. Extensions and SDK hosts must not collect sudo passwords in forms, return values, Tool parameters, or RPC messages. A host integration may render the same `PrivilegeInteractionRequest`, call `control.start()` after one-request confirmation, forward direct terminal keystrokes, and wait for completion.
+
 ## Built-in Components
 
 Import from `@earendil-works/pi-tui`:

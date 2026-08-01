@@ -145,7 +145,15 @@ describe("in-process Agent Pool and delegate_task", () => {
 					{
 						id: "controlled",
 						systemPrompt: "CONTROLLED PROFILE",
-						toolAllowlist: ["read", "edit", "write", "delegate_task", "ask_user_question", "custom_allowed"],
+						toolAllowlist: [
+							"read",
+							"edit",
+							"write",
+							"delegate_task",
+							"ask_user_question",
+							"privileged_exec",
+							"custom_allowed",
+						],
 						skillAllowlist: { allow: ["allowed-skill"] },
 						allowFileModifications: false,
 					},
@@ -179,6 +187,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(seenTools).not.toContain("write");
 		expect(seenTools).not.toContain("delegate_task");
 		expect(seenTools).not.toContain("ask_user_question");
+		expect(seenTools).not.toContain("privileged_exec");
 		expect(seenSystemPrompt).toContain("CONTROLLED PROFILE");
 		expect(seenSystemPrompt).toContain("<clarification_request>");
 		expect(seenSystemPrompt).toContain("allowed-skill");
@@ -420,7 +429,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(assistantMessages).toHaveLength(2);
 	});
 
-	it("exposes delegate_task in the Coordinator registry but never in a child registry", async () => {
+	it("exposes coordinator-only tools in the Coordinator registry", async () => {
 		let coordinatorTools: string[] = [];
 		const { harness, session } = await createCoordinator();
 		harness.setResponses([
@@ -431,7 +440,9 @@ describe("in-process Agent Pool and delegate_task", () => {
 		]);
 		await session.prompt("inspect tools");
 		expect(coordinatorTools).toContain("delegate_task");
+		expect(coordinatorTools).toContain("privileged_exec");
 		expect(session.getToolDefinition("delegate_task")).toBeDefined();
+		expect(session.getToolDefinition("privileged_exec")).toBeDefined();
 	});
 });
 

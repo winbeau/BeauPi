@@ -108,7 +108,7 @@ describe("M10 Policy AgentSession lifecycle", () => {
 		expect(session.policyRuntime.getFacts()).toHaveLength(2);
 	});
 
-	it("applies advisory-only Policy to user Bash and persists facts without a second state system", async () => {
+	it("applies advisory-only Policy while routing user sudo through the controlled privilege boundary", async () => {
 		const { harness, session } = await createPolicySession();
 		await session.executeBash("pwd");
 		await session.executeBash("pwd");
@@ -118,7 +118,8 @@ describe("M10 Policy AgentSession lifecycle", () => {
 		});
 		expect(privileged.policy?.decision.action).toBe("allow");
 		expect(privileged.policy?.advisories?.map((advisory) => advisory.kind)).toContain("privileged_operation");
-		expect(privilegedExec).toHaveBeenCalledOnce();
+		expect(privileged.privilege).toMatchObject({ status: "interaction_required", ok: false });
+		expect(privilegedExec).not.toHaveBeenCalled();
 
 		const exec = vi.fn<BashOperations["exec"]>(async () => ({ exitCode: 127 }));
 		const operations: BashOperations = { exec };

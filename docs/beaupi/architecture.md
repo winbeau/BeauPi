@@ -308,17 +308,20 @@ Background store 使用 `beaupi.background.snapshot` 版本化 custom entry。Ta
 
 ## 权限边界
 
-BeauPi 不以 root 身份启动。Sudo 模式只开放结构化操作，例如：
+BeauPi 不以 root 身份启动，也不提供 sudo mode、root shell 或 session grant。M13 使用唯一的 session-scoped `PrivilegeRuntime` 接收 `privileged_exec`、local `bash` 和 `terminal_bash` 路由的完整 sudo command；每个 request 都必须在 TUI 中独立确认。
 
-```typescript
-type PrivilegedAction =
-  | { type: "apt-install"; packages: string[] }
-  | { type: "service-restart"; service: string }
-  | { type: "service-status"; service: string }
-  | { type: "file-write"; path: string; content: string };
+```text
+AgentSession
+├── PrivilegeRuntime                 # request 状态机与唯一结果事实
+│   ├── local tmux command session
+│   └── existing remote terminal pane
+├── MonitorRuntime / TaskLedger      # 引用结构化 result/monitor facts
+└── Session custom fact + 0600 JSONL audit
 ```
 
-每次操作经过模式检查、参数验证、确认和审计。
+Runtime 在确认前不创建 command session。确认后，local/remote adapter 必须先通过 controlling TTY 执行 `stty -echo` 并观察 begin marker，才开放敏感输入。输入只经 `tmux load-buffer` child stdin 和 `paste-buffer -d -r` 进入 TTY，finally 删除 buffer；不进入 Tool、argv、env、Session、Monitor、Task Ledger、日志、审计、RPC 或模型上下文。
+
+`terminal_send` 在 Enter 前检查累计 line 并用 Ctrl-U 清理 sudo；one-shot remote 路径阻止提权。`sudo -S`、`su`、`doas`、`pkexec` 和 namespace/chroot identity switch 不支持。详细设计见 [受控 sudo 终端](./controlled-privilege-terminal.md)。
 
 ## 搜索架构
 

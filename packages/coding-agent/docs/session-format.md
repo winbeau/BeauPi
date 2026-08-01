@@ -270,6 +270,8 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
+BeauPi also uses versioned internal custom facts. `beaupi.privilege.fact` stores only completed controlled-sudo result metadata such as request/tool ids, command, route, target reference, timestamps, exit status, Monitor/log paths, truncation, and stable diagnostics. It never stores authentication input, a pending request, a sudo ticket, or a reusable grant. Branch navigation and resume project these historical facts into Task Ledger but do not restore an interaction.
+
 ### CustomMessageEntry
 
 Extension-injected messages that DO participate in LLM context.

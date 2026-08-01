@@ -8,6 +8,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { inspectShellPrivilege } from "../../../core/policy/index.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -101,7 +102,8 @@ export class BashExecutionComponent implements Component {
 		if (availableWidth === 0) return [];
 		const bodyWidth = Math.max(1, availableWidth - 5);
 		const titleArgument = this.excludeFromContext ? `${this.command} · no context` : this.command;
-		const lines = ["", toolTitle("Bash", titleArgument, this.getToolState(), theme, availableWidth)];
+		const toolName = inspectShellPrivilege(this.command).sudo ? "Sudo Bash" : "Bash";
+		const lines = ["", toolTitle(toolName, titleArgument, this.getToolState(), theme, availableWidth)];
 
 		const fullOutput = this.outputLines.join("\n");
 		const contextTruncation = truncateTail(fullOutput, {

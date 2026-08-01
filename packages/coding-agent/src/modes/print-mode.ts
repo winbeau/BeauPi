@@ -72,6 +72,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		session = runtimeHost.session;
 		session.setQuestionInteractionHandler(undefined);
 		session.setPolicyInteractionHandler(undefined);
+		session.setPrivilegeInteractionHandler(undefined);
 		await session.bindExtensions({
 			mode: mode === "json" ? "json" : "print",
 			commandContextActions: {

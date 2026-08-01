@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnProcess, waitForChildProcess } from "../../utils/child-process.ts";
 import type { MonitorAdapterSnapshot, MonitorRecord, MonitorStopResult } from "../monitor/types.ts";
+import { LocalTmuxTransport } from "../terminal/local-tmux-transport.ts";
 import type { ExecutionTargetRegistry } from "./targets.ts";
 import {
 	type ExecutionTargetConfig,
@@ -19,7 +20,7 @@ import {
 function safeDiagnosticText(text: string): string {
 	return text
 		.replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-key]")
-		.replace(/(password|passphrase|token|secret|authorization|identityfile)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]")
+		.replace(/(password|passphrase|token|secret|authorization|identityfile)[ \t]*[=:][ \t]*[^\s]+/gi, "$1=[redacted]")
 		.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
 		.replace(/[\r\n\t]+/g, " ")
 		.trim()
@@ -155,10 +156,6 @@ function runSsh(args: string[], options: RemoteCommandOptions = {}): Promise<Rem
 	return runProcess("ssh", args, options, "Remote SSH", "ssh_connection");
 }
 
-function runTmux(args: string[], options: RemoteCommandOptions = {}): Promise<RemoteCommandResult> {
-	return runProcess("tmux", args, options, "Local tmux", "tmux_unavailable");
-}
-
 function localTmuxSessionId(namespace: string, targetId: string, terminalId: string): string {
 	const digest = createHash("sha256").update(`${namespace}\0${targetId}`).digest("hex").slice(0, 12);
 	return `beaupi-${digest}-${terminalId}`;
@@ -227,6 +224,7 @@ class OpenSshConnection implements SshConnection {
 	private readonly sessionNamespace: string;
 	private readonly localSessions: Set<string>;
 	private readonly transcriptPaths: Map<string, string>;
+	private readonly tmux: LocalTmuxTransport;
 	private closed = false;
 
 	constructor(
@@ -235,6 +233,7 @@ class OpenSshConnection implements SshConnection {
 		sessionNamespace: string,
 		localSessions: Set<string>,
 		transcriptPaths: Map<string, string>,
+		tmux: LocalTmuxTransport,
 	) {
 		this.target = target;
 		this.targetId = target.id;
@@ -242,6 +241,7 @@ class OpenSshConnection implements SshConnection {
 		this.sessionNamespace = sessionNamespace;
 		this.localSessions = localSessions;
 		this.transcriptPaths = transcriptPaths;
+		this.tmux = tmux;
 	}
 
 	async execute(command: string, options?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -272,25 +272,28 @@ class OpenSshConnection implements SshConnection {
 		const createArgs = ["new-session", "-d", "-s", sessionId];
 		if (options.columns !== undefined) createArgs.push("-x", String(options.columns));
 		if (options.rows !== undefined) createArgs.push("-y", String(options.rows));
-		const created = await runTmux(createArgs, commandOptions);
+		const created = await this.tmux.run(createArgs, commandOptions);
 		if (created.exitCode !== 0) return created;
 		const transcriptPath = localTerminalTranscriptPath(this.sessionNamespace, this.targetId, options.sessionId);
 		await mkdir(dirname(transcriptPath), { recursive: true });
 		await writeFile(transcriptPath, "", { encoding: "utf8", mode: 0o600 });
 		this.transcriptPaths.set(sessionId, transcriptPath);
 		try {
-			const configured = await runTmux(["set-option", "-t", sessionId, "remain-on-exit", "on"], commandOptions);
+			const configured = await this.tmux.run(
+				["set-option", "-t", sessionId, "remain-on-exit", "on"],
+				commandOptions,
+			);
 			if (configured.exitCode !== 0) {
-				await runTmux(["kill-session", "-t", sessionId]).catch(() => {});
+				await this.tmux.close(sessionId).catch(() => {});
 				await this.removeTranscript(sessionId);
 				return configured;
 			}
-			const piped = await runTmux(
+			const piped = await this.tmux.run(
 				["pipe-pane", "-t", sessionId, `cat >> ${shellQuote(transcriptPath)}`],
 				commandOptions,
 			);
 			if (piped.exitCode !== 0) {
-				await runTmux(["kill-session", "-t", sessionId]).catch(() => {});
+				await this.tmux.close(sessionId).catch(() => {});
 				await this.removeTranscript(sessionId);
 				return piped;
 			}
@@ -299,9 +302,9 @@ class OpenSshConnection implements SshConnection {
 			sshArgs.splice(-1, 0, "-tt");
 			sshArgs.push(remoteTerminalStartup(options, readinessMarker));
 			const sshCommand = ["exec ssh", ...sshArgs.map(shellQuote)].join(" ");
-			const respawned = await runTmux(["respawn-pane", "-k", "-t", sessionId, sshCommand], commandOptions);
+			const respawned = await this.tmux.run(["respawn-pane", "-k", "-t", sessionId, sshCommand], commandOptions);
 			if (respawned.exitCode !== 0) {
-				await runTmux(["kill-session", "-t", sessionId]).catch(() => {});
+				await this.tmux.close(sessionId).catch(() => {});
 				await this.removeTranscript(sessionId);
 				return respawned;
 			}
@@ -336,7 +339,7 @@ class OpenSshConnection implements SshConnection {
 				await delay(TMUX_READINESS_POLL_MS);
 			}
 		} catch (error) {
-			await runTmux(["kill-session", "-t", sessionId]).catch(() => {});
+			await this.tmux.close(sessionId).catch(() => {});
 			await this.removeTranscript(sessionId);
 			throw error;
 		}
@@ -347,30 +350,24 @@ class OpenSshConnection implements SshConnection {
 		input: string,
 		commandOptions: RemoteCommandOptions = {},
 	): Promise<RemoteCommandResult> {
-		const startedAt = Date.now();
-		const target = this.localSessionId(targetId);
-		const segments = input.split(/\r\n|\r|\n/);
-		let stdout = "";
-		let stderr = "";
-		let exitCode: number | null = 0;
-		for (let index = 0; index < segments.length; index++) {
-			const segment = segments[index] ?? "";
-			if (segment || segments.length === 1) {
-				const result = await runTmux(["send-keys", "-t", target, "-l", segment], commandOptions);
-				stdout += result.stdout;
-				stderr += result.stderr;
-				exitCode = result.exitCode;
-				if (exitCode !== 0) break;
-			}
-			if (index < segments.length - 1) {
-				const result = await runTmux(["send-keys", "-t", target, "Enter"], commandOptions);
-				stdout += result.stdout;
-				stderr += result.stderr;
-				exitCode = result.exitCode;
-				if (exitCode !== 0) break;
-			}
-		}
-		return { stdout, stderr, exitCode, startedAt, completedAt: Date.now() };
+		return this.tmux.sendLiteral(this.localSessionId(targetId), input, commandOptions);
+	}
+
+	async tmuxSendSensitive(targetId: string, input: Buffer, commandOptions: RemoteCommandOptions = {}): Promise<void> {
+		await this.tmux.sendSensitive(this.localSessionId(targetId), input, commandOptions);
+	}
+
+	tmuxSendKey(targetId: string, key: string, commandOptions: RemoteCommandOptions = {}): Promise<RemoteCommandResult> {
+		return this.tmux.sendKey(this.localSessionId(targetId), key, commandOptions);
+	}
+
+	tmuxResize(
+		targetId: string,
+		columns: number,
+		rows: number,
+		commandOptions: RemoteCommandOptions = {},
+	): Promise<RemoteCommandResult> {
+		return this.tmux.resize(this.localSessionId(targetId), columns, rows, commandOptions);
 	}
 
 	async tmuxExecute(
@@ -469,34 +466,16 @@ class OpenSshConnection implements SshConnection {
 	}
 
 	async tmuxCapture(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
-		return runTmux(["capture-pane", "-p", "-J", "-S", "-", "-t", this.localSessionId(targetId)], commandOptions);
+		return this.tmux.capture(this.localSessionId(targetId), commandOptions);
 	}
 
 	async tmuxStatus(targetId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
-		const result = await runTmux(
-			[
-				"display-message",
-				"-p",
-				"-t",
-				this.localSessionId(targetId),
-				"#{pane_id}\t#{pane_current_command}\t#{pane_dead}\t#{pane_dead_status}",
-			],
-			commandOptions,
-		);
-		if (result.exitCode !== 0) return { exists: false, attached: false };
-		const [paneId, currentCommand, dead, deadStatus] = result.stdout.trimEnd().split("\t", 4);
-		return {
-			exists: dead !== "1",
-			attached: false,
-			paneId: paneId || undefined,
-			currentCommand: currentCommand || undefined,
-			dead: dead === "1",
-			exitCode: /^\d+$/.test(deadStatus ?? "") ? Number(deadStatus) : undefined,
-		};
+		const status = await this.tmux.status(this.localSessionId(targetId), commandOptions);
+		return { ...status, attached: false };
 	}
 
 	private async interruptTmuxPane(targetId: string): Promise<void> {
-		await runTmux(["send-keys", "-t", this.localSessionId(targetId), "C-c"], { timeoutMs: 2_000 }).catch(() => {});
+		await this.tmux.sendKey(this.localSessionId(targetId), "C-c", { timeoutMs: 2_000 }).catch(() => {});
 	}
 
 	private async removeTranscript(targetId: string): Promise<void> {
@@ -514,7 +493,7 @@ class OpenSshConnection implements SshConnection {
 
 	async tmuxClose(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
 		const localSessionId = this.localSessionId(sessionId);
-		const result = await runTmux(["kill-session", "-t", localSessionId], commandOptions);
+		const result = await this.tmux.close(localSessionId, commandOptions);
 		this.localSessions.delete(localSessionId);
 		await this.removeTranscript(localSessionId);
 		return result;
@@ -551,6 +530,7 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 	private readonly connections = new Map<string, Promise<OpenSshConnection>>();
 	private readonly snapshots = new Map<string, MonitorAdapterSnapshot>();
 	private readonly commandAbortControllers = new Map<string, AbortController>();
+	private readonly tmux = new LocalTmuxTransport();
 
 	constructor(options: OpenSshTmuxAdapterOptions) {
 		this.targets = options.targets;
@@ -575,6 +555,7 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 					this.sessionNamespace,
 					this.localSessions,
 					this.transcriptPaths,
+					this.tmux,
 				);
 			} catch (error) {
 				if (error instanceof RemoteExecutionError && error.diagnostic.code === "remote_timeout") {
@@ -686,7 +667,7 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 
 	async dispose(): Promise<void> {
 		for (const sessionId of this.localSessions) {
-			await runTmux(["kill-session", "-t", sessionId], { timeoutMs: 2_000 }).catch(() => {});
+			await this.tmux.close(sessionId, { timeoutMs: 2_000 }).catch(() => {});
 		}
 		this.localSessions.clear();
 		for (const transcriptPath of new Set(this.transcriptPaths.values())) {
@@ -741,6 +722,29 @@ class FakeSshConnection implements SshConnection {
 		return this.execute(`tmux send-keys ${targetId}`, commandOptions);
 	}
 
+	async tmuxSendSensitive(targetId: string, input: Buffer, _commandOptions?: RemoteCommandOptions): Promise<void> {
+		this.adapter.sendFakeSensitiveInput(targetId, input);
+	}
+
+	async tmuxSendKey(
+		targetId: string,
+		key: string,
+		commandOptions?: RemoteCommandOptions,
+	): Promise<RemoteCommandResult> {
+		this.adapter.sendFakeKey(targetId, key);
+		return this.execute(`tmux send-key ${targetId} ${key}`, commandOptions);
+	}
+
+	async tmuxResize(
+		targetId: string,
+		columns: number,
+		rows: number,
+		commandOptions?: RemoteCommandOptions,
+	): Promise<RemoteCommandResult> {
+		this.adapter.resizeFakeTerminal(targetId, columns, rows);
+		return this.execute(`tmux resize-pane ${targetId}`, commandOptions);
+	}
+
 	tmuxExecute(targetId: string, command: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
 		return this.adapter.executeFakeTerminal(targetId, command, commandOptions);
 	}
@@ -778,11 +782,19 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 	>();
 	private readonly snapshots = new Map<string, MonitorAdapterSnapshot>();
 	private readonly stopResults = new Map<string, MonitorStopResult>();
+	private readonly sensitiveInput: Buffer[] = [];
+	private readonly privilegeTerminals = new Map<
+		string,
+		{ endMarker: string; output: string; exitCode: number; prompt: boolean }
+	>();
+	private readonly privilegeResults = new Map<string, { output: string; exitCode: number; prompt: boolean }>();
 	private nextPaneId = 1;
 	connectCalls = 0;
 	commandCalls: string[] = [];
 	terminalCommandCalls: Array<{ terminalId: string; command: string }> = [];
 	tmuxCreateCalls: TmuxCreateOptions[] = [];
+	tmuxKeyCalls: Array<{ terminalId: string; key: string }> = [];
+	tmuxResizeCalls: Array<{ terminalId: string; columns: number; rows: number }> = [];
 	closeCalls = 0;
 	failConnect?: RemoteExecutionError;
 
@@ -806,6 +818,17 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			stderr: "",
 			exitCode: 0,
 			...result,
+		});
+	}
+
+	setPrivilegeCommandResult(
+		terminalId: string,
+		result: { output?: string; exitCode?: number; prompt?: boolean },
+	): void {
+		this.privilegeResults.set(terminalId, {
+			output: result.output ?? "privileged-ok\n",
+			exitCode: result.exitCode ?? 0,
+			prompt: result.prompt ?? true,
 		});
 	}
 
@@ -880,7 +903,60 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 
 	sendFakeTerminal(targetId: string, input: string): void {
 		const entry = this.findFakeTerminal(targetId);
-		if (entry?.terminal.exists) entry.terminal.output += input;
+		if (!entry?.terminal.exists) return;
+		const beginMarker = input.match(/__BEAUPI_PRIV_BEGIN_[A-Za-z0-9]+__/)?.[0];
+		const endMarker = input.match(/__BEAUPI_PRIV_END_[A-Za-z0-9]+__/)?.[0];
+		if (!beginMarker || !endMarker) {
+			entry.terminal.output += input;
+			return;
+		}
+		const configured = this.privilegeResults.get(entry.terminalId) ?? {
+			output: "privileged-ok\n",
+			exitCode: 0,
+			prompt: true,
+		};
+		this.privilegeTerminals.set(entry.terminalId, { endMarker, ...configured });
+		entry.terminal.output += `\n${beginMarker}\n${configured.prompt ? "Password: " : ""}`;
+		if (!configured.prompt) {
+			entry.terminal.output += `${configured.output}${endMarker}:${configured.exitCode}\n`;
+			this.privilegeTerminals.delete(entry.terminalId);
+		}
+	}
+
+	sendFakeSensitiveInput(targetId: string, input: Buffer): void {
+		this.sensitiveInput.push(Buffer.from(input));
+		const entry = this.findFakeTerminal(targetId);
+		if (!entry?.terminal.exists) return;
+		const privilege = this.privilegeTerminals.get(entry.terminalId);
+		if (!privilege) return;
+		entry.terminal.output += `\n${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
+		this.privilegeTerminals.delete(entry.terminalId);
+	}
+
+	getSensitiveInputForTest(): Buffer {
+		return Buffer.concat(this.sensitiveInput.map((input) => Buffer.from(input)));
+	}
+
+	sendFakeKey(targetId: string, key: string): void {
+		const entry = this.findFakeTerminal(targetId);
+		if (!entry?.terminal.exists) return;
+		this.tmuxKeyCalls.push({ terminalId: entry.terminalId, key });
+		if (key === "C-u") {
+			const newline = entry.terminal.output.lastIndexOf("\n");
+			entry.terminal.output = newline === -1 ? "" : entry.terminal.output.slice(0, newline + 1);
+		}
+		if (key === "C-c") {
+			const privilege = this.privilegeTerminals.get(entry.terminalId);
+			if (privilege) {
+				entry.terminal.output += `\n${privilege.endMarker}:130\n`;
+				this.privilegeTerminals.delete(entry.terminalId);
+			}
+		}
+	}
+
+	resizeFakeTerminal(targetId: string, columns: number, rows: number): void {
+		const entry = this.findFakeTerminal(targetId);
+		if (entry?.terminal.exists) this.tmuxResizeCalls.push({ terminalId: entry.terminalId, columns, rows });
 	}
 
 	captureFakeTerminal(targetId: string): string {

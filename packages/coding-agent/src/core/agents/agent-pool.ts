@@ -176,6 +176,7 @@ const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
 const RESERVED_TOOL_NAMES = new Set([
 	"delegate_task",
 	"ask_user_question",
+	"privileged_exec",
 	"workflow_run",
 	"workflow_status",
 	"workflow_cancel",
@@ -716,6 +717,7 @@ export class AgentPool {
 				excludeTools: [
 					"delegate_task",
 					"ask_user_question",
+					"privileged_exec",
 					"workflow_run",
 					"workflow_status",
 					"workflow_cancel",
@@ -726,7 +728,7 @@ export class AgentPool {
 					"background_wait",
 					"background_cancel",
 				],
-				customTools: [...this.customTools],
+				customTools: this.customTools.filter((tool) => tool.name !== "privileged_exec"),
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
 				synchronizeSearchBudget: false,

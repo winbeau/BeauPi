@@ -101,6 +101,17 @@ Used by the built-in `ask_user_question` Tool. Option movement reuses `tui.selec
 | `app.question.notes` | `n` | Edit optional notes for the current question |
 | `app.question.submit` | `enter` | Confirm a single selection, advance a multi-select question, or submit review |
 
+### Controlled Privilege Terminal
+
+Used by the built-in controlled sudo terminal. Confirmation applies to exactly one request; changing the binding does not create a session grant or confirmation bypass.
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.privilege.confirm` | `enter` | Confirm and start one displayed sudo command |
+| `app.privilege.cancel` | `escape` | Cancel the current privilege request or running command |
+| `app.privilege.scrollUp` | `pageUp` | Scroll captured privilege terminal output up |
+| `app.privilege.scrollDown` | `pageDown` | Scroll captured privilege terminal output down |
+
 ### Sessions
 
 | Keybinding id | Default | Description |

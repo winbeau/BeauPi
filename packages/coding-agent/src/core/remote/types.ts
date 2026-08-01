@@ -40,6 +40,8 @@ export type RemoteDiagnosticCode =
 	| "remote_command"
 	| "remote_cancelled"
 	| "remote_timeout"
+	| "terminal_required"
+	| "redundant_privilege"
 	| "tmux_unavailable"
 	| "terminal_invalid"
 	| "terminal_not_found"
@@ -105,6 +107,14 @@ export interface SshConnection {
 	execute(command: string, options?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxCreate(options: TmuxCreateOptions, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxSend(target: string, input: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxSendSensitive(target: string, input: Buffer, commandOptions?: RemoteCommandOptions): Promise<void>;
+	tmuxSendKey(target: string, key: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxResize(
+		target: string,
+		columns: number,
+		rows: number,
+		commandOptions?: RemoteCommandOptions,
+	): Promise<RemoteCommandResult>;
 	tmuxExecute(target: string, command: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxCapture(target: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxStatus(target: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus>;

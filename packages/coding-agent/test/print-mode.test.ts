@@ -21,6 +21,7 @@ type FakeSession = {
 	reload: ReturnType<typeof vi.fn>;
 	setQuestionInteractionHandler: ReturnType<typeof vi.fn>;
 	setPolicyInteractionHandler: ReturnType<typeof vi.fn>;
+	setPrivilegeInteractionHandler: ReturnType<typeof vi.fn>;
 };
 
 type FakeRuntimeHost = {
@@ -76,6 +77,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		reload: vi.fn(async () => {}),
 		setQuestionInteractionHandler: vi.fn(),
 		setPolicyInteractionHandler: vi.fn(),
+		setPrivilegeInteractionHandler: vi.fn(),
 	};
 
 	return {
