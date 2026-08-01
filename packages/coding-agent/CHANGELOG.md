@@ -40,7 +40,7 @@
 - Changed SSH/tmux Tool calls to stay on one width-safe line and collapse long command output to a 10-line preview that uses the configurable Tool expansion keybinding.
 - Changed Bash Tool calls to stay on one width-safe line with animated in-parentheses truncation, and collapsed output to a line-count summary using the configurable Tool expansion keybinding.
 - Changed the built-in sub-agent profiles to use only wall-clock timeouts by default, removing their token and turn caps; custom profiles can still opt into additional budgets.
-- Increased the default reviewer sub-agent wall-clock timeout from 3 minutes to 5 minutes for broader repository inspections.
+- Changed all built-in sub-agent wall-clock limits to 8 minutes while retaining optional lower per-profile and per-request budgets.
 - Changed the BeauPi roadmap to mark the Policy Engine complete and advance the active milestone to multi-agent Workflow.
 - Changed Policy to advisory-only behavior: every managed operation reaches its original executor, former block/confirm/replace/pause conditions become non-sensitive Footer-only advisories, TUI/SDK/RPC confirmation handlers are not invoked, controlled sub-agents omit Policy requests, and Tool/Todo rendering ignores Policy status metadata while legacy Session Policy details remain parseable.
 - Changed the BeauPi roadmap to mark multi-agent Workflow complete and advance the active milestone to background task auto-wake.
@@ -50,6 +50,7 @@
 
 ### Fixed
 
+- Fixed sub-agent timeouts to preserve finalized or streamed assistant text, fall back to the last structured activity instead of an empty summary, and limit concurrent child agents to one third of available CPUs with a minimum of one.
 - Fixed sub-agent turn-budget termination to stop before an extra provider request, preventing `turnsUsed` from exceeding `maxTurns`, and surfaced failures as `budget_exhausted · N/N turns · last: Tool` in Agent and Monitor UI.
 - Fixed Monitor auto-attachment to ignore ordinary Tool executions and short bash calls while retaining long-running bash, sub-agent, SSH/tmux, and explicit `monitor_attach` targets.
 - Fixed generic README guidance, package scripts, and repository policy requirements from being projected as current-task Todos while preserving actionable Execution Contract constraints.

@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	type AgentLifecycleEvent,
 	type AgentPoolConfig,
+	calculateAgentConcurrencyLimit,
 	DEFAULT_AGENT_PROFILE,
 	DEFAULT_AGENT_PROFILES,
+	MAX_AGENT_TIMEOUT_MS,
+	validateAgentProfile,
 } from "../src/core/agents/index.ts";
 import { createExtensionRuntime, defineTool } from "../src/core/extensions/index.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
@@ -16,7 +19,7 @@ import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
-import { createHarness } from "./suite/harness.ts";
+import { createHarness, type HarnessOptions } from "./suite/harness.ts";
 
 const cleanups: Array<() => void> = [];
 
@@ -29,9 +32,10 @@ async function createCoordinator(
 		pool?: AgentPoolConfig;
 		resourceLoader?: ResourceLoader;
 		customTools?: CreateAgentSessionOptions["customTools"];
+		faux?: HarnessOptions["faux"];
 	} = {},
 ) {
-	const harness = await createHarness({ resourceLoader: options.resourceLoader });
+	const harness = await createHarness({ resourceLoader: options.resourceLoader, faux: options.faux });
 	const created = await createAgentSession({
 		cwd: harness.tempDir,
 		model: harness.getModel(),
@@ -77,15 +81,47 @@ function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
 }
 
 describe("in-process Agent Pool and delegate_task", () => {
-	it("limits built-in profiles only by wall-clock time", () => {
+	it("limits built-in profiles only by an eight-minute wall clock", () => {
 		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
 			id: "reviewer",
-			timeoutMs: 300_000,
+			timeoutMs: MAX_AGENT_TIMEOUT_MS,
 		});
 		for (const profile of DEFAULT_AGENT_PROFILES) {
+			expect(profile.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
 			expect(profile.maxTokens).toBeUndefined();
 			expect(profile.maxTurns).toBeUndefined();
 		}
+	});
+
+	it("caps pool concurrency at one third of available CPUs with a minimum of one", async () => {
+		expect(calculateAgentConcurrencyLimit(1)).toBe(1);
+		expect(calculateAgentConcurrencyLimit(5)).toBe(1);
+		expect(calculateAgentConcurrencyLimit(6)).toBe(2);
+		expect(calculateAgentConcurrencyLimit(11)).toBe(3);
+		expect(calculateAgentConcurrencyLimit(12)).toBe(4);
+		expect(calculateAgentConcurrencyLimit(Number.NaN)).toBe(1);
+
+		const { pool } = await createCoordinator({ pool: { maxConcurrency: 99 } });
+		expect(pool.concurrencyLimit).toBe(calculateAgentConcurrencyLimit());
+	});
+
+	it("enforces the eight-minute cap for custom profiles and direct requests", async () => {
+		expect(() =>
+			validateAgentProfile({
+				id: "too-long",
+				systemPrompt: "test",
+				timeoutMs: MAX_AGENT_TIMEOUT_MS + 1,
+			}),
+		).toThrow(`timeoutMs cannot exceed ${MAX_AGENT_TIMEOUT_MS}`);
+
+		const { harness, pool } = await createCoordinator();
+		harness.setResponses([fauxAssistantMessage("bounded")]);
+		const result = await pool.delegateTask({
+			task: "Clamp timeout",
+			budget: { timeoutMs: MAX_AGENT_TIMEOUT_MS + 1 },
+		});
+		expect(result.status).toBe("completed");
+		expect(result.budget.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
 	});
 
 	it("runs a selected profile and returns only structured data", async () => {
@@ -111,6 +147,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(result.status).toBe("completed");
 		expect(result.profile).toBe("researcher");
 		expect(result.summary).toBe("child summary");
+		expect(result.budget.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
 		expect(result).not.toHaveProperty("messages");
 		expect(session.messages).toEqual([]);
 		expect(eventTypes(events, result.taskId)).toEqual(
@@ -128,7 +165,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(result.error?.code).toBe("profile_not_found");
 		expect(result.budget.maxTurns).toBeUndefined();
 		expect(result.budget.maxTokens).toBeUndefined();
-		expect(result.budget.timeoutMs).toBe(300_000);
+		expect(result.budget.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
 	});
 
 	it("filters tools, Skills, file modification boundaries, and recursive delegation", async () => {
@@ -372,6 +409,8 @@ describe("in-process Agent Pool and delegate_task", () => {
 		]);
 		const timedOut = await pool.delegateTask({ task: "Timeout", profile: "short" });
 		expect(timedOut.status).toBe("timed_out");
+		expect(timedOut.error?.code).toBe("timed_out");
+		expect(timedOut.summary).toContain("Last activity: Turn 1 started.");
 		expect(eventTypes(events, timedOut.taskId).filter((type) => type === "timed_out")).toHaveLength(1);
 
 		const controller = new AbortController();
@@ -386,6 +425,27 @@ describe("in-process Agent Pool and delegate_task", () => {
 		const cancelled = await cancelledPromise;
 		expect(cancelled.status).toBe("cancelled");
 		expect(eventTypes(events, cancelled.taskId).filter((type) => type === "cancelled")).toHaveLength(1);
+	});
+
+	it("returns streamed assistant text when a child times out mid-response", async () => {
+		const { harness, pool } = await createCoordinator({
+			faux: { tokensPerSecond: 10, tokenSize: { min: 1, max: 1 } },
+			pool: {
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "partial-timeout", timeoutMs: 500 }],
+				defaultProfile: "partial-timeout",
+			},
+		});
+		harness.setResponses([
+			fauxAssistantMessage("Partial analysis should survive the timeout instead of being discarded."),
+		]);
+
+		const result = await pool.delegateTask({ task: "Return partial output" });
+
+		expect(result.status).toBe("timed_out");
+		expect(result.error?.code).toBe("timed_out");
+		expect(result.summary).toContain("Partial");
+		expect(result.summary).not.toContain("No summary returned");
+		expect(result.usage.outputTokens).toBeGreaterThan(0);
 	});
 
 	it("limits pool concurrency and keeps the Coordinator transcript isolated", async () => {

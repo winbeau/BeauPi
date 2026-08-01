@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, contentText, type Model } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { AgentSession, AgentSessionEvent } from "../agent-session.ts";
@@ -18,7 +18,9 @@ import {
 	type AgentCancellationStrategy,
 	type AgentPoolConfig,
 	type AgentProfile,
+	calculateAgentConcurrencyLimit,
 	DEFAULT_AGENT_PROFILE,
+	MAX_AGENT_TIMEOUT_MS,
 	resolveAgentProfiles,
 } from "./agent-profile.ts";
 import { createControlledResourceLoader } from "./controlled-resource-loader.ts";
@@ -164,7 +166,7 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 		Type.Object({
 			maxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
 			maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
-			timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+			timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_TIMEOUT_MS })),
 		}),
 	),
 	cancelStrategy: Type.Optional(Type.Union([Type.Literal("abort"), Type.Literal("graceful")])),
@@ -348,6 +350,27 @@ function createResultBase(
 	};
 }
 
+function bestAvailableSummary(
+	session: AgentSession | undefined,
+	partialAssistantText: string,
+	lastActivity: AgentTaskActivity | undefined,
+	status: AgentTaskStatus,
+	timeoutMs: number | undefined,
+): string {
+	const finalized = session?.getLastAssistantText()?.trim();
+	if (finalized) return finalized;
+	const partial = partialAssistantText.trim();
+	if (partial) return partial;
+	if (lastActivity) {
+		const target = lastActivity.targetPath ? ` · ${lastActivity.targetPath}` : "";
+		return `No assistant text was finalized. Last activity: ${lastActivity.message}${target}.`;
+	}
+	if (status === "timed_out") {
+		return `Agent timed out after ${timeoutMs ?? MAX_AGENT_TIMEOUT_MS}ms before producing assistant text.`;
+	}
+	return "No summary returned by the child agent.";
+}
+
 function mergeBudget(profile: AgentProfile, input: DelegateTaskInput): AgentProfile {
 	const requestBudget = input.budget;
 	const minimum = (profileValue: number | undefined, requestValue: number | undefined): number | undefined => {
@@ -359,7 +382,7 @@ function mergeBudget(profile: AgentProfile, input: DelegateTaskInput): AgentProf
 		...profile,
 		maxTokens: minimum(profile.maxTokens, requestBudget?.maxTokens),
 		maxTurns: minimum(profile.maxTurns, requestBudget?.maxTurns),
-		timeoutMs: minimum(profile.timeoutMs, requestBudget?.timeoutMs),
+		timeoutMs: Math.min(profile.timeoutMs ?? MAX_AGENT_TIMEOUT_MS, requestBudget?.timeoutMs ?? MAX_AGENT_TIMEOUT_MS),
 		cancelStrategy: input.cancelStrategy ?? profile.cancelStrategy,
 		allowFileModifications: input.allowFileModifications === false ? false : profile.allowFileModifications,
 	};
@@ -403,7 +426,8 @@ export class AgentPool {
 	>;
 
 	constructor(config: AgentPoolConfig, dependencies: AgentPoolDependencies) {
-		this.maxConcurrency = config.maxConcurrency ?? 2;
+		const cpuConcurrencyLimit = calculateAgentConcurrencyLimit();
+		this.maxConcurrency = Math.min(config.maxConcurrency ?? cpuConcurrencyLimit, cpuConcurrencyLimit);
 		this.profiles = resolveAgentProfiles(config);
 		this.defaultProfileId = config.defaultProfile ?? config.profiles?.[0]?.id ?? DEFAULT_AGENT_PROFILE.id;
 		this.dependencies = dependencies;
@@ -416,6 +440,7 @@ export class AgentPool {
 			promptGuidelines: [
 				"Never use delegate_task from a controlled sub-agent.",
 				"When delegate_task returns clarificationRequest, resolve it from existing context or ask the user from the Coordinator; never fabricate a child answer.",
+				"When delegate_task times out, use its partial summary and lastActivity instead of treating the result as empty.",
 			],
 			parameters: DELEGATE_TASK_PARAMETERS,
 			executionMode: "sequential",
@@ -454,6 +479,10 @@ export class AgentPool {
 
 	get activeCount(): number {
 		return this.activeCountValue;
+	}
+
+	get concurrencyLimit(): number {
+		return this.maxConcurrency;
 	}
 
 	get maxObservedConcurrency(): number {
@@ -626,6 +655,7 @@ export class AgentPool {
 		let activeTools = 0;
 		let turns = 0;
 		let outputTokens = 0;
+		let partialAssistantText = "";
 		let lastActivity: AgentTaskActivity | undefined;
 		const activeToolActivities = new Map<string, { toolName: string; targetPath?: string }>();
 		const diagnostics: string[] = [];
@@ -797,8 +827,15 @@ export class AgentPool {
 					});
 					return;
 				}
+				if (event.type === "message_update" && event.message.role === "assistant") {
+					const text = contentText(event.message.content).trim();
+					if (text) partialAssistantText = text;
+					return;
+				}
 				if (event.type === "message_end" && event.message.role === "assistant") {
 					outputTokens += event.message.usage.output;
+					const text = contentText(event.message.content).trim();
+					if (text) partialAssistantText = text;
 					return;
 				}
 				if (event.type === "tool_execution_start") {
@@ -864,7 +901,13 @@ export class AgentPool {
 							? errorWithCode("cancelled", "Agent task was cancelled")
 							: undefined;
 			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, error);
-			result.summary = child.getLastAssistantText() ?? "No summary returned by the child agent.";
+			result.summary = bestAvailableSummary(
+				child,
+				partialAssistantText,
+				lastActivity,
+				status,
+				effectiveProfile.timeoutMs,
+			);
 			if (lastActivity) result.lastActivity = { ...lastActivity };
 			const clarificationRequest = parseClarificationRequest(result.summary);
 			if (clarificationRequest) result.clarificationRequest = clarificationRequest;
@@ -896,14 +939,19 @@ export class AgentPool {
 				: signal?.aborted || cancellationRequested
 					? "cancelled"
 					: "failed";
-			const result = createResultBase(
-				taskId,
-				effectiveProfile,
+			const resultError =
+				status === "timed_out"
+					? errorWithCode("timed_out", `Agent timed out after ${effectiveProfile.timeoutMs}ms`)
+					: status === "cancelled"
+						? errorWithCode("cancelled", "Agent task was cancelled")
+						: errorWithCode("agent_error", asErrorMessage(error));
+			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, resultError);
+			result.summary = bestAvailableSummary(
+				child,
+				partialAssistantText,
+				lastActivity,
 				status,
-				startedAt,
-				usage,
-				turns,
-				errorWithCode(status === "cancelled" ? "cancelled" : "agent_error", asErrorMessage(error)),
+				effectiveProfile.timeoutMs,
 			);
 			result.diagnostics = [...diagnostics];
 			if (lastActivity) result.lastActivity = { ...lastActivity };

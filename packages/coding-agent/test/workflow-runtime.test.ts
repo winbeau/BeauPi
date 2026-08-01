@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
+import { calculateAgentConcurrencyLimit } from "../src/core/agents/index.ts";
 import { execCommand } from "../src/core/exec.ts";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -100,7 +101,7 @@ describe("WorkflowRuntime", () => {
 			),
 		});
 		expect(parallel.status).toBe("completed");
-		expect(maxObserved).toBe(2);
+		expect(maxObserved).toBe(Math.min(2, calculateAgentConcurrencyLimit()));
 
 		active = 0;
 		maxObserved = 0;
@@ -350,6 +351,6 @@ describe("WorkflowRuntime", () => {
 		harness.setResponses([reviewer("correct"), reviewer("safe")]);
 		const parallel = await session.workflowRuntime!.run({ workflow: "parallel-review", task: "Review changes" });
 		expect(parallel.status).toBe("completed");
-		expect(maxObserved).toBe(2);
+		expect(maxObserved).toBe(Math.min(2, calculateAgentConcurrencyLimit()));
 	});
 });

@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import type { SkillAllowlist } from "../skill-registry.ts";
 
 export type AgentCancellationStrategy = "abort" | "graceful";
@@ -31,6 +32,13 @@ export interface AgentPoolConfig {
 	defaultProfile?: string;
 }
 
+export const MAX_AGENT_TIMEOUT_MS = 8 * 60_000;
+
+export function calculateAgentConcurrencyLimit(cpuCount: number = availableParallelism()): number {
+	const normalizedCpuCount = Number.isFinite(cpuCount) ? Math.max(1, Math.floor(cpuCount)) : 1;
+	return Math.max(1, Math.floor(normalizedCpuCount / 3));
+}
+
 export const DEFAULT_AGENT_PROFILE: AgentProfile = Object.freeze({
 	id: "reviewer",
 	systemPrompt:
@@ -41,7 +49,7 @@ export const DEFAULT_AGENT_PROFILE: AgentProfile = Object.freeze({
 		"Do not delegate to another agent.",
 	toolAllowlist: ["read", "grep", "find", "ls", "docs_search", "docs_read", "docs_resolve_task"],
 	skillAllowlist: { allow: [] },
-	timeoutMs: 300_000,
+	timeoutMs: MAX_AGENT_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });
@@ -54,7 +62,7 @@ export const DEFAULT_RESEARCHER_PROFILE: AgentProfile = Object.freeze({
 		"Do not delegate to another agent.",
 	toolAllowlist: ["read", "docs_search", "docs_read", "docs_resolve_task", "web_search", "web_fetch"],
 	skillAllowlist: { allow: [] },
-	timeoutMs: 120_000,
+	timeoutMs: MAX_AGENT_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });
@@ -77,7 +85,7 @@ export const DEFAULT_IMPLEMENTER_PROFILE: AgentProfile = Object.freeze({
 		"docs_resolve_task",
 	],
 	skillAllowlist: { allow: [] },
-	timeoutMs: 300_000,
+	timeoutMs: MAX_AGENT_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: true,
 });
@@ -102,6 +110,9 @@ export function validateAgentProfile(profile: AgentProfile): void {
 	assertPositiveInteger(profile.maxTokens, `Agent profile ${JSON.stringify(profile.id)} maxTokens`);
 	assertPositiveInteger(profile.maxTurns, `Agent profile ${JSON.stringify(profile.id)} maxTurns`);
 	assertPositiveInteger(profile.timeoutMs, `Agent profile ${JSON.stringify(profile.id)} timeoutMs`);
+	if (profile.timeoutMs !== undefined && profile.timeoutMs > MAX_AGENT_TIMEOUT_MS) {
+		throw new Error(`Agent profile ${JSON.stringify(profile.id)} timeoutMs cannot exceed ${MAX_AGENT_TIMEOUT_MS}`);
+	}
 	if (
 		profile.cancelStrategy !== undefined &&
 		profile.cancelStrategy !== "abort" &&

@@ -112,7 +112,7 @@ interface AgentTaskResult {
 }
 ```
 
-生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态、预算、最后活动和错误；progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal event 可直接由 M6 Monitor Runtime 消费。默认 reviewer 只设置 300 秒 wall-clock timeout，不设置 output token 或 turn 上限；子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
+生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态、预算、最后活动和错误；progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal event 可直接由 M6 Monitor Runtime 消费。所有内置 Profile 的 wall-clock 上限为 480 秒，自定义 Profile 或单次 request 只能缩短、不能延长；默认不设置 output token 或 turn 上限。Agent Pool 的全局并发上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低。超时时优先返回最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不再产生空 summary。子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
 
 ## Skill Registry
 
