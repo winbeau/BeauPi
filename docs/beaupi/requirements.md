@@ -26,7 +26,7 @@
 
 `terminal_bash` 是普通命令的首选接口：命令在该远端 shell 当前目录和导出环境中执行，一次调用等待完成并返回结构化退出状态。已知工作目录时 Agent 直接使用简短的 `cd <workdir> && <command>`，不先重复 `pwd`，也不追加无意义的 echo、sleep、status 或 capture。`terminal_send`/`terminal_capture` 只用于真正的交互式输入、终端诊断和增量观察。
 
-每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。失败或输出超过 100 行时，由 `settings.json` 的 `terminalOutputReview.model` 指定的小模型筛选关键错误、警告和下一步；短成功命令使用确定性摘要。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
+每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。失败或输出超过 100 行时，由 `settings.json` 的共享 `review.model` 指定的小模型筛选关键错误、警告和下一步；短成功命令使用确定性摘要。其他轻量 Review Runtime 复用同一模型配置。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
 
 Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；AutoDL 等平台直接提供的 `root` 登录账户属于合法目标身份。远程运行时只对能够确定为直接执行的 `sudo`、`su`、`doas`、`pkexec` 记录 Policy advisory；不因不透明脚本片段或文本命中推断提权，也不由 Policy 阻断执行。
 

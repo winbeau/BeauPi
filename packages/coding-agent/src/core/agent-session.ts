@@ -555,7 +555,7 @@ export class AgentSession {
 		this.remoteRuntime.setOutputReviewerIfUnset(
 			new LunaTerminalOutputReviewer({
 				modelRuntime: this._modelRuntime,
-				getModelSetting: () => this.settingsManager.getTerminalOutputReviewModel(),
+				getModelSetting: () => this.settingsManager.getReviewModel(),
 				getPreferredProvider: () => this.agent.state.model?.provider,
 			}),
 		);

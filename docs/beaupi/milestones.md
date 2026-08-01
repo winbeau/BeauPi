@@ -456,7 +456,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 - Terminal transport 已从“SSH 到远端 tmux”改为“本地 tmux pane 内运行 SSH”，并通过真实 `h100-server` E2E 验证 cwd、命令执行、增量 capture、连接重建、关闭和 5,000 行完整日志。
 - `terminal_bash` 使用本地 transcript 和 marker/退出码协议，完整脱敏输出按 terminal 追加到 `.beaupi/terminal-logs/.../工作日志.log`；临时 transcript 在关闭/dispose 时清理。
-- `terminalOutputReview.model` 默认 `gpt-5.6-luna`，裸 model id 优先跟随当前 Agent provider；失败或输出超过 100 行才审阅，未设置额外 `maxTokens` 硬限制。
+- 共享 `review.model` 默认 `gpt-5.6-luna`，裸 model id 优先跟随当前 Agent provider；Terminal 失败或输出超过 100 行才审阅，未设置额外 `maxTokens` 硬限制。
 - Tool Result 最后一行由代码强制为 `@绝对日志路径`；模型失败使用确定性 fallback，review usage 进入 Tool Result/Session 使用统计。
 - AgentSession 根据 Remote details 的 `ok` 设置 `isError`，非零退出、超时和断线不再因通用异常路径丢失 terminal/monitor/log/review details。
 
@@ -731,7 +731,7 @@ Agent 进程始终以普通用户运行；每个 sudo request 都经过受控权
 - 首次 Edit/Write/修改型 Bash 自动激活对应任务；重大范围变化由主 Agent 刷新计划
 - Dynamic Tasks 接入现有 Task Ledger、Tasks Widget、Footer 和宽度安全 renderer；存在动态计划时隐藏重复的通用 discover/execute/verify Todo
 - 确定性 Tool、文件修改、验证、Workflow 和 Background facts 优先更新 activity/evidence
-- 可配置快速模型 Task Reviewer，默认 `gpt-5.6-luna`；只允许修改状态、activity、evidence 和 blockedBy，不能增删、重命名或重排任务
+- Task Reviewer 与 Bash Terminal 共同复用 `review.model`、ModelRuntime 解析和 provider fallback，不增加独立模型设置；只允许修改状态、activity、evidence 和 blockedBy，不能增删、重命名或重排任务
 - Reviewer 只在 facts hash 变化、主 Agent settled、修改批次结束、验证结束或关键失败时受预算调用；普通完成不向主 Agent 注入对话消息
 - 每次 Provider 请求前向主 Agent 投影紧凑任务快照；只有 blocked、revision 冲突或需要重新规划时进入 follow-up
 

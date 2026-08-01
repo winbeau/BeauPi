@@ -42,7 +42,7 @@ export interface TerminalSettings {
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
-export interface TerminalOutputReviewSettings {
+export interface ReviewSettings {
 	/** Bare model id follows the active Agent provider first; provider/model fixes the provider. */
 	model?: string; // default: gpt-5.6-luna
 }
@@ -113,7 +113,7 @@ export interface Settings {
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	executionTargets?: ExecutionTargetConfig[];
-	terminalOutputReview?: TerminalOutputReviewSettings;
+	review?: ReviewSettings;
 	search?: SearchSettings;
 	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
@@ -982,8 +982,8 @@ export class SettingsManager {
 		return structuredClone(this.settings.executionTargets ?? []);
 	}
 
-	getTerminalOutputReviewModel(): string {
-		const configured = this.settings.terminalOutputReview?.model?.trim();
+	getReviewModel(): string {
+		const configured = this.settings.review?.model?.trim();
 		return configured || "gpt-5.6-luna";
 	}
 

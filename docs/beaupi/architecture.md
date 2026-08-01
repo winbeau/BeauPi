@@ -273,7 +273,7 @@ terminal_create
 
 本地 tmux 负责 session/pane 生命周期、`send-keys`、Ctrl-C、capture 和临时 pane transcript；OpenSSH 继续负责受信任 alias、Agent、known_hosts、ControlMaster 和登录身份。随机 begin/end marker 只属于 transport 协议，不要求 Agent 编写。pane transcript 用于无固定历史行上限地收集当前命令输出，命令完成后只把脱敏内容追加到每 terminal 的 `工作日志.log`；原始 transcript 在 terminal 关闭或 Runtime dispose 时删除。
 
-`TerminalOutputReviewer` 与 transport 解耦。默认实现通过现有 `ModelRuntime` 解析 `terminalOutputReview.model`，在失败或输出超过 100 行时进行一次无 Tool 审阅；不设置独立的模型输出 token 硬限制。Tool Result 只保存审阅文本、结构化状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
+`TerminalOutputReviewer` 与 transport 解耦。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`，在失败或输出超过 100 行时进行一次无 Tool 审阅；不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 只保存审阅文本、结构化状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
 
 ## Monitor 与后台任务
 

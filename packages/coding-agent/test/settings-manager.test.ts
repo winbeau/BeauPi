@@ -335,13 +335,13 @@ describe("SettingsManager", () => {
 		});
 	});
 
-	describe("terminal output review", () => {
+	describe("shared review model", () => {
 		it("defaults to Luna and accepts a provider-qualified model", () => {
-			expect(SettingsManager.inMemory().getTerminalOutputReviewModel()).toBe("gpt-5.6-luna");
+			expect(SettingsManager.inMemory().getReviewModel()).toBe("gpt-5.6-luna");
 			expect(
 				SettingsManager.inMemory({
-					terminalOutputReview: { model: "opencode/gpt-5.6-luna" },
-				}).getTerminalOutputReviewModel(),
+					review: { model: "opencode/gpt-5.6-luna" },
+				}).getReviewModel(),
 			).toBe("opencode/gpt-5.6-luna");
 		});
 	});

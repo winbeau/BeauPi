@@ -13,7 +13,7 @@ M0–M13 已完成。近期开发转入 M14 动态 Task 计划与进度审阅：
 1. 主 Agent 通过 Coordinator-only `tasks_update` 在可执行用户任务开始时创建结构化计划。
 2. Task Runtime 使用 revision/CAS 和 Session custom entry 管理唯一状态，并投影到现有 Task Ledger、Tasks Widget 和 Footer。
 3. 首次 mutation 自动激活任务，重大范围变化由主 Agent 刷新计划；不从 assistant 普通文本解析 JSON。
-4. 状态链稳定后接入默认 `gpt-5.6-luna` 的受限 Reviewer，只更新状态和证据，不修改计划结构或直接与主 Agent 对话。
+4. 状态链稳定后接入受限 Reviewer，与 Bash Terminal 共同复用通用 `review.model` 和模型 fallback，只更新状态和证据，不修改计划结构或直接与主 Agent 对话。
 5. 原 M14 发行准备改为 M Final，等待 M14 及后续新增功能稳定。
 
 M10 已提供确定性分类、等价检查签名、失败/fallback 预算诊断、敏感路径与普通用户 advisory、Search-to-Shell advisory，以及 Session/Compact/branch 一致性。Policy authorization 始终返回 `execute: true`，不发起 TUI/SDK/RPC confirmation；当前执行或最近 Policy fact 的提示只显示在 Footer。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
@@ -314,7 +314,7 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 - 首次 Edit/Write/修改型 Bash 自动激活任务，计划结构变化由主 Agent 更新
 - Dynamic Tasks 复用现有 Task Ledger/TUI，并在存在计划时隐藏重复通用 Todo
 - 确定性 Tool、修改、验证、Workflow 和 Background facts 优先提供 activity/evidence
-- 快速模型 Reviewer 只提交状态 patch，无新增事实时零调用，失败或 revision 冲突时不更新
+- 快速模型 Reviewer 与 Bash Terminal 共同复用通用 `review.model`、ModelRuntime 解析和 fallback，只提交状态 patch；无新增事实时零调用，失败或 revision 冲突时不更新
 - 主 Agent 通过下一次 Provider 请求的紧凑任务快照感知状态；只有 blocker 或冲突进入 follow-up
 
 验收：任务计划、动工、完成、失败、阻塞和验证状态可持续更新；主 Agent 是计划结构唯一作者，Runtime 是唯一事实源，快速模型不会污染主对话或回滚状态。
