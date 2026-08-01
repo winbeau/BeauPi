@@ -2,7 +2,7 @@
 
 ## 目标
 
-实现“已填充命令 + 临时终端”一体化权限组件：第一帧直接用受控 PTY替换提示词编辑器并显示完整只读命令或批次；用户 Enter 后才执行，Escape取消；认证后继续attached并转发输入，直到command或交互式sudo shell退出，最终由Tool renderer显示结果。
+实现“已填充命令 + 临时终端”一体化权限组件：第一帧直接用受控 PTY替换提示词编辑器并显示完整只读命令或批次；用户 Enter 后才执行，Escape取消；认证完成后自动detach并恢复编辑器，command继续由Runtime等待并写入日志，最终由Tool renderer显示结果。
 
 ## 现有接入点
 
@@ -18,11 +18,11 @@ staging -> waiting_for_user
   ├─ Enter -> starting -> authenticating/running
   └─ Escape -> cancelled（command未执行）
 running
-  ├─ direct terminal bytes -> pane
+  ├─ authentication bytes -> pane
   ├─ password prompt remains -> keep terminal attached
-  ├─ authentication completes -> remain attached for command/root shell
-  ├─ command or `exit` -> complete
-  └─ Abort/Escape -> cancelling -> terminate privilege flow
+  ├─ authentication completes -> detach view -> Runtime continues wait/log
+  ├─ cached credential -> stable running -> detach view
+  └─ Abort/Escape before detach -> cancelling
 complete
   └─ Tool result renderer
 ```
@@ -37,13 +37,14 @@ complete
 
 ### Running 状态
 
-- 标题切换为 `Authenticating` 或 `Running`，交互式sudo shell继续显示实时pane内容和光标。
+- 标题切换为 `Authenticating` 或 `Running`；styled tmux capture使用`capture-pane -e`保留ANSI颜色，marker和认证判断仍使用plain capture。
 - 只渲染 pane capture，绝不把本地输入回显到 component state。
-- 输入字节直接传给 `control.sendSensitive()`。
-- sudo controlling TTY负责密码期间的 no-echo；component不保存 password buffer，wrapper不关闭整个root shell的回显。
+- 认证输入字节直接传给 `control.sendSensitive()`。
+- sudo controlling TTY负责密码期间的 no-echo；component不保存 password buffer。
 - 显示 elapsed、target、cancel hint；Terminal output可滚动或只显示尾部窗口。
-- tmux当前光标离开认证提示后仍继续UI timer/poll和输入转发，直到command完成或用户从交互式sudo shell执行`exit`。
-- 如果没有密码prompt，pane直接进入running但不detach。Escape在running状态终止当前提权流程，不能留下隐藏root shell。
+- tmux当前光标离开认证提示并稳定进入running后，停止UI timer/poll并返回completed；Runtime继续`wait()`、发出普通Tool增量输出、写work log并生成最终Tool Result。
+- 如果没有密码prompt，等待一个有界稳定running窗口后detach，避免把sudo启动与延迟密码prompt之间的短暂状态误判为认证完成。
+- `sudo bash`、`sudo sh`、`sudo -i`和`sudo -s`在Policy/PrivilegeRuntime边界阻止，避免detach后留下隐藏root shell。
 
 ## Handler
 
@@ -95,7 +96,7 @@ handler必须：
 - component首帧自动调用一次`control.start()`完成stage；Enter前`control.execute()`零调用，Enter后恰好一次。
 - Escape staged command、cancel during prompt、AbortSignal、dispose。
 - input只进入fake `sendSensitive`，render/cache/response无input。
-- capture更新、terminal/root-shell exit、send failure、terminal recovery warning。
+- capture更新、认证后detach、缓存credential稳定detach、快速完成marker、send failure和terminal lost。
 - editor文本和焦点在overlay关闭后恢复。
 - configurable keybindings，不能依赖hardcoded Enter/Escape。
 - dark/light 40/80/120/160、CJK/emoji/长command/path。

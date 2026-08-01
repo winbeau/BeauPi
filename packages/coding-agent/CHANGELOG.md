@@ -27,7 +27,7 @@
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 - Added BeauPi M11 multi-agent Workflows with a strict versioned YAML/JSON DAG schema, bounded dependency conditions, AgentPool scheduling, shared single-writer coordination, isolated Git Worktrees, five built-in Workflows, `workflow_run/status/cancel`, Monitor and Task Ledger lifecycle integration, and a responsive DAG renderer.
 - Added BeauPi M12 session-scoped background tasks with six `background_*` Tools, runner-owned local process and existing SSH/tmux Monitor attachment, deterministic triggers, a persistent deduplicated Wake Queue, idle/follow-up AgentSession auto-wake, bounded AgentPool progress reviews, branch-aware recovery, Task Ledger integration, and responsive TUI rendering.
-- Added BeauPi M13 per-request controlled sudo execution with `privileged_exec`, automatic local `bash` and `terminal_bash` routing through a session-scoped `PrivilegeRuntime`, exact single-line or multiline read-only staging with user-controlled Enter execution or Escape cancellation, attached interactive `sudo bash`/`sudo sh`/`sudo -i`/`sudo -s`, secure local-tmux PTY input, one-shot and `terminal_send` bypass blocking, branch-aware Session/Monitor/Task Ledger integration, responsive TUI rendering, and permission-restricted JSONL audit logs.
+- Added BeauPi M13 per-request controlled sudo execution with `privileged_exec`, automatic local `bash` and `terminal_bash` routing through a session-scoped `PrivilegeRuntime`, exact single-line or multiline read-only staging with user-controlled Enter execution or Escape cancellation, post-authentication detach with continued work-log capture, interactive-root-shell blocking, secure local-tmux PTY input, one-shot and `terminal_send` bypass blocking, branch-aware Session/Monitor/Task Ledger integration, responsive TUI rendering, and permission-restricted JSONL audit logs.
 
 ### Changed
 
@@ -56,10 +56,11 @@
 
 ### Fixed
 
-- Fixed Sudo Bash system guidance to prefer the smallest direct sudo command, preserve intentional multiline batches, and use Bash wrapping or interactive sudo shells only when the user needs a shared root shell context.
-- Fixed controlled sudo interaction to stage the exact command or multiline batch unexecuted in an adaptive two-divider tmux pane from the first frame, execute only when the user presses Enter, cancel with Escape, and remain attached after authentication until the command or interactive root shell exits.
+- Fixed Sudo Bash system guidance to prefer the smallest direct sudo command, preserve intentional multiline batches, and reject interactive root shells that would remain hidden after authentication detach.
+- Fixed controlled sudo interaction to stage the exact command or multiline batch unexecuted in an adaptive two-divider tmux pane from the first frame, execute only when the user presses Enter, cancel with Escape before execution, preserve ANSI colors, and detach after authentication while Runtime, partial Tool output, and work-log processing continue.
+- Fixed completed local privilege panes being reported as lost by parsing the command end marker before treating a normally dead tmux pane as a terminal failure.
 - Fixed local privilege terminals to use an isolated tmux server that inherits the current environment, target cwd, configured user shell, and normal startup files without `env -i`, `--noprofile`, or `--norc`, including slow zsh startup.
-- Fixed privilege cancellation to terminate active local or remote interactive root shells instead of leaving hidden elevated sessions.
+- Fixed privilege cancellation and recovery so failed commands cannot leave an occupied elevated terminal session.
 - Fixed sub-agent timeouts to preserve finalized or streamed assistant text, fall back to the last structured activity instead of an empty summary, and limit concurrent child agents to one third of available CPUs with a minimum of one.
 - Fixed sub-agent turn-budget termination to stop before an extra provider request, preventing `turnsUsed` from exceeding `maxTurns`, and surfaced failures as `budget_exhausted · N/N turns · last: Tool` in Agent and Monitor UI.
 - Fixed Monitor auto-attachment to ignore ordinary Tool executions and short bash calls while retaining long-running bash, sub-agent, SSH/tmux, and explicit `monitor_attach` targets.

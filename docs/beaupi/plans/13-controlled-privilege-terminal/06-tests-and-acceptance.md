@@ -16,7 +16,7 @@
 - command尚未start、password prompt、running、exit marker。
 - secure input bytes、send failure、capture frames、resize。
 - sudo password prompt present/absent，用于模拟系统credential cache但不形成BeauPi授权。
-- exit 0/nonzero、timeout、cancel、pane lost、interactive shell exit/recovery失败。
+- exit 0/nonzero、timeout、cancel、正常pane dead完成marker、pane lost和terminal recovery失败。
 
 fake必须将input放在测试专用私有字段，生产result/details/log永不返回input。
 
@@ -39,7 +39,7 @@ fake必须将input放在测试专用私有字段，生产result/details/log永�
 - strict schema/version/unknown fields。
 - nested direct sudo识别。
 - local Bash/terminal_bash的原执行器不直接执行sudo，而是自动路由；one-shot remote保持阻止。
-- `privileged_exec`要求完整sudo command或批次，允许交互式sudo shell并拒绝其他unsupported identity switch。
+- `privileged_exec`要求完整sudo command或批次，拒绝交互式root shell和其他unsupported identity switch。
 
 ### 2. Routing/Per-request
 
@@ -61,7 +61,7 @@ fake必须将input放在测试专用私有字段，生产result/details/log永�
 
 ### 4. Local/Remote executors
 
-- local success/nonzero/timeout/cancel/truncate、多行staging和交互式shell exit。
+- local success/nonzero/timeout/cancel/truncate、多行staging、认证后detach和快速完成marker。
 - remote existing terminal cwd/export/log/Monitor。
 - terminal busy/disconnect/lost。
 - root target redundant。
@@ -69,7 +69,7 @@ fake必须将input放在测试专用私有字段，生产result/details/log永�
 
 ### 5. TUI
 
-- waiting_for_user→authenticating/running→complete state，认证后保持attached。
+- waiting_for_user→authenticating/running→detach state，缓存credential稳定running路径和complete竞态。
 - configurable confirm/cancel keys。
 - editor preservation、Abort、dispose。
 - user input不进入render/cache/response。

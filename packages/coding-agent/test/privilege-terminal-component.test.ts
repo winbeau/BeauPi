@@ -167,7 +167,7 @@ describe("PrivilegeTerminalComponent", () => {
 		expect(done).toHaveBeenCalledWith({ status: "cancelled" });
 	});
 
-	it("stays attached after authentication until the interactive command exits", async () => {
+	it("detaches after authentication while the command continues", async () => {
 		const fixture = controls();
 		let executedFrames = 0;
 		fixture.capture.mockImplementation(async () => {
@@ -176,7 +176,7 @@ describe("PrivilegeTerminalComponent", () => {
 			}
 			return executedFrames++ === 0
 				? { content: "Password: ", state: "authenticating" }
-				: { content: "Password: ", state: "running" };
+				: { content: "apt output", state: "running" };
 		});
 		const done = vi.fn<(response: PrivilegeInteractionResponse) => void>();
 		const component = new PrivilegeTerminalComponent({
@@ -194,15 +194,40 @@ describe("PrivilegeTerminalComponent", () => {
 		await new Promise((resolve) => setTimeout(resolve, 250));
 
 		expect(fixture.control.sendSensitive).toHaveBeenCalledWith(Buffer.from("secret\r"));
-		expect(done).not.toHaveBeenCalled();
-		component.handleInput("whoami\r");
-		await flush();
-		expect(fixture.control.sendSensitive).toHaveBeenCalledWith(Buffer.from("whoami\r"));
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("Running as root");
-		fixture.resolveWait({ output: "done\n", exitCode: 0, startedAt: 1, completedAt: 2 });
-		await flush();
+		expect(fixture.control.wait).toHaveBeenCalledTimes(1);
 		expect(done).toHaveBeenCalledWith({ status: "completed" });
 		expect(done).toHaveBeenCalledTimes(1);
+		fixture.resolveWait({ output: "done\n", exitCode: 0, startedAt: 1, completedAt: 2 });
+		await flush();
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+
+	it("detaches after a stable no-prompt start when sudo credentials are cached", async () => {
+		vi.useFakeTimers();
+		const fixture = controls();
+		fixture.capture.mockImplementation(async () =>
+			fixture.execute.mock.calls.length === 0
+				? { content: `$ ${request().command}`, state: "waiting_for_user" }
+				: { content: "cached credential output", state: "running" },
+		);
+		const done = vi.fn<(response: PrivilegeInteractionResponse) => void>();
+		const component = new PrivilegeTerminalComponent({
+			tui: fakeTui(),
+			keybindings: new KeybindingsManager(),
+			request: request(),
+			control: fixture.control,
+			onDone: done,
+		});
+
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			component.handleInput("\r");
+			await vi.advanceTimersByTimeAsync(3_100);
+			expect(done).toHaveBeenCalledWith({ status: "completed" });
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+		}
 	});
 
 	it("cancels on dispose after staging", async () => {

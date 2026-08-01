@@ -1011,6 +1011,7 @@ export function inspectShellPrivilege(command: string): ShellPrivilegeInspection
 	const collected = collectShellPrivilege(command);
 	const unsupported = collected.executables.filter((name) => name !== "sudo");
 	if (collected.sudoAskpass) unsupported.push("sudo-askpass");
+	if (collected.interactiveRootShell) unsupported.push("interactive-root-shell");
 	const sudo = collected.executables.includes("sudo");
 	return {
 		kind: collected.opaque ? "opaque" : unsupported.length > 0 ? "unsupported" : sudo ? "sudo" : "none",

@@ -175,40 +175,37 @@ describe("local privilege tmux fixture", () => {
 	);
 
 	tmuxIt(
-		"keeps a multiline interactive shell attached until the user exits",
+		"reports a normally exited pane as complete after parsing the end marker",
 		async () => {
-			const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-interactive-"));
+			const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-complete-"));
 			cleanup.push(cwd);
-			const command = "printf 'batch-one\\n'\nbash --noprofile --norc";
 			const request: PrivilegeRequestV1 = {
 				version: 1,
-				requestId: "local-interactive-shell",
-				auditId: "audit-local-interactive-shell",
-				toolCallId: "tool-local-interactive-shell",
+				requestId: "local-fast-complete",
+				auditId: "audit-local-fast-complete",
+				toolCallId: "tool-local-fast-complete",
 				sourceTool: "privileged_exec",
 				route: "explicit_tool",
-				command,
+				command: "printf 'fast-complete\\n'",
 				target: { execution: "local" },
 				cwd,
 				timeoutMs: 5_000,
 				createdAt: new Date(0).toISOString(),
-				logPath: join(cwd, "logs", "interactive.log"),
+				logPath: join(cwd, "logs", "complete.log"),
 			};
 			const adapter = new TmuxPrivilegeTerminalAdapter();
 			const session = await adapter.create(request);
 			try {
 				await session.start();
-				expect(await session.capture()).toMatchObject({
-					state: "waiting_for_user",
-					content: expect.stringContaining(command),
-				});
 				await session.execute();
-				expect(await session.capture()).toMatchObject({ state: "running" });
-				await session.sendSensitive(Buffer.from(`printf 'interactive-shell=%s\\n' "$SHELL"\rexit\r`, "utf8"));
-				const result = await session.wait();
-				expect(result).toMatchObject({ exitCode: 0 });
-				expect(result.output).toContain("batch-one");
-				expect(result.output).toMatch(/interactive-shell=\S+/);
+				await new Promise((resolve) => setTimeout(resolve, 250));
+				expect(await session.capture()).toMatchObject({
+					state: "complete",
+					content: expect.stringContaining("fast-complete"),
+				});
+				const updates: string[] = [];
+				await expect(session.wait((output) => updates.push(output))).resolves.toMatchObject({ exitCode: 0 });
+				expect(updates.some((output) => output.includes("fast-complete"))).toBe(true);
 			} finally {
 				await session.dispose();
 			}

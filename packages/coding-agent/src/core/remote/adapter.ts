@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { stripAnsi } from "../../utils/ansi.ts";
 import { spawnProcess, waitForChildProcess } from "../../utils/child-process.ts";
 import type { MonitorAdapterSnapshot, MonitorRecord, MonitorStopResult } from "../monitor/types.ts";
 import { LocalTmuxTransport } from "../terminal/local-tmux-transport.ts";
@@ -184,15 +185,17 @@ function parseTerminalCommandCapture(
 		.replaceAll("\r", "")
 		.split("\n")
 		.map((line) => line.trimEnd());
-	const beginIndex = lines.lastIndexOf(beginMarker);
+	const plainLines = lines.map((line) => stripAnsi(line).trimEnd());
+	const beginIndex = plainLines.lastIndexOf(beginMarker);
 	if (beginIndex === -1) return { found: false, output: "" };
 	const outputLines = lines.slice(beginIndex + 1);
-	const endIndex = outputLines.findIndex((line) => line.startsWith(`${endMarker}:`));
+	const plainOutputLines = plainLines.slice(beginIndex + 1);
+	const endIndex = plainOutputLines.findIndex((line) => line.startsWith(`${endMarker}:`));
 	if (endIndex === -1) {
 		while (outputLines.at(-1) === "") outputLines.pop();
 		return { found: true, output: outputLines.join("\n") };
 	}
-	const status = outputLines[endIndex]?.slice(endMarker.length + 1) ?? "";
+	const status = plainOutputLines[endIndex]?.slice(endMarker.length + 1) ?? "";
 	return {
 		found: true,
 		output: outputLines.slice(0, endIndex).join("\n"),
@@ -467,6 +470,10 @@ class OpenSshConnection implements SshConnection {
 
 	async tmuxCapture(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
 		return this.tmux.capture(this.localSessionId(targetId), commandOptions);
+	}
+
+	async tmuxCaptureStyled(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		return this.tmux.captureStyled(this.localSessionId(targetId), commandOptions);
 	}
 
 	async tmuxCaptureScreen(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -758,6 +765,11 @@ class FakeSshConnection implements SshConnection {
 		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
 	}
 
+	async tmuxCaptureStyled(targetId: string, _commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		const output = this.adapter.captureFakeTerminal(targetId);
+		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
+	}
+
 	async tmuxCaptureScreen(targetId: string, _commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
 		const output = this.adapter.captureFakeTerminal(targetId);
 		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
@@ -801,14 +813,10 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			output: string;
 			exitCode: number;
 			prompt: boolean;
-			interactive: boolean;
 			started: boolean;
 		}
 	>();
-	private readonly privilegeResults = new Map<
-		string,
-		{ output: string; exitCode: number; prompt: boolean; interactive: boolean }
-	>();
+	private readonly privilegeResults = new Map<string, { output: string; exitCode: number; prompt: boolean }>();
 	private nextPaneId = 1;
 	connectCalls = 0;
 	commandCalls: string[] = [];
@@ -844,13 +852,12 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 
 	setPrivilegeCommandResult(
 		terminalId: string,
-		result: { output?: string; exitCode?: number; prompt?: boolean; interactive?: boolean },
+		result: { output?: string; exitCode?: number; prompt?: boolean },
 	): void {
 		this.privilegeResults.set(terminalId, {
 			output: result.output ?? "privileged-ok\n",
 			exitCode: result.exitCode ?? 0,
 			prompt: result.prompt ?? true,
-			interactive: result.interactive ?? false,
 		});
 	}
 
@@ -937,7 +944,6 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			output: "privileged-ok\n",
 			exitCode: 0,
 			prompt: true,
-			interactive: false,
 		};
 		const encoded = input.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)?.[1] ?? "";
 		const command = encoded ? Buffer.from(encoded, "base64").toString("utf8") : "sudo command";
@@ -959,14 +965,6 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		if (privilege.prompt) {
 			this.sensitiveInput.push(Buffer.from(input));
 			privilege.prompt = false;
-			if (privilege.interactive) {
-				entry.terminal.output += "\nroot# ";
-				return;
-			}
-		} else if (privilege.interactive) {
-			const text = input.toString("utf8");
-			entry.terminal.output += text.replaceAll("\r", "\n");
-			if (!/(?:^|\n)exit(?:\s|\n|$)/.test(text.replaceAll("\r", "\n"))) return;
 		}
 		entry.terminal.output += `\n${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 		this.privilegeTerminals.delete(entry.terminalId);
@@ -988,18 +986,13 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		if (key === "Enter" && privilege && !privilege.started) {
 			privilege.started = true;
 			entry.terminal.output += `\n${privilege.beginMarker}\n${privilege.prompt ? "Password: " : ""}`;
-			if (!privilege.prompt && privilege.interactive) entry.terminal.output += "root# ";
-			else if (!privilege.prompt) {
+			if (!privilege.prompt) {
 				entry.terminal.output += `${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 				this.privilegeTerminals.delete(entry.terminalId);
 			}
 		}
-		if (key === "C-c" && privilege && !privilege.interactive) {
+		if (key === "C-c" && privilege) {
 			entry.terminal.output += `\n${privilege.endMarker}:130\n`;
-			this.privilegeTerminals.delete(entry.terminalId);
-		}
-		if (key === "C-d" && privilege?.interactive) {
-			entry.terminal.output += `\n${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 			this.privilegeTerminals.delete(entry.terminalId);
 		}
 	}

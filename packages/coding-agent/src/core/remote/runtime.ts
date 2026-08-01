@@ -726,8 +726,6 @@ export class RemoteExecutionRuntime {
 		const recoverTerminal = (): Promise<boolean> => {
 			recoveryPromise ??= (async () => {
 				await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
-				if (await waitForCompletionMarker(2_000)) return true;
-				await connection.tmuxSendKey(terminal.paneId, "C-d", { timeoutMs: 2_000 }).catch(() => undefined);
 				return waitForCompletionMarker(2_000);
 			})();
 			return recoveryPromise;
@@ -823,20 +821,25 @@ export class RemoteExecutionRuntime {
 			},
 			capture: async (): Promise<PrivilegeTerminalFrameV1> => {
 				if (!prepared) return { content: "", state: "starting" };
-				const [capture, screen, status] = await Promise.all([
+				const [capture, styledCapture, screen, status] = await Promise.all([
 					connection.tmuxCapture(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxCaptureStyled(terminal.paneId, { signal: controller.signal }),
 					connection.tmuxCaptureScreen(terminal.paneId, { signal: controller.signal }),
 					connection.tmuxStatus(terminal.paneId, { signal: controller.signal }),
 				]);
+				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+				const styledParsed =
+					styledCapture.exitCode === 0
+						? parseTerminalCommandCapture(styledCapture.stdout, beginMarker, endMarker)
+						: undefined;
+				const executedContent = redactOutput(
+					styledParsed?.found ? styledParsed.output : parsed.found ? parsed.output : "",
+				);
+				if (parsed.exitCode !== undefined) return { content: executedContent, state: "complete" };
 				if (capture.exitCode !== 0 || screen.exitCode !== 0 || !status.exists) {
 					return { content: "", state: "lost" };
 				}
-				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-				const content = executed
-					? parsed.found
-						? redactOutput(parsed.output)
-						: ""
-					: (stagedCommandCapture(capture.stdout, stageMarker) ?? "");
+				const content = executed ? executedContent : (stagedCommandCapture(capture.stdout, stageMarker) ?? "");
 				if (!executed) return { content, state: "waiting_for_user" };
 				const authenticating =
 					status.cursorY === undefined
@@ -864,14 +867,21 @@ export class RemoteExecutionRuntime {
 				reusable = await recoverTerminal();
 				terminal.busy = !reusable;
 			},
-			wait: async () => {
+			wait: async (onOutput) => {
 				if (!executed || startedAt === undefined) throw new Error("Remote privilege command has not started");
 				const deadline = request.timeoutMs === undefined ? undefined : startedAt + request.timeoutMs;
+				let emittedOutput = "";
 				while (true) {
 					try {
 						const capture = await connection.tmuxCapture(terminal.paneId);
 						const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-						if (parsed.found) lastOutput = parsed.output;
+						if (parsed.found) {
+							lastOutput = parsed.output;
+							if (lastOutput !== emittedOutput) {
+								emittedOutput = lastOutput;
+								onOutput?.(redactOutput(lastOutput));
+							}
+						}
 						if (parsed.exitCode !== undefined) {
 							completed = true;
 							return finalize({

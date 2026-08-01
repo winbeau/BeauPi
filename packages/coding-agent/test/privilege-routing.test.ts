@@ -9,17 +9,17 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 }
 
 describe("privilege routing boundary", () => {
-	it("classifies deterministic and interactive sudo separately from unsupported and opaque commands", () => {
+	it("classifies deterministic sudo separately while rejecting interactive root shells", () => {
 		expect(inspectShellPrivilege("sudo id")).toMatchObject({ kind: "sudo", sudo: true, opaque: false });
 		expect(inspectShellPrivilege("bash -lc 'sudo id'")).toMatchObject({ kind: "sudo", sudo: true, opaque: false });
 		expect(inspectShellPrivilege("find . -exec sudo id \\;")).toMatchObject({ kind: "sudo", sudo: true });
 		expect(inspectShellPrivilege("su -")).toMatchObject({ kind: "unsupported", sudo: false });
 		for (const command of ["sudo -i", "sudo -s", "sudo bash", "sudo env /bin/sh -l"]) {
 			expect(inspectShellPrivilege(command), command).toMatchObject({
-				kind: "sudo",
+				kind: "unsupported",
 				sudo: true,
 				interactiveRootShell: true,
-				unsupported: [],
+				unsupported: expect.arrayContaining(["interactive-root-shell"]),
 			});
 		}
 		for (const command of ["sudo -A id", "sudo --askpass id"]) {

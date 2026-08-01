@@ -35,7 +35,7 @@
 3. `terminal_send` 复用现有pending input classifier；在Enter提交前识别完整sudo command，禁止发送Enter并用Ctrl+U清理尚未执行的shell line，然后返回受控路径诊断。
 4. `remote_exec`、`remote_bash` 和没有可控 PTY 的路径检测到 sudo 时不执行，返回要求使用现有 Terminal 路径的结构化诊断。
 5. `privileged_exec.command` 必须包含可确定解析的 sudo；Runtime 不添加、删除或重排命令。
-6. `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 作为当前 request 的交互式 shell 受支持；`su`、`doas`、`pkexec`、其他身份切换和任意 namespace/chroot 能力保持 unsupported。
+6. `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 会被标记为 `interactive-root-shell` 并阻止，避免认证后detach留下隐藏root shell；`su`、`doas`、`pkexec`、其他身份切换和任意 namespace/chroot 能力同样保持 unsupported。
 7. 已配置 SSH login identity 为 root 时不走 sudo broker；普通 Remote Tool 继续按受信任登录身份执行。
 
 ## Request 状态机
@@ -74,7 +74,7 @@ interface PrivilegeInteractionHandler {
 - direct sudo 在 local Bash和terminal_bash中不会进入原执行器，而是自动路由到fake PrivilegeRuntime。
 - remote_exec/remote_bash无受控command session时不得执行sudo；terminal_send分片输入在Enter前被拦截并清理shell line。
 - nested shell/quoted separator中的sudo继续被classifier识别并保留完整命令。
-- `privileged_exec` 拒绝不含sudo或包含unsupported identity switch的command，同时接受交互式 sudo shell 和换行分隔批次。
+- `privileged_exec` 拒绝不含sudo、交互式root shell或包含unsupported identity switch的command，同时接受换行分隔的直接sudo批次。
 - 每个request独立确认；不存在once/session mode、expiry或grant恢复。
 - resume/Compact/branch不恢复pending request。
 - controlled child profile不暴露 `privileged_exec`。

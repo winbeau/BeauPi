@@ -29,4 +29,13 @@ describe("local tmux SSH adapter protocol", () => {
 		);
 		expect(parsed).toEqual({ found: true, output: "error line", exitCode: 7 });
 	});
+
+	it("preserves ANSI output while parsing styled marker lines", () => {
+		const parsed = parseTerminalCommandCapture(
+			"\u001b[36m__BEAUPI_BEGIN_token__\u001b[0m\n\u001b[32mupdated\u001b[0m\n\u001b[36m__BEAUPI_END_token__:0\u001b[0m\n",
+			"__BEAUPI_BEGIN_token__",
+			"__BEAUPI_END_token__",
+		);
+		expect(parsed).toEqual({ found: true, output: "\u001b[32mupdated\u001b[0m", exitCode: 0 });
+	});
 });

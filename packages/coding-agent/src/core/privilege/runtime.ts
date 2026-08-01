@@ -67,6 +67,8 @@ function targetKey(request: PrivilegeExecuteInputV1): string {
 
 function statusText(status: PrivilegeResultStatusV1, issue?: PrivilegeDiagnosticV1): string {
 	switch (status) {
+		case "running":
+			return "Privileged command is running.";
 		case "succeeded":
 			return "Privileged command completed successfully.";
 		case "failed":
@@ -452,10 +454,30 @@ export class PrivilegeRuntime {
 				},
 				wait: async () => {
 					if (!active.session || !active.startedAt) throw new Error("Privilege command has not started");
-					active.waitPromise ??= active.session.wait().then((result) => {
-						active.result = result;
-						return result;
-					});
+					active.waitPromise ??= active.session
+						.wait((output) => {
+							if (!onUpdate) return;
+							const startedAt = Date.parse(active.startedAt!);
+							onUpdate(
+								finish(
+									"running",
+									undefined,
+									{
+										output,
+										exitCode: null,
+										startedAt,
+										completedAt: this.now().getTime(),
+										monitorId: request.target.monitorId,
+										logPath: request.logPath,
+									},
+									false,
+								),
+							);
+						})
+						.then((result) => {
+							active.result = result;
+							return result;
+						});
 					return active.waitPromise;
 				},
 			};

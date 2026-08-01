@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
 import {
@@ -82,21 +82,30 @@ describe("remote controlled privilege terminal", () => {
 			return { status: "completed" };
 		});
 
-		const result = await fixture.privilegeRuntime.execute({
-			toolCallId: "remote-sudo",
-			sourceTool: "terminal_bash",
-			route: "terminal_bash",
-			command: "sudo id",
-			target: {
-				execution: "terminal",
-				targetId: "fake",
-				terminalId: terminal.terminalId,
-				monitorId: terminal.monitorId,
+		const updates: string[] = [];
+		const result = await fixture.privilegeRuntime.execute(
+			{
+				toolCallId: "remote-sudo",
+				sourceTool: "terminal_bash",
+				route: "terminal_bash",
+				command: "sudo id",
+				target: {
+					execution: "terminal",
+					targetId: "fake",
+					terminalId: terminal.terminalId,
+					monitorId: terminal.monitorId,
+				},
+				cwd: fixture.cwd,
 			},
-			cwd: fixture.cwd,
-		});
+			undefined,
+			(update) => {
+				const content = update.content[0];
+				if (content?.type === "text" && update.details.status === "running") updates.push(content.text);
+			},
+		);
 
 		expect(result.details).toMatchObject({ status: "succeeded", exitCode: 0, monitorId: terminal.monitorId });
+		expect(updates.some((output) => output.includes("uid=0(root)"))).toBe(true);
 		expect(fixture.adapter.getSensitiveInputForTest()).toEqual(secret);
 		expect(readFileSync(terminal.logPath, "utf8")).toContain("uid=0(root)");
 		const serialized = JSON.stringify({
@@ -108,24 +117,14 @@ describe("remote controlled privilege terminal", () => {
 		expect(readFileSync(terminal.logPath, "utf8")).not.toContain(secret.toString("utf8").trim());
 	});
 
-	it("cancels an interactive root shell and returns the existing pane to the user shell", async () => {
+	it("blocks interactive root shells before opening a privilege command session", async () => {
 		const fixture = setup();
-		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "interactive-root-terminal" });
-		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, {
-			prompt: false,
-			interactive: true,
-			output: "root shell exited\n",
-		});
-		fixture.privilegeRuntime.setHandler(async (_request, control) => {
-			await control.start();
-			await control.execute();
-			expect(await control.capture()).toMatchObject({ state: "running" });
-			await control.cancel();
-			return { status: "cancelled" };
-		});
+		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "interactive-root-blocked" });
+		const handler = vi.fn();
+		fixture.privilegeRuntime.setHandler(handler);
 
 		const result = await fixture.privilegeRuntime.execute({
-			toolCallId: "remote-interactive-cancel",
+			toolCallId: "remote-interactive-blocked",
 			sourceTool: "privileged_exec",
 			route: "explicit_tool",
 			command: "sudo bash",
@@ -133,45 +132,11 @@ describe("remote controlled privilege terminal", () => {
 			cwd: fixture.cwd,
 		});
 
-		expect(result.details).toMatchObject({ status: "cancelled" });
-		expect(fixture.adapter.tmuxKeyCalls).toEqual(
-			expect.arrayContaining([
-				{ terminalId: terminal.terminalId, key: "C-c" },
-				{ terminalId: terminal.terminalId, key: "C-d" },
-			]),
-		);
-		await expect(fixture.remoteRuntime.terminalBash(terminal.terminalId, "pwd")).resolves.toMatchObject({ ok: true });
-	});
-
-	it("keeps an interactive root shell active until the user exits", async () => {
-		const fixture = setup();
-		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "interactive-root-exit" });
-		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, {
-			prompt: false,
-			interactive: true,
-			output: "root shell exited\n",
+		expect(result.details).toMatchObject({
+			status: "blocked",
+			diagnostic: { code: "unsupported_privilege" },
 		});
-		fixture.privilegeRuntime.setHandler(async (_request, control) => {
-			await control.start();
-			await control.execute();
-			await control.sendSensitive(Buffer.from("whoami\r", "utf8"));
-			expect(await control.capture()).toMatchObject({ state: "running" });
-			await control.sendSensitive(Buffer.from("exit\r", "utf8"));
-			await control.wait();
-			return { status: "completed" };
-		});
-
-		const result = await fixture.privilegeRuntime.execute({
-			toolCallId: "remote-interactive-exit",
-			sourceTool: "privileged_exec",
-			route: "explicit_tool",
-			command: "sudo bash",
-			target: { execution: "terminal", targetId: "fake", terminalId: terminal.terminalId },
-			cwd: fixture.cwd,
-		});
-
-		expect(result.details).toMatchObject({ status: "succeeded", exitCode: 0 });
-		expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("root shell exited") });
+		expect(handler).not.toHaveBeenCalled();
 	});
 
 	it("routes terminal_bash sudo before the ordinary terminal executor", async () => {

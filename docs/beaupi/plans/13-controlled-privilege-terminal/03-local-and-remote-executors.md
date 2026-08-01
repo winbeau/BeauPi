@@ -20,7 +20,7 @@
 - 使用同一个 local tmux SSH pane，因此继承远程 shell cwd、export环境和 sudo tty ticket。
 - 扩展 `SshConnection`/Remote Runtime，提供受控 interactive command session，而不是让 TUI直接访问 private connection map。
 - existing terminal work log继续是完整输出事实源；privilege audit只引用该 logPath。
-- command或交互式sudo shell terminal后恢复 `terminal.busy = false`，更新 Monitor并运行共享 output reviewer规则。
+- 认证视图detach后command继续占用terminal并写入work log；command terminal后恢复 `terminal.busy = false`，更新Monitor并运行共享output reviewer规则。
 - 每个sudo request都重新显示权限框；系统sudo ticket可能省略密码prompt，但不省略用户Enter确认。
 
 ## 建议内部接口
@@ -61,20 +61,20 @@ interface PrivilegeCommandSession {
 
 - `remote_exec` one-shot交互 sudo。
 - remote target无 terminalId时自动创建长期 terminal。
-- `su -`、PAM GUI、askpass、doas/pkexec；当前request内的 `sudo bash`/`sudo sh`/`sudo -i`/`sudo -s` 受支持。
+- `su -`、PAM GUI、askpass、doas/pkexec，以及会留下隐藏shell的 `sudo bash`/`sudo sh`/`sudo -i`/`sudo -s`。
 - privileged background task和 detached root process。
 
 ## 失败路径
 
 - terminal busy/lost/disconnected：不打开重复交互，保留 partial output/log。
 - SSH断开：Monitor terminal/connection进入lost，当前request取消并清理。
-- timeout/abort：Ctrl-C、必要时Ctrl-D退出交互式shell、flush和terminal state复核。
+- timeout/abort：Ctrl-C、flush和terminal state复核；若异常命令仍占用shell，标记terminal recovery failed。
 - output reviewer失败：沿用 deterministic fallback，不影响 exit事实。
 
 ## 测试
 
 - local success/nonzero/timeout/cancel/truncation、用户shell环境、慢zsh启动和多行staging。
-- local/remote交互式sudo shell保持attached，exit完成，取消恢复。
+- local/remote认证后detach、缓存credential路径和detach后最终日志/result。
 - remote fake terminal cwd/export继承和work log。
 - terminal busy/lost/disconnect。
 - 每个request独立确认、target mismatch、系统ticket已缓存时仍要求Enter。

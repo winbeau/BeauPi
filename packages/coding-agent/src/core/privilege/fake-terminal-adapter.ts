@@ -92,9 +92,10 @@ export class FakePrivilegeTerminalAdapter implements PrivilegeTerminalAdapter {
 				this.resizeCalls.push({ columns, rows });
 			},
 			cancel,
-			wait: async () => {
+			wait: async (onOutput) => {
 				if (!executed) throw new Error("Fake privilege session has not started");
 				if (cancelled) return cancelledResult();
+				if (!this.waitPending) onOutput?.(this.result.output);
 				return this.waitPending ? pendingWait : structuredClone(this.result);
 			},
 			dispose: async () => {

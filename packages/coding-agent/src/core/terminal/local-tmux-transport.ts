@@ -173,6 +173,10 @@ export class LocalTmuxTransport {
 		return this.run(["capture-pane", "-p", "-J", "-S", "-", "-t", target], options);
 	}
 
+	captureStyled(target: string, options: TerminalProcessOptions = {}): Promise<TerminalProcessResult> {
+		return this.run(["capture-pane", "-p", "-e", "-J", "-S", "-", "-t", target], options);
+	}
+
 	captureScreen(target: string, options: TerminalProcessOptions = {}): Promise<TerminalProcessResult> {
 		return this.run(["capture-pane", "-p", "-t", target], options);
 	}

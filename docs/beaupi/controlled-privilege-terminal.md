@@ -11,8 +11,8 @@ M13 在现有 `AgentSession`、Bash、Remote Runtime、本地 tmux SSH terminal�
 3. 用户按 Enter 后才释放这一条已填充 command/batch；按 Escape 则取消并关闭临时视图，sudo 不会执行。
 4. 本地权限 pane 使用独立 tmux server，继承当前进程环境、目标 cwd 和配置的真实用户 shell；不使用 `env -i`、`--noprofile` 或 `--norc`。
 5. sudo 直接从 controlling TTY 读取认证输入并负责密码输入期间的 terminal echo。输入不经过 Tool 参数、Session、Monitor、Task Ledger、RPC 或模型上下文。
-6. 认证结束后终端继续 attached。普通 command 直到完成；`sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 直到用户输入 `exit`。运行中按 Escape 会终止当前提权流程，不能留下隐藏 root shell。
-7. 短成功输出直接返回主对话；失败、诊断或超过 100 行的输出先交给共享 `review.model` 审阅，完整输出仍保留在日志中，并写入无秘密审计。
+6. 认证结束后临时终端自动 detach 并恢复编辑器；command 继续由 `PrivilegeRuntime` 等待，非敏感输出通过普通Tool增量更新继续显示，完整输出持续写入work log。缓存sudo credential、没有密码prompt时，在命令稳定进入running后执行同样的detach。
+7. 命令完成后，短成功输出直接返回主对话；失败、诊断或超过 100 行的输出先交给共享 `review.model` 审阅，并保留完整日志路径和无秘密审计。
 
 系统 sudo ticket 可以让 sudo 不再显示密码 prompt，但不会跳过 tmux 中由用户按 Enter 触发执行的边界。
 
@@ -22,7 +22,7 @@ M13 在现有 `AgentSession`、Bash、Remote Runtime、本地 tmux SSH terminal�
 - `terminal_bash` 中的 sudo 复用指定的现有 SSH tmux pane，并进入同一个 Runtime。
 - `terminal_send` 在 Enter 前检查累计 shell line；检测到 sudo 或无法安全还原的控制序列时发送 Ctrl-U 清理，且不发送 Enter。
 - `remote_exec`、`remote_bash` 和其他 one-shot SSH 路径没有可控认证 TTY，因此阻止提权。
-- `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 作为当前 request 的交互式 shell 受支持；`su`、`doas`、`pkexec`、`runuser`、namespace/chroot identity switch、`sudo -S`/`--stdin` 和 `sudo -A`/`--askpass` 仍不支持。
+- `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 会被阻止，避免 detach 后留下隐藏 root shell；`su`、`doas`、`pkexec`、`runuser`、namespace/chroot identity switch、`sudo -S`/`--stdin` 和 `sudo -A`/`--askpass` 同样不支持。
 - SSH target 的受信任登录身份若已是 root，应去掉 sudo，继续使用普通 remote/terminal Tool。
 
 ## 敏感输入传输

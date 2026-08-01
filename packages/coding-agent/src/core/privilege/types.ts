@@ -16,6 +16,7 @@ export type PrivilegeRequestStateV1 =
 	| "blocked"
 	| "interaction_required";
 export type PrivilegeResultStatusV1 =
+	| "running"
 	| "succeeded"
 	| "failed"
 	| "cancelled"
@@ -101,7 +102,7 @@ export interface PrivilegeCommandSession {
 	capture(): Promise<PrivilegeTerminalFrameV1>;
 	resize(columns: number, rows: number): Promise<void>;
 	cancel(): Promise<void>;
-	wait(): Promise<PrivilegeCommandResultV1>;
+	wait(onOutput?: (output: string) => void): Promise<PrivilegeCommandResultV1>;
 	dispose(): Promise<void>;
 }
 
@@ -254,6 +255,7 @@ const PRIVILEGE_COMPOSITE_KEYS = new Set([
 	"background",
 ]);
 const PRIVILEGE_STATUSES = new Set<PrivilegeResultStatusV1>([
+	"running",
 	"succeeded",
 	"failed",
 	"cancelled",

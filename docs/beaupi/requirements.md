@@ -275,7 +275,7 @@ M12 第一版实现约束：
 - 密码只进入受控 PTY，不进入 Tool 参数、argv、Session、Monitor、日志、审计或模型上下文
 - 非交互模式和没有可控 PTY 的远程 one-shot 路径默认阻止 sudo
 - `terminal_send` 的完整或分片 sudo command 在 Enter 前拦截，不能绕过受控执行路径
-- 支持当前 request 内保持 attached 的 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s`；不提供持久 root shell、后台 root 会话或远程登录后的任意其他身份切换；已配置 Target 本身使用 `root` 登录不视为 sudo 授权
+- 认证完成后临时终端自动detach，command继续写入work log并由Runtime等待；阻止 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s`，不提供持久或隐藏root shell、后台root会话及其他身份切换；已配置Target本身使用`root`登录不视为sudo授权
 - 所有 sudo request 和执行结果写入不含秘密的 JSONL 审计日志
 
 ### 文档驱动执行

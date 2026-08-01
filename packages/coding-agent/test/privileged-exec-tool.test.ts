@@ -44,7 +44,7 @@ describe("privileged_exec tool", () => {
 		expect(validator.Check({ execution: "terminal", command: "sudo id" })).toBe(false);
 	});
 
-	it("teaches models to prefer direct sudo while supporting multiline and interactive shells", () => {
+	it("teaches models to prefer direct sudo and reject interactive root shells", () => {
 		const fixture = runtime();
 		const tool = createPrivilegedExecToolDefinition(fixture.privilegeRuntime, fixture.remoteRuntime, "/workspace");
 		const systemPrompt = buildSystemPrompt({
@@ -57,11 +57,13 @@ describe("privileged_exec tool", () => {
 		});
 
 		expect(systemPrompt).toContain(
-			"- privileged_exec: Stage sudo commands or an interactive sudo shell for user-controlled execution",
+			"- privileged_exec: Stage sudo commands for user-controlled execution in the secure tmux terminal",
 		);
 		expect(systemPrompt).toContain("Prefer the direct sudo program that satisfies the task, such as `sudo id`");
 		expect(systemPrompt).toContain("multiple newline-separated shell lines");
-		expect(systemPrompt).toContain("`sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` are supported");
+		expect(systemPrompt).toContain(
+			"Do not request an interactive root shell such as `sudo bash`, `sudo sh`, `sudo -i`, or `sudo -s`",
+		);
 		expect(systemPrompt).toContain("the user retains final execution control with Enter or cancels with Escape");
 	});
 

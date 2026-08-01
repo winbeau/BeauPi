@@ -44,13 +44,15 @@ describe("LocalTmuxTransport sensitive input", () => {
 		}
 	});
 
-	it("captures the visible pane separately from joined history", async () => {
+	it("captures styled history and the visible pane separately", async () => {
 		const runner: LocalTmuxTransportRunner = vi.fn(async () => ok());
 		const transport = new LocalTmuxTransport({ runner });
 
+		await transport.captureStyled("%7");
 		await transport.captureScreen("%7");
 
-		expect(runner).toHaveBeenCalledWith(["capture-pane", "-p", "-t", "%7"], {});
+		expect(runner).toHaveBeenNthCalledWith(1, ["capture-pane", "-p", "-e", "-J", "-S", "-", "-t", "%7"], {});
+		expect(runner).toHaveBeenNthCalledWith(2, ["capture-pane", "-p", "-t", "%7"], {});
 	});
 
 	it("parses pane status with cursor position under the C locale", async () => {

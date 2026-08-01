@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：完整命令或批次先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；可在当前 request 内使用交互式 sudo shell，但不提供 sudo mode、持久 root shell 或 Session grant。
+7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：完整命令或批次先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；认证后视图detach且command继续写日志，交互式root shell被阻止，不提供sudo mode、持久root shell或Session grant。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -697,7 +697,7 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 - local Bash 和 `terminal_bash` 的 sudo 自动路由到统一 `PrivilegeRuntime`
 - 结构化 `privileged_exec`
 - 完整 sudo 命令或换行分隔批次直接填充到双分割线 tmux、用户 Enter 执行或 Escape 取消，以及受控 PTY 输入
-- 当前 request 内的 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 保持 attached，直到用户退出或取消
+- 认证完成后临时终端自动detach，缓存credential时在稳定running后detach；`sudo bash`、`sudo sh`、`sudo -i`和`sudo -s`明确阻止
 - `terminal_send` sudo bypass 拦截
 - 非交互模式和无可控 PTY 的远程 one-shot 路径默认阻止
 - JSONL 审计日志
@@ -713,7 +713,7 @@ Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权
 - `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一进入 session-scoped `PrivilegeRuntime`；普通执行器和 one-shot SSH 路径不能旁路。
 - 每个 request 第一帧直接在双分割线 tmux 中显示完整只读命令或批次；Enter 执行、Escape 取消，不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
 - local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；local 与 existing remote terminal 共用 secure stdin buffer，认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
-- 交互式 sudo shell 在认证后保持 attached，`exit` 正常完成，取消不会留下隐藏 root shell；短成功输出直返，长输出或失败复用共享 `review.model`。
+- 认证视图detach后command继续由Runtime等待并写work log；正常pane dead先解析end marker而不误报lost；短成功输出直返，长输出或失败复用共享`review.model`。
 - `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
 - M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 

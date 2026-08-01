@@ -273,9 +273,9 @@ describe("PrivilegeRuntime", () => {
 		}
 	});
 
-	it("allows interactive root shells and multiline sudo batches", async () => {
+	it("continues waiting for output after the interaction view detaches", async () => {
 		const adapter = new FakePrivilegeTerminalAdapter();
-		adapter.setResult({ output: "done\n", exitCode: 0 });
+		adapter.setResult({ output: "Reading package lists... Done\nAll packages are up to date.\n", exitCode: 0 });
 		const runtime = new PrivilegeRuntime({
 			sessionId: "session",
 			cwd: "/tmp",
@@ -284,17 +284,36 @@ describe("PrivilegeRuntime", () => {
 			handler: async (_interaction, control) => {
 				await control.start();
 				await control.execute();
-				await control.wait();
 				return { status: "completed" };
 			},
 		});
-		const commands = ["sudo -i", "sudo -s", "sudo bash", "sudo apt update\nsudo apt install -y example"];
 
-		for (const [index, command] of commands.entries()) {
-			const result = await runtime.execute({ ...request(`interactive-${index}`), command });
-			expect(result.details.status, command).toBe("succeeded");
+		const updates: string[] = [];
+		const updateStatuses: string[] = [];
+		const result = await runtime.execute(
+			{
+				...request("detached-output"),
+				command: "sudo apt update\nsudo apt upgrade --simulate",
+			},
+			undefined,
+			(update) => {
+				const content = update.content[0];
+				if (content?.type === "text") updates.push(content.text);
+				updateStatuses.push(update.details.status);
+			},
+		);
+
+		expect(result.details.status).toBe("succeeded");
+		expect(updateStatuses).toContain("running");
+		expect(updates.some((output) => output.includes("All packages are up to date."))).toBe(true);
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("All packages are up to date."),
+		});
+		if (result.content[0]?.type === "text") {
+			expect(result.content[0].text.split("\n").at(-1)).toBe(`@${result.details.logPath}`);
 		}
-		expect(adapter.requests.map((entry) => entry.command)).toEqual(commands);
+		expect(adapter.requests[0]?.command).toBe("sudo apt update\nsudo apt upgrade --simulate");
 	});
 
 	it("rejects unsupported identity switching and sudo stdin mode before interaction", async () => {
@@ -319,6 +338,9 @@ describe("PrivilegeRuntime", () => {
 			"sudo --stdin id",
 			"sudo -A id",
 			"sudo --askpass id",
+			"sudo -i",
+			"sudo -s",
+			"sudo bash",
 		]) {
 			const result = await runtime.execute({ ...request(command), toolCallId: command, command });
 			expect(result.details.status, command).toBe("blocked");

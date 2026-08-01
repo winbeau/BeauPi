@@ -17,7 +17,7 @@
 - command不允许NUL、空白，且必须包含classifier可确定识别的sudo executable。
 - Tool参数不包含mode、grant、confirmation或password字段。
 - controlled child、reviewer和Workflow默认profile不暴露该Tool。
-- system prompt明确：默认优先直接sudo命令；多行批次和当前request内的交互式sudo shell受支持；普通local Bash/terminal_bash中的sudo也会自动进入同一受控终端，绝不请求或传递密码。
+- system prompt明确：默认优先直接sudo命令并保留多行批次；交互式root shell不支持；普通local Bash/terminal_bash中的sudo也会自动进入同一受控终端，绝不请求或传递密码。
 
 ## Tool Result
 

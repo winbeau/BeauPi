@@ -57,8 +57,8 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 1. 输出 stage marker 和与审计记录完全一致的完整单行或多行文本，然后阻塞等待用户 Enter。
 2. Enter 后输出 begin marker，并用原始文本执行；不预先执行 `sudo -v`，不改写为 `sudo -n`。
 3. sudo 是否显示密码 prompt 由目标系统 sudoers/timestamp policy决定，但每个 BeauPi request 都已经独立确认。
-4. wrapper 不在整个 command 或交互式 root shell 生命周期执行 `stty -echo`；密码期间的 no-echo 由 sudo controlling TTY负责，普通 shell 输入继续正常回显。
-5. command或交互式 shell退出后记录 end marker与exit code。取消时local关闭ephemeral pane；remote先Ctrl-C，必要时Ctrl-D恢复原用户shell。
+4. wrapper 不在整个 command 生命周期执行 `stty -echo`；密码期间的 no-echo 由 sudo controlling TTY负责。
+5. 认证结束后TUI可以detach，但wrapper继续运行，command退出后记录end marker与exit code。local pane正常dead时必须先解析end marker，再判断是否terminal lost。
 
 命令正文使用现有 base64/marker protocol或 argv-safe helper传递；不依赖模型生成 shell quoting。
 
@@ -74,8 +74,8 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - tmux missing/version unsupported：结构化 `tmux_unavailable`，不 fallback 到密码管道。
 - pane/session 消失：`terminal_lost`，取消当前request并清理交互。
 - load-buffer/paste 失败：交互失败并清除 buffer，不重试输入。
-- 交互式 shell取消后未恢复原用户 shell：关闭 local pane，或把 existing remote terminal标记 recovery failed。
-- Abort：发送 Ctrl-C、等待 marker/settle；仍停留在交互式 root shell时发送Ctrl-D，然后flush output。
+- command取消后未恢复原用户 shell：关闭local pane，或把existing remote terminal标记recovery failed。
+- Abort：发送Ctrl-C、等待marker/settle并flush output；无法确认恢复时不复用terminal。
 
 ## 测试
 
@@ -83,9 +83,9 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - tmux buffer 在 success/failure 后删除。
 - password-like fixture input 不出现在 transcript、logs、errors、Session facts。
 - marker、exit code、timeout、cancel、pane lost、resize。
-- sudo密码输入不回显，而认证后的普通命令与交互式shell输入正常回显。
+- sudo密码输入不回显，认证完成后视图detach，command输出继续写入work log。
 - 用户shell startup环境、慢zsh初始化、cwd和多行staging。
-- 交互式shell的exit与取消恢复；硬失败时关闭pane或标记recovery failed。
+- 正常pane dead完成marker、真正pane lost与恢复失败；交互式root shell在Runtime边界阻止。
 - existing Remote terminal tests继续通过，证明 transport extraction 无退化。
 
 ## 完成状态
@@ -94,5 +94,5 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - [x] shared transport extraction
 - [x] secure stdin channel
 - [x] per-request local privilege pane
-- [x] wrapper/echo/marker与交互式shell cleanup
+- [x] wrapper/echo/marker与detach cleanup
 - [x] transport tests

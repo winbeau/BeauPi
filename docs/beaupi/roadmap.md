@@ -277,10 +277,10 @@ M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置
 - `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一路由到 session-scoped `PrivilegeRuntime`
 - 每个 request 第一帧直接把完整只读命令或换行分隔批次填充到双分割线 tmux；用户按 Enter 执行或 Escape 取消
 - local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；existing remote terminal 复用原 pane，两者共用 secure stdin buffer
-- `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 在认证后保持 attached，直到用户退出或取消；取消不能留下隐藏 root shell
+- 认证完成后临时tmux视图自动detach，command继续由Runtime等待并写入work log；缓存credential路径在稳定running后执行相同detach
 - `terminal_send` bypass 和无可控 PTY 的 one-shot remote sudo 默认阻止
 - Session、Monitor、Task Ledger、Footer、renderer 和 0600 JSONL audit 只保存非秘密结构化事实
-- 不提供 sudo mode、持久 root shell、once/session grant、keepalive、`sudo -S` 或 askpass；当前 request 内的交互式 sudo shell除外
+- 不提供 sudo mode、交互式或持久root shell、once/session grant、keepalive、`sudo -S` 或 askpass；`sudo bash`/`sudo -i`等命令明确阻止
 
 验收：Agent 保持普通用户身份；每个 sudo request 都先填充且不执行，只由用户按 Enter 释放；认证输入不进入 Agent 数据链；本地和远程结果均可审计且不能通过普通执行器绕过。M13 定向测试、`./test.sh` 和 `npm run check` 已通过。
 

@@ -588,7 +588,7 @@ If neither `questionHandler` nor an injected `questionRuntime` is provided, the 
 
 #### Controlled sudo terminal
 
-`privileged_exec` stages one complete, deterministically parsed sudo command or newline-separated batch in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the text: the user presses Enter to release that exact staged command/batch, or Escape to cancel, including when the system sudo credential is cached. Interactive `sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` remain attached until the user exits or cancels.
+`privileged_exec` stages one complete, deterministically parsed sudo command or newline-separated batch in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the text: the user presses Enter to release that exact staged command/batch, or Escape to cancel. After authentication, the temporary view may detach while the Runtime continues waiting, emitting partial Tool output and writing the work log, including when sudo uses a cached credential. Interactive root shells such as `sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` are rejected.
 
 ```typescript
 import {
@@ -605,10 +605,10 @@ const privilegeHandler: PrivilegeInteractionHandler = async (request, control, s
   if (!execute) return { status: "cancelled" };
 
   await control.execute();
-  // Direct terminal bytes may be forwarded with control.sendSensitive().
+  // Authentication bytes may be forwarded with control.sendSensitive().
   // Do not ask for or receive a password through application forms or callbacks.
-  // Keep the trusted terminal attached until the command or interactive shell exits.
-  await control.wait();
+  // Once authentication ends, the trusted UI may detach and return completed.
+  // PrivilegeRuntime continues control.wait() and preserves the full work log.
   return { status: "completed" };
 };
 
@@ -619,7 +619,7 @@ The SDK also accepts `privilegeRuntime` or `privilegeTerminalAdapter` for custom
 
 Without a handler, sudo returns structured `interaction_required` and does not create a pane or execute the command. Print, JSON, and RPC modes clear the handler and remain non-interactive. Controlled AgentPool children never receive `privileged_exec`; sudo attempted through their `bash` tool is also non-executing because no handler is installed.
 
-Unsupported paths include `sudo -S`/`--stdin`, `su`, `doas`, `pkexec`, `runuser`, namespace/chroot identity switches, and one-shot remote sudo. A configured SSH target whose login user is already `root` should run the command without sudo through the normal remote terminal tools.
+Unsupported paths include interactive root shells (`sudo bash`, `sudo sh`, `sudo -i`, `sudo -s`), `sudo -S`/`--stdin`, `su`, `doas`, `pkexec`, `runuser`, namespace/chroot identity switches, and one-shot remote sudo. A configured SSH target whose login user is already `root` should run the command without sudo through the normal remote terminal tools.
 
 ### Custom Tools
 

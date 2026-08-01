@@ -226,20 +226,23 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 
 	async capture(): Promise<PrivilegeTerminalFrameV1> {
 		if (!this.paneId) return { content: "", state: "starting" };
-		const [capture, screen, status] = await Promise.all([
+		const [capture, styledCapture, screen, status] = await Promise.all([
 			this.transport.capture(this.paneId, { signal: this.controller.signal }),
+			this.transport.captureStyled(this.paneId, { signal: this.controller.signal }),
 			this.transport.captureScreen(this.paneId, { signal: this.controller.signal }),
 			this.transport.status(this.paneId, { signal: this.controller.signal }),
 		]);
+		const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
+		const styledParsed =
+			styledCapture.exitCode === 0
+				? parseTerminalCommandCapture(styledCapture.stdout, this.beginMarker, this.endMarker)
+				: undefined;
+		const executedContent = styledParsed?.found ? styledParsed.output : parsed.found ? parsed.output : capture.stdout;
+		if (parsed.exitCode !== undefined) return { content: executedContent, state: "complete" };
 		if (capture.exitCode !== 0 || screen.exitCode !== 0 || !status.exists) {
 			return { content: "", state: "lost" };
 		}
-		const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
-		const content = this.executed
-			? parsed.found
-				? parsed.output
-				: capture.stdout
-			: (stagedCommandCapture(capture.stdout, this.stageMarker) ?? "");
+		const content = this.executed ? executedContent : (stagedCommandCapture(capture.stdout, this.stageMarker) ?? "");
 		if (!this.executed) return { content, state: "waiting_for_user" };
 		const authenticating =
 			status.cursorY === undefined
@@ -264,16 +267,23 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 		if (this.paneId) await this.transport.sendKey(this.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
 	}
 
-	async wait(): Promise<PrivilegeCommandResultV1> {
+	async wait(onOutput?: (output: string) => void): Promise<PrivilegeCommandResultV1> {
 		if (!this.paneId || !this.executed || this.startedAt === undefined)
 			throw new Error("Privilege command session has not started");
 		const deadline = this.request.timeoutMs === undefined ? undefined : this.startedAt + this.request.timeoutMs;
 		let output = "";
+		let emittedOutput = "";
 		while (true) {
 			const capture = await this.transport.capture(this.paneId).catch(() => undefined);
 			if (capture) {
 				const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
-				if (parsed.found) output = parsed.output;
+				if (parsed.found) {
+					output = parsed.output;
+					if (output !== emittedOutput) {
+						emittedOutput = output;
+						onOutput?.(output);
+					}
+				}
 				if (parsed.exitCode !== undefined) {
 					this.completed = true;
 					return {
