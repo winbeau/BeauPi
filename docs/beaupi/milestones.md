@@ -51,7 +51,8 @@
 | M11 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M10 |
 | M12 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M10 |
 | M13 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M10、M12 |
-| M14 | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | M0–M13 |
+| M14 | 建立动态 Task 计划闭环 | 主 Agent 计划、Task Runtime、快速模型进度审阅 | M2、M5、M6、M12、M13 |
+| M Final | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | 全部功能里程碑 |
 
 ---
 
@@ -714,7 +715,40 @@ Agent 进程始终以普通用户运行；每个 sudo request 都经过受控权
 - `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、echo cleanup、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
 - M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
-## M14：发行准备
+## M14：动态 Task 计划与进度审阅
+
+状态：规划中。
+
+### 目标
+
+让主 Agent 在可执行任务开始时创建结构化计划，并在动工、范围变化和验证阶段更新 Tasks；后续完成度由确定性事实优先、快速模型受限辅助更新，不通过普通文本 JSON 或 Agent 间对话同步状态。
+
+### 交付物
+
+- Coordinator-only `tasks_update` Tool 和严格版本化 `DynamicTaskPlanV1`
+- task revision、`expectedRevision` CAS、Session custom entry、Compact/resume/branch 恢复
+- 可执行用户提示词进入时由主 Agent 在现有回合内提交初始 Task JSON，不额外启动预规划模型回合
+- 首次 Edit/Write/修改型 Bash 自动激活对应任务；重大范围变化由主 Agent 刷新计划
+- Dynamic Tasks 接入现有 Task Ledger、Tasks Widget、Footer 和宽度安全 renderer；存在动态计划时隐藏重复的通用 discover/execute/verify Todo
+- 确定性 Tool、文件修改、验证、Workflow 和 Background facts 优先更新 activity/evidence
+- 可配置快速模型 Task Reviewer，默认 `gpt-5.6-luna`；只允许修改状态、activity、evidence 和 blockedBy，不能增删、重命名或重排任务
+- Reviewer 只在 facts hash 变化、主 Agent settled、修改批次结束、验证结束或关键失败时受预算调用；普通完成不向主 Agent 注入对话消息
+- 每次 Provider 请求前向主 Agent 投影紧凑任务快照；只有 blocked、revision 冲突或需要重新规划时进入 follow-up
+
+### 安全与一致性边界
+
+- 主 Agent 是任务结构的唯一作者，Task Runtime 是唯一事实源，快速模型只提交带 revision 的受限 patch。
+- 不解析 assistant 普通回复中的 JSON，不创建第二套 Task Ledger，不让快速模型直接调用主 Agent。
+- Reviewer 失败、格式错误、超时或 revision 过期时不修改任务状态；无新增事实时零模型调用。
+- 纯问答和闲聊不创建动态 Todo；无动态计划时继续使用现有通用 Task Ledger 投影。
+
+### 验收标准
+
+一个可执行用户任务能在首次主 Agent 回合生成动态计划；首次修改和重大阶段变化及时更新 Tasks；完成、失败、阻塞和验证状态可由确定性事实或受限 Reviewer 安全推进；Session 恢复、Compact、branch 切换和 Reviewer 失败不会丢失、重复或回滚任务状态，主 Agent 对话历史不被普通进度更新污染。
+
+## M Final：发行准备
+
+M Final 不占用后续数字里程碑；新增功能继续使用 M15、M16 等编号，全部功能稳定后再进入最终发行。
 
 ### 目标
 
@@ -772,10 +806,10 @@ Agent 进程始终以普通用户运行；每个 sudo request 都经过受控权
 
 ## 当前推荐开发入口
 
-M0–M13 已形成连续能力闭环。下一阶段推进 M14 发行准备：
+M0–M13 已形成连续能力闭环。下一阶段推进 M14 动态 Task 计划与进度审阅：
 
-1. 确定 npm 包、CLI 和 Bun standalone binary 的发行策略。
-2. 完成安装、升级、卸载、GitHub Actions 发布和外部目录 smoke test。
-3. 验证 Node/Bun 交互启动、模型配置、真实 prompt、标准 Responses、Codex 和 Compact 兼容路径。
+1. 先实现版本化 Task Runtime、`tasks_update`、revision CAS 和 Session 恢复。
+2. 接入用户任务、首次 mutation、重大计划变化及现有 Task Ledger/TUI 投影。
+3. 状态稳定后再接入受限快速模型 Reviewer，并以确定性 facts、hash 去重和预算控制调用。
 
-继续复用现有 Runtime、Session、ResourceLoader 和安全边界，不在发行阶段引入第二套实现。
+继续复用现有 AgentSession、Task Ledger、Session custom entries、ModelRuntime 和 TUI；M Final 发行准备等待 M14 及后续新增功能稳定后再启动。

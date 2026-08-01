@@ -46,7 +46,7 @@
 - Changed the BeauPi roadmap to mark multi-agent Workflow complete and advance the active milestone to background task auto-wake.
 - Changed the default system prompt so plans for projects expected to exceed roughly 500 implementation lines use a phase-and-milestone main plan with an index to separate per-module sub-plans.
 - Changed the default system prompt to trust fast-model-reviewed Bash and `terminal_bash` results on first inspection, skip full logs after success, inspect them after failure, and provide complete sudo installation commands for missing system tools instead of user-local installs or PATH workarounds.
-- Changed the BeauPi roadmap to mark M13 controlled privilege execution complete and advance the active milestone to M14 release preparation.
+- Changed the BeauPi roadmap to define M14 as dynamic Task planning and fast-model progress review, while reserving release preparation as the unnumbered M Final so additional feature milestones can be inserted.
 
 ### Fixed
 
