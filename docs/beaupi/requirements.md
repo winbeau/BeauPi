@@ -70,6 +70,19 @@ M10 已实现 Session-scoped、branch-aware Policy Runtime，并调整为完全 
 
 Policy Engine 是确定性分类、诊断和 Footer 提示层，不是执行守卫或 Shell sandbox；普通命令由现有本地/SSH/tmux 后端按调用者身份执行。
 
+### 动态 Task 计划与进度审阅
+
+M14 为可执行用户任务提供 branch-local 动态计划闭环：
+
+- 主 Agent 是 Task 结构唯一作者，通过 Coordinator-only `tasks_update` 在现有首次模型回合创建初始计划，并用 `expectedRevision` CAS 处理后续范围、依赖、阻塞和验证变化；仅由 Tool、sudo、evidence、Workflow、Background、Monitor 或 Reviewer 状态事实造成的 revision 漂移使用 branch-local snapshot三方安全重基，只有真实结构并发才冲突
+- 纯问答和闲聊不要求计划；受控子 Agent始终不能看到或调用 `tasks_update`
+- 唯一 `DynamicTaskRuntime` 保存版本化 snapshot、确定性 facts/evidence 和 Reviewer 状态 patch，并通过 Session custom entry支持 Compact、resume、reload 和 branch 切换
+- Edit/Write、修改型 Bash、verification、Workflow、Background 和 Monitor 只用稳定结构化事实更新明确匹配的 Task；无匹配时不激活或完成任意 Task，也不阻断原 Tool
+- Task Reviewer 与 Terminal Reviewer 共用 `review.model` 和 provider fallback，但没有 Tool、文件权限、主 Agent transcript 或完整日志；它只能修改 status、activity、evidence 和 blockedBy
+- Reviewer patch必须匹配当前 revision 和新增 facts hash；completed/reactivation必须引用本轮新 evidence，失败、超时、格式错误、abort 或冲突均不修改计划
+- Dynamic Tasks 投影到现有 Task Ledger、Tasks Widget 和 Footer；存在计划时仅隐藏重复的通用 discover/execute/verify Todo，其他状态源继续共存
+- 普通进度和 facts-only revision重基不增加主对话消息；只有 blocked、真实结构 revision conflict 或需要 replan 时进入现有 next-turn context
+
 ### 交互式询问选择
 
 提供 Claude Code 风格的 `ask_user_question` Tool 和询问选择框：

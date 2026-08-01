@@ -43,6 +43,20 @@ describe("M12 Background AgentSession integration", () => {
 	it("registers Background Tools and wakes an idle Coordinator through the existing Session message path", async () => {
 		const harness = await createHarness();
 		const session = await createCoordinator(harness);
+		await session.dynamicTaskRuntime?.updatePlan({
+			version: 1,
+			expectedRevision: 0,
+			reason: "initial_plan",
+			goal: "Complete the background process",
+			tasks: [
+				{
+					id: "background",
+					title: "Complete the background process",
+					status: "active",
+					matchHints: ["background", "process"],
+				},
+			],
+		});
 		expect(session.getActiveToolNames()).toEqual(
 			expect.arrayContaining([
 				"background_start",
@@ -100,6 +114,12 @@ describe("M12 Background AgentSession integration", () => {
 				(message) => message.role === "custom" && message.customType === "beaupi.background.wake",
 			),
 		).toBe(true);
+		const dynamicBackgroundTask = session.dynamicTaskRuntime
+			?.getSnapshot()
+			?.tasks.find((task) => task.id === "background");
+		expect(dynamicBackgroundTask?.status).toBe("completed");
+		expect(dynamicBackgroundTask?.evidence.some((id) => id.startsWith(`background:${taskId}:`))).toBe(true);
+		expect(session.dynamicTaskRuntime?.getSnapshot()?.facts.some((fact) => fact.kind === "monitor")).toBe(true);
 	});
 
 	it("queues a real Background wake as existing AgentSession follow-up while Coordinator is busy", async () => {

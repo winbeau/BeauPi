@@ -34,6 +34,7 @@ import {
 	type WebCitation,
 } from "../search/index.ts";
 import type { SessionEntry } from "../session-manager.ts";
+import type { DynamicTaskPlanV1 } from "../tasks/types.ts";
 import { getWorkflowToolDetails, type WorkflowSnapshot, type WorkflowToolDetails } from "../workflow/index.ts";
 
 export const TASK_LEDGER_DETAILS_KEY = "taskLedger";
@@ -195,6 +196,7 @@ export interface TaskLedgerSnapshot {
 	privilege: readonly PrivilegeToolDetailsV1[];
 	workflows: readonly WorkflowSnapshot[];
 	background?: BackgroundRuntimeSnapshotV1;
+	dynamicTasks?: DynamicTaskPlanV1;
 	verification: VerificationState;
 	todos: readonly TaskTodo[];
 	documentContract?: TaskDocumentContractSnapshot;
@@ -641,6 +643,7 @@ export class TaskLedger {
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
 	private pendingPrivilegeInteraction: PendingPrivilegeInteraction | undefined;
+	private dynamicTaskPlan: DynamicTaskPlanV1 | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
 		this.taskId = options.taskId;
@@ -687,6 +690,7 @@ export class TaskLedger {
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
 		this.pendingPrivilegeInteraction = undefined;
+		this.dynamicTaskPlan = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
 		for (const entry of entries) {
@@ -894,6 +898,12 @@ export class TaskLedger {
 		this.revision++;
 	}
 
+	setDynamicTaskPlan(plan: DynamicTaskPlanV1 | undefined): void {
+		if (JSON.stringify(this.dynamicTaskPlan) === JSON.stringify(plan)) return;
+		this.dynamicTaskPlan = plan ? structuredClone(plan) : undefined;
+		this.revision++;
+	}
+
 	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
 		const records = [...this.policyRecords.values()];
 		for (let index = records.length - 1; index >= 0; index--) {
@@ -946,6 +956,7 @@ export class TaskLedger {
 		const privilege = [...this.privilegeRecords.values()].map((record) => structuredClone(record));
 		const workflows = [...this.workflowRecords.values()].map((record) => structuredClone(record));
 		const background = structuredClone(this.backgroundSnapshot);
+		const dynamicTasks = this.dynamicTaskPlan ? structuredClone(this.dynamicTaskPlan) : undefined;
 		const filesModified = unique(fileModifications.map((record) => record.path));
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
@@ -997,6 +1008,7 @@ export class TaskLedger {
 			privilege,
 			workflows,
 			background,
+			dynamicTasks,
 			verification,
 			todos,
 			documentContract,
@@ -1450,6 +1462,7 @@ export class TaskLedger {
 			this.startedAt === undefined &&
 			commands.length === 0 &&
 			!this.documentContract &&
+			!this.dynamicTaskPlan &&
 			this.workflowRecords.size === 0 &&
 			this.backgroundSnapshot.tasks.length === 0
 		)
@@ -1595,20 +1608,41 @@ export class TaskLedger {
 			}
 		}
 
-		if (this.startedAt === undefined && commands.length === 0 && !this.documentContract) return todos;
+		const dynamicTasks = this.dynamicTaskPlan;
+		if (dynamicTasks) {
+			for (const [index, task] of dynamicTasks.tasks.entries()) {
+				todos.push({
+					id: `dynamic-task:${task.id}`,
+					label: task.title,
+					status: task.status,
+					sequence: index,
+					updatedAt: task.updatedAt,
+					completedAt: task.completedAt,
+					owner: DEFAULT_TASK_OWNER,
+					blockedBy: task.blockedBy.length > 0 ? [...task.blockedBy] : undefined,
+					activity: task.activity,
+					source: "dynamic-task",
+				});
+			}
+		}
+
+		if (this.startedAt === undefined && commands.length === 0 && !this.documentContract && !dynamicTasks)
+			return todos;
 
 		const discoveryCompletedAt =
 			firstCommand?.endedAt ?? (firstCommand?.status === "running" ? undefined : firstCommand?.startedAt);
-		todos.push({
-			id: "discover",
-			label: "Inspect task context",
-			status: firstCommand ? (discoveryCompletedAt === undefined ? "active" : "completed") : "active",
-			sequence: 0,
-			updatedAt: discoveryCompletedAt ?? this.startedAt ?? now,
-			completedAt: discoveryCompletedAt,
-			owner: DEFAULT_TASK_OWNER,
-			activity: firstCommand?.label,
-		});
+		if (!dynamicTasks) {
+			todos.push({
+				id: "discover",
+				label: "Inspect task context",
+				status: firstCommand ? (discoveryCompletedAt === undefined ? "active" : "completed") : "active",
+				sequence: 0,
+				updatedAt: discoveryCompletedAt ?? this.startedAt ?? now,
+				completedAt: discoveryCompletedAt,
+				owner: DEFAULT_TASK_OWNER,
+				activity: firstCommand?.label,
+			});
+		}
 
 		let executeStatus: TaskTodoStatus = "pending";
 		let executeCompletedAt: number | undefined;
@@ -1620,19 +1654,21 @@ export class TaskLedger {
 			executeStatus = "completed";
 			executeCompletedAt = latestMutation?.endedAt;
 		}
-		todos.push({
-			id: "execute",
-			label:
-				filesModified.length > 0
-					? `Update ${filesModified.length} file${filesModified.length === 1 ? "" : "s"}`
-					: "Make requested changes",
-			status: executeStatus,
-			sequence: 1,
-			updatedAt: latestMutation?.endedAt ?? latestMutation?.startedAt ?? this.startedAt ?? now,
-			completedAt: executeCompletedAt,
-			owner: DEFAULT_TASK_OWNER,
-			activity: latestMutation?.summary,
-		});
+		if (!dynamicTasks) {
+			todos.push({
+				id: "execute",
+				label:
+					filesModified.length > 0
+						? `Update ${filesModified.length} file${filesModified.length === 1 ? "" : "s"}`
+						: "Make requested changes",
+				status: executeStatus,
+				sequence: 1,
+				updatedAt: latestMutation?.endedAt ?? latestMutation?.startedAt ?? this.startedAt ?? now,
+				completedAt: executeCompletedAt,
+				owner: DEFAULT_TASK_OWNER,
+				activity: latestMutation?.summary,
+			});
+		}
 
 		const verifyStatus: TaskTodoStatus =
 			verification.status === "running"
@@ -1642,16 +1678,18 @@ export class TaskLedger {
 					: verification.status === "failed" || verification.status === "cancelled"
 						? "failed"
 						: "pending";
-		todos.push({
-			id: "verify",
-			label: "Run verification",
-			status: verifyStatus,
-			sequence: 2,
-			updatedAt: verification.timestamp ?? this.startedAt ?? now,
-			completedAt: verification.status === "passed" ? verification.timestamp : undefined,
-			owner: DEFAULT_TASK_OWNER,
-			activity: verification.label,
-		});
+		if (!dynamicTasks) {
+			todos.push({
+				id: "verify",
+				label: "Run verification",
+				status: verifyStatus,
+				sequence: 2,
+				updatedAt: verification.timestamp ?? this.startedAt ?? now,
+				completedAt: verification.status === "passed" ? verification.timestamp : undefined,
+				owner: DEFAULT_TASK_OWNER,
+				activity: verification.label,
+			});
+		}
 
 		const commitCommands = commands.filter((command) => command.commit);
 		const latestCommit = commitCommands[commitCommands.length - 1];

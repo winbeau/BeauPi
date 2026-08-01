@@ -266,6 +266,10 @@ Tasks
 - 隐藏项显示分类摘要，例如 `… +1 in progress, 3 pending, 4 completed`
 - 来源于文档的任务可在展开状态显示引用
 - Workflow 节点与 Todo 使用相同状态语言
+- Dynamic Task header显示 `plan r<revision>`、完成数和 blocked/failed attention；Footer使用 `tasks <completed>/<total>` 紧凑摘要
+- Dynamic Task标题保持简短但可辨识，通常保留 1–2 个组件、协议或子系统关键名词；约 15 个汉字是软目标，不做硬性截断
+- active Dynamic Task可在下一行显示有界 activity；保留内部 `dynamic-task` provenance，但 Tasks UI不显示 `· dynamic-task` 来源标签
+- 存在 Dynamic Task计划时只隐藏重复的通用 discover/execute/verify，Document、Workflow、Background、Monitor、interaction、privilege 和 failure行继续共存
 
 ## 子 Agent
 

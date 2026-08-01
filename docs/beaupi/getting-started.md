@@ -258,10 +258,9 @@ npm run check
 
 ## 后续里程碑
 
-BeauPi M0–M13 已完成。当前按优先主线推进：
+BeauPi M0–M14 已完成。后续里程碑按以下方式推进：
 
-1. M14：实现动态 Task 计划、Task Runtime、首次 mutation 更新和受限快速模型进度审阅。
-2. M15、M16 等：按后续新增功能继续编号。
-3. M Final：全部功能稳定后再决定独立 npm 发行物和二进制方案。
+1. M15、M16 等：按后续新增功能继续编号。
+2. M Final：全部功能稳定后再决定独立 npm 发行物和二进制方案。
 
-M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime、M10 Policy Runtime 和 M11 Workflow Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、clarification request 和生命周期事件与 Coordinator 交互。
+M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime、M10 Policy Runtime、M11 Workflow Runtime、M12 Background Runtime 和 M14 Dynamic Task Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、clarification request 和生命周期事件与 Coordinator 交互。

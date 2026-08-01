@@ -717,7 +717,7 @@ Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权
 
 ## M14：动态 Task 计划与进度审阅
 
-状态：规划中。
+状态：已完成。
 
 ### 目标
 
@@ -730,7 +730,7 @@ Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权
 - 可执行用户提示词进入时由主 Agent 在现有回合内提交初始 Task JSON，不额外启动预规划模型回合
 - 首次 Edit/Write/修改型 Bash 自动激活对应任务；重大范围变化由主 Agent 刷新计划
 - Dynamic Tasks 接入现有 Task Ledger、Tasks Widget、Footer 和宽度安全 renderer；存在动态计划时隐藏重复的通用 discover/execute/verify Todo
-- 确定性 Tool、文件修改、验证、Workflow 和 Background facts 优先更新 activity/evidence
+- 确定性 Tool、文件修改、验证、Workflow、Background 和 Monitor facts 优先更新 activity/evidence
 - Task Reviewer 与 Bash Terminal 共同复用 `review.model`、ModelRuntime 解析和 provider fallback，不增加独立模型设置；只允许修改状态、activity、evidence 和 blockedBy，不能增删、重命名或重排任务
 - Reviewer 只在 facts hash 变化、主 Agent settled、修改批次结束、验证结束或关键失败时受预算调用；普通完成不向主 Agent 注入对话消息
 - 每次 Provider 请求前向主 Agent 投影紧凑任务快照；只有 blocked、revision 冲突或需要重新规划时进入 follow-up
@@ -745,6 +745,14 @@ Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权
 ### 验收标准
 
 一个可执行用户任务能在首次主 Agent 回合生成动态计划；首次修改和重大阶段变化及时更新 Tasks；完成、失败、阻塞和验证状态可由确定性事实或受限 Reviewer 安全推进；Session 恢复、Compact、branch 切换和 Reviewer 失败不会丢失、重复或回滚任务状态，主 Agent 对话历史不被普通进度更新污染。
+
+### 验收记录（2026-08-01）
+
+- 已交付 Coordinator-only `tasks_update`、严格 TypeBox schema、单调 revision/CAS、branch-local snapshot/review custom entry 和唯一 `DynamicTaskRuntime`。
+- 首次 mutation、sudo、verification、Workflow、Background 和 Monitor 使用稳定结构化 facts；无明确匹配不修改任意 Task，重复事件不推进 revision，facts-only revision漂移可安全重基而不触发重复 `tasks_update`。
+- 受限 Task Reviewer 与 Terminal 共用 `review.model`、ModelRuntime 和 provider fallback；无新 facts零调用，revision/hash/evidence不匹配及失败路径均原子丢弃。
+- Dynamic Tasks 已接入 Task Ledger、Tasks Widget、Footer、usage统计和每请求 prompt projection，并保持 Document、Workflow、Background、Monitor、interaction、privilege 和 failure 共存。
+- faux provider、恢复、并发、dispose、Reviewer、Prompt、暗亮主题及 40/80/120/160 宽度测试已覆盖；定向测试、相关测试、`./test.sh` 和 `npm run check` 通过。
 
 ## M Final：发行准备
 
@@ -806,10 +814,6 @@ M Final 不占用后续数字里程碑；新增功能继续使用 M15、M16 等�
 
 ## 当前推荐开发入口
 
-M0–M13 已形成连续能力闭环。下一阶段推进 M14 动态 Task 计划与进度审阅：
+M0–M14 已形成连续能力闭环。后续功能继续使用 M15、M16 等编号；M Final 发行准备等待后续新增功能稳定后再启动。
 
-1. 先实现版本化 Task Runtime、`tasks_update`、revision CAS 和 Session 恢复。
-2. 接入用户任务、首次 mutation、重大计划变化及现有 Task Ledger/TUI 投影。
-3. 状态稳定后再接入受限快速模型 Reviewer，并以确定性 facts、hash 去重和预算控制调用。
-
-继续复用现有 AgentSession、Task Ledger、Session custom entries、ModelRuntime 和 TUI；M Final 发行准备等待 M14 及后续新增功能稳定后再启动。
+M14 已稳定复用现有 AgentSession、Task Ledger、Session custom entries、ModelRuntime 和 TUI，并提供后续里程碑可复用的 branch-local revision/CAS、结构化 facts、受限 Reviewer 和 next-turn projection 边界。

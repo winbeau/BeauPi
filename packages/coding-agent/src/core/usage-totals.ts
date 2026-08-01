@@ -1,5 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "./session-manager.ts";
+import { DYNAMIC_TASK_REVIEW_ENTRY_TYPE, getDynamicTaskReviewEntry } from "./tasks/index.ts";
 
 export interface UsageTotals {
 	input: number;
@@ -49,6 +50,12 @@ export function getUsageCostBreakdown(entries: SessionEntry[]): UsageCostBreakdo
 		} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			key = "Tools/summaries";
 			usage = entry.usage;
+		} else if (entry.type === "custom" && entry.customType === DYNAMIC_TASK_REVIEW_ENTRY_TYPE) {
+			const review = getDynamicTaskReviewEntry(entry.data);
+			if (review?.usage) {
+				key = "Reviews";
+				usage = review.usage;
+			}
 		}
 		if (!key || !usage) continue;
 

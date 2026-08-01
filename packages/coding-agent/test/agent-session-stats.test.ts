@@ -11,6 +11,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { DYNAMIC_TASK_REVIEW_ENTRY_TYPE } from "../src/core/tasks/types.ts";
 import { getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader } from "./utilities.ts";
@@ -67,9 +68,8 @@ function createToolResultMessage(usage: Usage): ToolResultMessage {
 	};
 }
 
-async function createSession() {
+async function createSession(sessionManager = SessionManager.inMemory()) {
 	const settingsManager = SettingsManager.inMemory();
-	const sessionManager = SessionManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
 	await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
 	const session = new AgentSession({
@@ -229,6 +229,50 @@ describe("AgentSession.getSessionStats", () => {
 			expect(stats.cost).toBe(1);
 		} finally {
 			session.dispose();
+		}
+	});
+
+	it("restores Dynamic Task Reviewer usage from persisted custom entries", async () => {
+		const sessionManager = SessionManager.inMemory();
+		const first = await createSession(sessionManager);
+		const usage = {
+			input: 10,
+			output: 20,
+			cacheRead: 30,
+			cacheWrite: 40,
+			totalTokens: 100,
+			cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
+		};
+		try {
+			sessionManager.appendCustomEntry(DYNAMIC_TASK_REVIEW_ENTRY_TYPE, {
+				version: 1,
+				planId: "plan-stats",
+				expectedRevision: 1,
+				actualRevision: 2,
+				factsHash: "a".repeat(64),
+				throughFactSequence: 3,
+				status: "completed",
+				createdAt: 4,
+				model: "faux/review",
+				usage,
+			});
+			expect(first.session.getSessionStats().tokens).toEqual({
+				input: 10,
+				output: 20,
+				cacheRead: 30,
+				cacheWrite: 40,
+				total: 100,
+			});
+		} finally {
+			first.session.dispose();
+		}
+
+		const restored = await createSession(sessionManager);
+		try {
+			expect(restored.session.getSessionStats().cost).toBe(1);
+			expect(getUsageCostBreakdown(sessionManager.getEntries())).toEqual([{ key: "Reviews", cost: 1, tokens: 100 }]);
+		} finally {
+			restored.session.dispose();
 		}
 	});
 

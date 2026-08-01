@@ -41,6 +41,20 @@ describe("M11 Workflow AgentSession lifecycle", () => {
 	it("registers Workflow Tools, persists structured results, and restores only current-branch facts across Compact/resume", async () => {
 		const harness = await createHarness();
 		const { session } = await createWorkflowSession(harness);
+		await session.dynamicTaskRuntime?.updatePlan({
+			version: 1,
+			expectedRevision: 0,
+			reason: "initial_plan",
+			goal: "Run session workflow",
+			tasks: [
+				{
+					id: "workflow",
+					title: "Run session workflow",
+					status: "active",
+					matchHints: ["session-workflow"],
+				},
+			],
+		});
 		expect(session.getActiveToolNames()).toEqual(
 			expect.arrayContaining(["workflow_run", "workflow_status", "workflow_cancel"]),
 		);
@@ -68,6 +82,13 @@ describe("M11 Workflow AgentSession lifecycle", () => {
 		expect(workflow?.nodes[0]?.output).not.toHaveProperty("messages");
 		expect(session.taskLedger.getSnapshot().workflows).toHaveLength(1);
 		expect(session.taskLedger.getSnapshot().todos.some((todo) => todo.id.includes("workflow:"))).toBe(true);
+		const dynamicWorkflowTask = session.dynamicTaskRuntime
+			?.getSnapshot()
+			?.tasks.find((task) => task.id === "workflow");
+		expect(dynamicWorkflowTask?.status).toBe("completed");
+		expect(
+			dynamicWorkflowTask?.evidence.some((id) => id.startsWith(`workflow:${workflow?.workflowId}:inspect:`)),
+		).toBe(true);
 
 		const originalLeaf = session.sessionManager.getLeafId()!;
 		const userEntry = session.sessionManager

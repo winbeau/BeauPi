@@ -43,7 +43,7 @@ function taskTodoSymbol(status: TaskTodoStatus): string {
 function taskLabel(todo: TaskTodo, width: number): string {
 	const showOwner = width >= 60 && todo.owner;
 	const owner = showOwner ? theme.fg("dim", `(@${todo.owner})`) : "";
-	const source = width >= 80 && todo.source ? theme.fg("dim", todo.source) : "";
+	const source = width >= 80 && todo.source && todo.source !== "dynamic-task" ? theme.fg("dim", todo.source) : "";
 	const blocked =
 		todo.status === "blocked" && todo.blockedBy && todo.blockedBy.length > 0
 			? theme.fg("dim", `▸ blocked by ${todo.blockedBy.join(", ")}`)
@@ -71,6 +71,17 @@ function renderTodo(todo: TaskTodo, width: number): string {
 	const prefix = `  ${symbol} `;
 	if (visibleWidth(prefix) >= availableWidth) return truncateToWidth(prefix, availableWidth, "");
 	return `${prefix}${taskLabel(todo, availableWidth - visibleWidth(prefix))}`;
+}
+
+function renderTodoActivity(todo: TaskTodo, width: number): string | undefined {
+	if (todo.status !== "active" || !todo.activity) return undefined;
+	return fitSingleLine(
+		[
+			{ text: theme.fg("dim", "    ⎿"), required: true },
+			{ text: theme.fg("dim", todo.activity), separator: "  ", required: true, truncate: true },
+		],
+		width,
+	);
 }
 
 function hiddenTodoSummary(hidden: readonly TaskTodo[], width: number): string | undefined {
@@ -228,10 +239,39 @@ export class TaskLedgerWidget implements Component {
 			(workflow) => workflow.status === "failed" || workflow.status === "lost",
 		).length;
 		const backgroundSummary = snapshot.background?.summary;
+		const dynamicTasks = snapshot.dynamicTasks;
+		const dynamicCompleted = dynamicTasks?.tasks.filter((task) => task.status === "completed").length ?? 0;
+		const dynamicAttention =
+			dynamicTasks?.tasks.filter((task) => task.status === "blocked" || task.status === "failed").length ?? 0;
 		const header = fitSingleLine(
 			[
 				{ text: theme.bold("Tasks"), required: true },
-				{ text: theme.fg("accent", snapshot.phase), separator: " · ", required: true },
+				{
+					text: dynamicTasks ? theme.fg("accent", `plan r${dynamicTasks.revision}`) : "",
+					separator: " · ",
+					required: dynamicTasks !== undefined,
+				},
+				{
+					text: dynamicTasks
+						? theme.fg(
+								dynamicAttention > 0 ? "warning" : "dim",
+								`${dynamicCompleted}/${dynamicTasks.tasks.length} completed`,
+							)
+						: "",
+					separator: " · ",
+					priority: 4,
+				},
+				{
+					text: dynamicAttention > 0 ? theme.fg("warning", `${dynamicAttention} attention`) : "",
+					separator: " · ",
+					priority: 4,
+				},
+				{
+					text: theme.fg("accent", snapshot.phase),
+					separator: " · ",
+					required: dynamicTasks === undefined,
+					priority: 3,
+				},
 				{
 					text:
 						snapshot.filesModified.length > 0
@@ -298,7 +338,11 @@ export class TaskLedgerWidget implements Component {
 			],
 			availableWidth,
 		);
-		const lines = [header, ...selection.visible.map((todo) => renderTodo(todo, availableWidth))];
+		const todoLines = selection.visible.flatMap((todo) => {
+			const activity = renderTodoActivity(todo, availableWidth);
+			return activity ? [renderTodo(todo, availableWidth), activity] : [renderTodo(todo, availableWidth)];
+		});
+		const lines = [header, ...todoLines];
 		const hiddenSummary = hiddenTodoSummary(selection.hidden, availableWidth);
 		if (hiddenSummary) lines.push(hiddenSummary);
 		for (const record of selectMonitorRows(monitorRecords, Math.max(2, Math.min(4, todoLimit)))) {

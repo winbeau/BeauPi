@@ -5,6 +5,7 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { RecentRunStatsTracker, type RecentRunStatus } from "../../../core/recent-run-stats.ts";
+import { DYNAMIC_TASK_REVIEW_ENTRY_TYPE, getDynamicTaskReviewEntry } from "../../../core/tasks/index.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
 import { fitSingleLine, type ResponsivePart } from "./beaupi-style.ts";
@@ -138,6 +139,9 @@ export class FooterComponent implements Component {
 				addUsageToTotals(totals, entry.message.usage);
 			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(totals, entry.usage);
+			} else if (entry.type === "custom" && entry.customType === DYNAMIC_TASK_REVIEW_ENTRY_TYPE) {
+				const review = getDynamicTaskReviewEntry(entry.data);
+				if (review?.usage) addUsageToTotals(totals, review.usage);
 			}
 		}
 		const snapshot = { totals, latestCacheHitRate };
@@ -197,6 +201,13 @@ export class FooterComponent implements Component {
 			? `policy: ${sanitizeStatusText(latestPolicyAdvisory.message)}${policyAdvisories.length > 1 ? ` (+${policyAdvisories.length - 1})` : ""}`
 			: "";
 		const taskLedger = this.session.taskLedger.getSnapshot();
+		const dynamicTasks = taskLedger.dynamicTasks;
+		const dynamicCompleted = dynamicTasks?.tasks.filter((task) => task.status === "completed").length ?? 0;
+		const dynamicBlocked = dynamicTasks?.tasks.filter((task) => task.status === "blocked").length ?? 0;
+		const dynamicFailed = dynamicTasks?.tasks.filter((task) => task.status === "failed").length ?? 0;
+		const dynamicTaskSummary = dynamicTasks
+			? `tasks ${dynamicCompleted}/${dynamicTasks.tasks.length}${dynamicBlocked > 0 ? ` · ${dynamicBlocked} blocked` : dynamicFailed > 0 ? ` · ${dynamicFailed} failed` : ""}`
+			: "";
 		const monitorSummary = this.session.monitorRuntime?.getSummary();
 		const backgroundSummary = taskLedger.background?.summary;
 		const workflows = taskLedger.workflows ?? [];
@@ -204,7 +215,8 @@ export class FooterComponent implements Component {
 		const attentionWorkflows = workflows.filter(
 			(workflow) => workflow.status === "failed" || workflow.status === "lost",
 		).length;
-		const hasTaskActivity = taskLedger.startedAt !== undefined || taskLedger.commands.length > 0;
+		const hasTaskActivity =
+			taskLedger.startedAt !== undefined || taskLedger.commands.length > 0 || dynamicTasks !== undefined;
 		const modifiedFiles =
 			taskLedger.filesModified.length > 0
 				? `${taskLedger.filesModified.length} file${taskLedger.filesModified.length === 1 ? "" : "s"}`
@@ -224,6 +236,13 @@ export class FooterComponent implements Component {
 				{ text: branch ? theme.fg("dim", `(${branch})`) : "", separator: " ", priority: 5 },
 				{
 					text: policyAdvisory ? theme.fg("warning", policyAdvisory) : "",
+					separator: " · ",
+					priority: 5,
+				},
+				{
+					text: dynamicTaskSummary
+						? theme.fg(dynamicBlocked + dynamicFailed > 0 ? "warning" : "accent", dynamicTaskSummary)
+						: "",
 					separator: " · ",
 					priority: 5,
 				},

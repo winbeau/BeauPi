@@ -5,6 +5,7 @@ import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provide
 import type { MonitorRecord } from "../src/core/monitor/index.ts";
 import type { PolicyAdvisory } from "../src/core/policy/index.ts";
 import type { TaskPhase, TaskVerificationStatus } from "../src/core/state/task-ledger.ts";
+import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -33,6 +34,7 @@ function createSession(options: {
 	monitors?: MonitorRecord[];
 	selectedTargetId?: string;
 	policyAdvisories?: PolicyAdvisory[];
+	dynamicTasks?: DynamicTaskPlanV1;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -125,6 +127,7 @@ function createSession(options: {
 				filesModified: options.filesModified ?? [],
 				failures: [],
 				verification: { status: options.verificationStatus ?? "none" },
+				dynamicTasks: options.dynamicTasks,
 				todos: [],
 			}),
 		},
@@ -274,6 +277,54 @@ describe("FooterComponent width handling", () => {
 		const lines = footer.render(120).map(stripAnsi);
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("/tmp/project (main) · verify · 2 files · verify passed");
+	});
+
+	it("shows Dynamic Task progress and attention without adding a Footer line", () => {
+		const dynamicTasks: DynamicTaskPlanV1 = {
+			version: 1,
+			planId: "plan-footer",
+			revision: 4,
+			goal: "Footer projection",
+			createdAt: 1,
+			updatedAt: 4,
+			factSequence: 0,
+			facts: [],
+			tasks: [
+				{
+					id: "done",
+					title: "Done",
+					status: "completed",
+					dependsOn: [],
+					matchHints: [],
+					evidence: [],
+					blockedBy: [],
+					createdAt: 1,
+					updatedAt: 2,
+					completedAt: 2,
+				},
+				{
+					id: "blocked",
+					title: "Blocked",
+					status: "blocked",
+					dependsOn: [],
+					matchHints: [],
+					evidence: [],
+					blockedBy: ["dependency"],
+					createdAt: 1,
+					updatedAt: 4,
+				},
+			],
+		};
+		for (const themeName of ["beaupi-dark", "beaupi-light"]) {
+			initTheme(themeName, false);
+			const footer = new FooterComponent(createSession({ sessionName: "", dynamicTasks }), createFooterData(1));
+			for (const width of [40, 80, 120, 160]) {
+				const lines = footer.render(width);
+				expect(lines.length).toBeLessThanOrEqual(3);
+				for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				if (width >= 80) expect(stripAnsi(lines[0] ?? "")).toContain("tasks 1/2 · 1 blocked");
+			}
+		}
 	});
 
 	it("shows Monitor running and attention counts without overflowing", () => {

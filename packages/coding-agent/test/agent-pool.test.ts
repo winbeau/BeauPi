@@ -187,6 +187,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 							"edit",
 							"write",
 							"delegate_task",
+							"tasks_update",
 							"ask_user_question",
 							"privileged_exec",
 							"custom_allowed",
@@ -223,6 +224,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(seenTools).not.toContain("edit");
 		expect(seenTools).not.toContain("write");
 		expect(seenTools).not.toContain("delegate_task");
+		expect(seenTools).not.toContain("tasks_update");
 		expect(seenTools).not.toContain("ask_user_question");
 		expect(seenTools).not.toContain("privileged_exec");
 		expect(seenSystemPrompt).toContain("CONTROLLED PROFILE");

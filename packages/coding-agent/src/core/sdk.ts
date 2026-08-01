@@ -125,6 +125,8 @@ export interface CreateAgentSessionOptions {
 	synchronizeSearchBudget?: boolean;
 	/** Enable the BeauPi in-process Agent Pool for this Coordinator session. */
 	agentPool?: AgentPoolConfig | false;
+	/** Enable the Coordinator Dynamic Task Runtime and tasks_update Tool. Defaults to true. */
+	dynamicTasks?: boolean;
 	/** Inject a session-scoped Monitor Runtime, primarily for deterministic tests. */
 	monitorRuntime?: MonitorRuntime;
 	/** Inject a session-scoped M7 remote runtime, primarily for deterministic tests. */
@@ -424,6 +426,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_read",
 		"docs_resolve_task",
 		"ask_user_question",
+		"tasks_update",
 		"privileged_exec",
 		"web_search",
 		"web_fetch",
@@ -609,6 +612,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		policyRuntime,
 		privilegeRuntime,
 		remoteRuntime,
+		dynamicTasksEnabled:
+			options.dynamicTasks !== false && !(options.noTools === "builtin" && options.tools === undefined),
 	});
 	await session.initializeDocumentRuntime();
 	await session.initializeMonitorRuntime();

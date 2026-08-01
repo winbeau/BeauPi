@@ -258,6 +258,11 @@ M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract�
 - 只记录当前 Session 可确定的 Tool、Shell、文件和验证事实。
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
 - M11 Workflow Runtime 将实时结构化快照投影到同一 Ledger；Workflow Tool Result 和 Monitor records 负责分支恢复，Tasks Widget 与 Footer 只消费 Ledger/Monitor snapshot，不读取或驱动调度器。
+- M14 `DynamicTaskRuntime` 是 branch-local 动态计划、revision/CAS、facts/evidence 和受限 Reviewer patch 的唯一状态源；Task Ledger 只消费其结构化快照。存在动态计划时只替换通用 discover/execute/verify Todo，Document、Workflow、Background、Monitor、interaction、privilege 和 failure 投影继续共存。
+
+M14 的主 Agent 通过 Coordinator-only `tasks_update` 完整编写 Task 结构。Edit/Write、修改型 Bash、sudo、verification、Workflow、Background 和 Monitor 生命周期只提交稳定 ID 的确定性事实；无明确 title/matchHints/runtime ID 匹配时事实留在全局池，不修改任意 Task。facts-only revision漂移通过 expected snapshot与当前 snapshot三方重基，保留异步 status/activity/evidence/blockedBy；只有 goal、Task ID/顺序、title、dependsOn 或 matchHints 已被另一结构更新改变时才返回 CAS conflict。`beaupi.dynamic-task.snapshot` 和 `beaupi.dynamic-task.review` custom entry 负责 Compact、resume 和 branch 恢复，reload 复验当前 branch，dispose 后拒绝新写入。
+
+Task Reviewer 无 Tool、文件权限、主 Agent transcript 或完整日志，只接收有界当前快照和新增 facts。它与 Terminal Reviewer 共用 `review.model`、`ReviewModelResolver`、ModelRuntime 鉴权和 provider fallback；Runtime 在原子应用前再次校验 revision、facts hash、Task ID、状态转换和本轮新 evidence。普通进度只刷新 Ledger/TUI，blocked、revision conflict 或 replan 才使用现有 next-turn custom message。
 
 ## Remote Terminal transport
 

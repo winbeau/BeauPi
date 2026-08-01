@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BackgroundRuntimeSnapshotV1 } from "../src/core/background/index.ts";
 import { TaskLedger } from "../src/core/state/task-ledger.ts";
+import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 
 function backgroundSnapshot(): BackgroundRuntimeSnapshotV1 {
 	const task = {
@@ -66,14 +67,42 @@ function backgroundSnapshot(): BackgroundRuntimeSnapshotV1 {
 describe("TaskLedger Background projection", () => {
 	it("projects waiting tasks and wake attention without a second task state system", () => {
 		const ledger = new TaskLedger({ taskId: "session", cwd: process.cwd() });
+		const plan: DynamicTaskPlanV1 = {
+			version: 1,
+			planId: "plan-bg",
+			revision: 1,
+			goal: "Wait for tests",
+			createdAt: 1,
+			updatedAt: 1,
+			factSequence: 0,
+			facts: [],
+			tasks: [
+				{
+					id: "tests",
+					title: "Run tests",
+					status: "active",
+					dependsOn: [],
+					matchHints: [],
+					evidence: [],
+					blockedBy: [],
+					createdAt: 1,
+					updatedAt: 1,
+				},
+			],
+		};
+		ledger.setDynamicTaskPlan(plan);
 		ledger.setBackgroundSnapshot(backgroundSnapshot());
 		const snapshot = ledger.getSnapshot(10);
 		expect(snapshot.background?.summary).toMatchObject({ running: 1, wakeQueued: 1 });
 		expect(snapshot.todos).toEqual(
 			expect.arrayContaining([
+				expect.objectContaining({ id: "dynamic-task:tests", source: "dynamic-task" }),
 				expect.objectContaining({ id: "background:bg-ledger", status: "active", label: "Wait for tests" }),
 				expect.objectContaining({ id: "background:wake-queue", status: "blocked" }),
 			]),
+		);
+		expect(snapshot.todos.map((todo) => todo.id)).not.toEqual(
+			expect.arrayContaining(["discover", "execute", "verify"]),
 		);
 	});
 });

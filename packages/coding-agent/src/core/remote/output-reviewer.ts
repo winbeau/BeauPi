@@ -1,7 +1,12 @@
 import { type Api, type Context, contentText, type Model, type Usage } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../model-runtime.ts";
+import {
+	mergeReviewUsage,
+	ReviewModelResolver,
+	type ReviewModelRuntime,
+	reviewModelLabel,
+} from "../review/model-resolver.ts";
 
-const DEFAULT_REVIEW_MODEL = "gpt-5.6-luna";
 const ERROR_LINE_PATTERN =
 	/\b(error|failed|failure|fatal|exception|traceback|panic|denied|timeout|timed out|not found|cannot|unable|invalid|warning|warn|ts\d{4})\b/i;
 
@@ -28,10 +33,11 @@ export interface TerminalOutputReviewer {
 	review(input: TerminalReviewInput, signal?: AbortSignal): Promise<TerminalReviewResult>;
 }
 
-type TerminalReviewModelRuntime = Pick<ModelRuntime, "completeSimple" | "getModel" | "getModels" | "hasConfiguredAuth">;
+type TerminalReviewModelRuntime = ReviewModelRuntime & Pick<ModelRuntime, "completeSimple">;
 
 export interface LunaTerminalOutputReviewerOptions {
 	modelRuntime: TerminalReviewModelRuntime;
+	modelResolver?: ReviewModelResolver;
 	getModelSetting?: () => string | undefined;
 	getPreferredProvider?: () => string | undefined;
 }
@@ -106,36 +112,6 @@ function fallbackBody(input: TerminalReviewInput): string {
 	return usefulLines ? `${status}\n${usefulLines}` : status;
 }
 
-function mergeUsage(left: Usage | undefined, right: Usage): Usage {
-	if (!left) return structuredClone(right);
-	return {
-		input: left.input + right.input,
-		output: left.output + right.output,
-		cacheRead: left.cacheRead + right.cacheRead,
-		cacheWrite: left.cacheWrite + right.cacheWrite,
-		cacheWrite1h:
-			left.cacheWrite1h === undefined && right.cacheWrite1h === undefined
-				? undefined
-				: (left.cacheWrite1h ?? 0) + (right.cacheWrite1h ?? 0),
-		reasoning:
-			left.reasoning === undefined && right.reasoning === undefined
-				? undefined
-				: (left.reasoning ?? 0) + (right.reasoning ?? 0),
-		totalTokens: left.totalTokens + right.totalTokens,
-		cost: {
-			input: left.cost.input + right.cost.input,
-			output: left.cost.output + right.cost.output,
-			cacheRead: left.cost.cacheRead + right.cost.cacheRead,
-			cacheWrite: left.cost.cacheWrite + right.cost.cacheWrite,
-			total: left.cost.total + right.cost.total,
-		},
-	};
-}
-
-function modelLabel(model: Model<Api>): string {
-	return `${model.provider}/${model.id}`;
-}
-
 function reviewCharacterBudget(model: Model<Api>): number | undefined {
 	if (!model.contextWindow || model.contextWindow <= 0) return undefined;
 	const availableTokens = model.contextWindow - (model.maxTokens ?? 0);
@@ -144,20 +120,25 @@ function reviewCharacterBudget(model: Model<Api>): number | undefined {
 
 export class LunaTerminalOutputReviewer implements TerminalOutputReviewer {
 	private readonly modelRuntime: TerminalReviewModelRuntime;
-	private readonly getModelSetting: () => string | undefined;
-	private readonly getPreferredProvider: () => string | undefined;
+	private readonly modelResolver: ReviewModelResolver;
 
 	constructor(options: LunaTerminalOutputReviewerOptions) {
 		this.modelRuntime = options.modelRuntime;
-		this.getModelSetting = options.getModelSetting ?? (() => DEFAULT_REVIEW_MODEL);
-		this.getPreferredProvider = options.getPreferredProvider ?? (() => undefined);
+		this.modelResolver =
+			options.modelResolver ??
+			new ReviewModelResolver({
+				modelRuntime: options.modelRuntime,
+				getModelSetting: options.getModelSetting ?? (() => undefined),
+				getPreferredProvider: options.getPreferredProvider ?? (() => undefined),
+			});
 	}
 
 	async review(input: TerminalReviewInput, signal?: AbortSignal): Promise<TerminalReviewResult> {
-		const candidates = this.resolveModels(this.getModelSetting()?.trim() || DEFAULT_REVIEW_MODEL);
+		const resolution = this.modelResolver.resolve();
+		const candidates = resolution.candidates;
 		let usage: Usage | undefined;
 		let inputTruncated = false;
-		let lastError = candidates.length === 0 ? "No configured terminal output review model is available" : undefined;
+		let lastError = resolution.error;
 		for (const model of candidates) {
 			const material = boundedReviewMaterial(input.output, reviewCharacterBudget(model));
 			inputTruncated = inputTruncated || material.truncated;
@@ -166,12 +147,12 @@ export class LunaTerminalOutputReviewer implements TerminalOutputReviewer {
 					signal,
 					cacheRetention: "none",
 				});
-				usage = mergeUsage(usage, response.usage);
+				usage = mergeReviewUsage(usage, response.usage);
 				const report = contentText(response.content).trim();
 				if ((response.stopReason === "stop" || response.stopReason === "length") && report) {
 					return {
 						text: withLogPath(report, input.logPath),
-						model: modelLabel(model),
+						model: reviewModelLabel(model),
 						status: "completed",
 						inputTruncated,
 						usage,
@@ -185,33 +166,12 @@ export class LunaTerminalOutputReviewer implements TerminalOutputReviewer {
 		}
 		return {
 			text: withLogPath(fallbackBody(input), input.logPath),
-			model: candidates.at(-1) ? modelLabel(candidates.at(-1)!) : undefined,
+			model: candidates.at(-1) ? reviewModelLabel(candidates.at(-1)!) : undefined,
 			status: "fallback",
 			inputTruncated,
 			usage,
 			error: lastError,
 		};
-	}
-
-	private resolveModels(setting: string): Model<Api>[] {
-		const separator = setting.indexOf("/");
-		if (separator > 0) {
-			const provider = setting.slice(0, separator);
-			const modelId = setting.slice(separator + 1);
-			const model = this.modelRuntime.getModel(provider, modelId);
-			return model ? [model] : [];
-		}
-		const preferredProvider = this.getPreferredProvider();
-		const preferred = preferredProvider ? this.modelRuntime.getModel(preferredProvider, setting) : undefined;
-		const fallback = this.modelRuntime
-			.getModels()
-			.filter(
-				(model) =>
-					model.id === setting &&
-					model.provider !== preferredProvider &&
-					this.modelRuntime.hasConfiguredAuth(model.provider),
-			);
-		return preferred ? [preferred, ...fallback] : fallback;
 	}
 
 	private context(input: TerminalReviewInput, material: ReviewMaterial): Context {

@@ -8,13 +8,13 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M13 已完成。近期开发转入 M14 动态 Task 计划与进度审阅：
+M0–M14 已完成。M14 已建立动态 Task 计划与进度审阅闭环：
 
-1. 主 Agent 通过 Coordinator-only `tasks_update` 在可执行用户任务开始时创建结构化计划。
-2. Task Runtime 使用 revision/CAS 和 Session custom entry 管理唯一状态，并投影到现有 Task Ledger、Tasks Widget 和 Footer。
-3. 首次 mutation 自动激活任务，重大范围变化由主 Agent 刷新计划；不从 assistant 普通文本解析 JSON。
-4. 状态链稳定后接入受限 Reviewer，与 Bash Terminal 共同复用通用 `review.model` 和模型 fallback，只更新状态和证据，不修改计划结构或直接与主 Agent 对话。
-5. 原 M14 发行准备改为 M Final，等待 M14 及后续新增功能稳定。
+1. 主 Agent 通过 Coordinator-only `tasks_update` 在可执行用户任务的现有首次回合创建结构化计划。
+2. 唯一 Task Runtime 使用 revision/CAS、稳定 facts 和 Session custom entry 管理 branch-local 状态，并投影到现有 Task Ledger、Tasks Widget 和 Footer。
+3. 首次明确 mutation 自动激活匹配 Task；verification、Workflow、Background 和 Monitor 只更新明确关联的 Task，不从 assistant 普通文本解析 JSON。
+4. 受限 Reviewer 与 Bash Terminal 共同复用通用 `review.model` 和模型 fallback，只提交受 revision/hash/evidence约束的状态 patch，不修改计划结构或直接与主 Agent 对话。
+5. 后续功能继续使用 M15、M16 等编号；发行准备保留为 M Final。
 
 M10 已提供确定性分类、等价检查签名、失败/fallback 预算诊断、敏感路径与普通用户 advisory、Search-to-Shell advisory，以及 Session/Compact/branch 一致性。Policy authorization 始终返回 `execute: true`，不发起 TUI/SDK/RPC confirmation；当前执行或最近 Policy fact 的提示只显示在 Footer。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
 
@@ -308,6 +308,8 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 
 ## 阶段 15：动态 Task 计划与进度审阅
 
+状态：已完成。
+
 - 增加 Coordinator-only `tasks_update` 和版本化 Dynamic Task schema
 - 用户可执行任务进入时由主 Agent 在现有回合提交初始计划
 - Task Runtime 维护 revision/CAS、Session、Compact、resume 和 branch 一致性
@@ -345,4 +347,4 @@ M Final 不占用数字里程碑；功能稳定后再进行：
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
 10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成）
 
-当前已连续完成 M0–M13。下一步推进 M14 动态 Task 计划与进度审阅；发行准备保留为 M Final，后续仍可继续增加 M15、M16 等功能里程碑。
+当前已连续完成 M0–M14。后续功能继续使用 M15、M16 等编号；发行准备保留为 M Final。

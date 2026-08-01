@@ -116,6 +116,7 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import {
 	attachPolicyToolDetails,
+	classifyPolicyOperation,
 	hasPotentialShellPrivilege,
 	POLICY_FACT_ENTRY_TYPE,
 	type PolicyInteractionHandler,
@@ -138,14 +139,24 @@ import { LunaTerminalOutputReviewer } from "./remote/output-reviewer.ts";
 import { RemoteExecutionRuntime } from "./remote/runtime.ts";
 import { getRemoteToolDetails } from "./remote/tools.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { ReviewModelResolver } from "./review/model-resolver.ts";
 import { attachSearchRuntimeToolDetails, getSearchRuntimeToolDetails } from "./search/index.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
-import { attachTaskLedgerToolDetails, TaskLedger } from "./state/task-ledger.ts";
+import { attachTaskLedgerToolDetails, isVerificationCommand, TaskLedger } from "./state/task-ledger.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import {
+	createTasksUpdateToolDefinition,
+	DYNAMIC_TASK_NOTICE_MESSAGE_TYPE,
+	DYNAMIC_TASK_REVIEW_ENTRY_TYPE,
+	DynamicTaskRuntime,
+	getDynamicTaskReviewEntry,
+	getDynamicTaskToolDetails,
+	ModelTaskReviewer,
+} from "./tasks/index.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -291,6 +302,10 @@ export interface AgentSessionConfig {
 	remoteRuntime?: RemoteExecutionRuntime;
 	/** Optional M11 Workflow Runtime. Present for Coordinator sessions with an Agent Pool. */
 	workflowRuntime?: WorkflowRuntime;
+	/** Enable the Coordinator-only Dynamic Task Runtime and tasks_update Tool. */
+	dynamicTasksEnabled?: boolean;
+	/** Inject the unique session-scoped Dynamic Task Runtime. */
+	dynamicTaskRuntime?: DynamicTaskRuntime;
 }
 
 export interface ExtensionBindings {
@@ -379,6 +394,7 @@ export class AgentSession {
 	readonly questionRuntime: QuestionRuntime;
 	readonly policyRuntime: PolicyRuntime;
 	readonly privilegeRuntime: PrivilegeRuntime;
+	readonly dynamicTaskRuntime?: DynamicTaskRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -388,9 +404,13 @@ export class AgentSession {
 	private _unsubscribeQuestionRuntime?: () => void;
 	private _unsubscribePolicyRuntime?: () => void;
 	private _unsubscribePrivilegeRuntime?: () => void;
+	private _unsubscribeDynamicTaskRuntime?: () => void;
 	private _unsubscribeWorkflowRuntime?: () => void;
 	private _unsubscribeBackgroundRuntime?: () => void;
+	private _unsubscribeMonitorRuntime?: () => void;
 	private _isAgentRunActive = false;
+	private _isTaskReviewActive = false;
+	private _dynamicTaskRunId = 0;
 	private _promptPreflightCount = 0;
 	private _pendingPromptPreflights = new Set<Promise<void>>();
 	private _idleWaitPromise: Promise<void> | undefined;
@@ -466,10 +486,41 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this._modelRuntime = config.modelRuntime;
+		const reviewModelResolver = new ReviewModelResolver({
+			modelRuntime: this._modelRuntime,
+			getModelSetting: () => this.settingsManager.getReviewModel(),
+			getPreferredProvider: () => this.agent.state.model?.provider,
+		});
 		this.taskLedger = new TaskLedger({
 			taskId: config.sessionManager.getSessionId(),
 			cwd: config.sessionManager.getCwd(),
 			entries: config.sessionManager.getBranch(),
+		});
+		this.dynamicTaskRuntime =
+			config.dynamicTasksEnabled === false
+				? undefined
+				: (config.dynamicTaskRuntime ??
+					new DynamicTaskRuntime({
+						sessionManager: config.sessionManager,
+						reviewer: new ModelTaskReviewer({
+							modelRuntime: this._modelRuntime,
+							modelResolver: reviewModelResolver,
+						}),
+						onNotification: async (notice) => {
+							await this.sendCustomMessage(
+								{
+									customType: DYNAMIC_TASK_NOTICE_MESSAGE_TYPE,
+									content: notice.message,
+									display: false,
+									details: notice,
+								},
+								{ deliverAs: "nextTurn" },
+							);
+						},
+					}));
+		this._unsubscribeDynamicTaskRuntime = this.dynamicTaskRuntime?.subscribe((plan) => {
+			this.taskLedger.setDynamicTaskPlan(plan);
 		});
 		this.questionRuntime = config.questionRuntime ?? new QuestionRuntime();
 		this._unsubscribeQuestionRuntime = this.questionRuntime.subscribe((pending) => {
@@ -498,7 +549,6 @@ export class AgentSession {
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
-		this._modelRuntime = config.modelRuntime;
 		this._agentPool = config.agentPool;
 		this.monitorRuntime =
 			config.monitorRuntime ??
@@ -508,6 +558,14 @@ export class AgentSession {
 				sessionManager: config.sessionManager,
 				agentPool: this._agentPool,
 			});
+		this._unsubscribeMonitorRuntime = this.monitorRuntime.subscribe(async (event) => {
+			await this.dynamicTaskRuntime?.noteMonitor({
+				monitorId: event.monitorId,
+				status: event.status === "starting" ? "started" : event.status,
+				summary: `${event.name}: ${event.taskSummary} · ${event.reason}${event.exitReason ? ` (${event.exitReason})` : ""}`,
+				createdAt: event.timestamp,
+			});
+		});
 		this.backgroundRuntime =
 			config.backgroundRuntime ??
 			new BackgroundTaskManager({
@@ -520,6 +578,23 @@ export class AgentSession {
 		this.taskLedger.setBackgroundSnapshot(this.backgroundRuntime.getSnapshot());
 		this._unsubscribeBackgroundRuntime = this.backgroundRuntime.subscribe((snapshot) => {
 			this.taskLedger.setBackgroundSnapshot(snapshot);
+			for (const task of snapshot.tasks) {
+				void this.dynamicTaskRuntime?.noteBackground({
+					taskId: task.id,
+					status: task.status === "starting" ? "started" : task.status,
+					summary: `${task.name}${task.goal ? ` · ${task.goal}` : ""}: ${task.status}`,
+					createdAt: task.monitor?.lastActivityAt ?? task.createdAt,
+				});
+			}
+			for (const wake of snapshot.wakeEvents) {
+				void this.dynamicTaskRuntime?.noteBackground({
+					taskId: wake.taskId,
+					eventId: `wake:${wake.id}:${wake.state}`,
+					status: wake.monitorStatus === "starting" ? "started" : wake.monitorStatus,
+					summary: wake.log?.summary ?? wake.diagnostic ?? `Background wake: ${wake.reason}`,
+					createdAt: wake.createdAt,
+				});
+			}
 		});
 		this.backgroundRuntime.bindWakeHost({
 			isBusy: () => this.isStreaming,
@@ -541,6 +616,22 @@ export class AgentSession {
 			this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
 			this._unsubscribeWorkflowRuntime = this.workflowRuntime.subscribe((snapshot) => {
 				this.taskLedger.recordWorkflowSnapshot(snapshot);
+				for (const node of snapshot.nodes) {
+					const status =
+						node.status === "pending"
+							? "started"
+							: node.status === "skipped"
+								? "cancelled"
+								: node.status === "timed_out"
+									? "failed"
+									: node.status;
+					void this.dynamicTaskRuntime?.noteWorkflow({
+						workflowId: snapshot.workflowId,
+						nodeId: node.id,
+						status,
+						summary: `${snapshot.definitionId}/${node.id}: ${node.status} · ${node.taskSummary}`,
+					});
+				}
 			});
 		}
 		this.remoteRuntime =
@@ -555,8 +646,7 @@ export class AgentSession {
 		this.remoteRuntime.setOutputReviewerIfUnset(
 			new LunaTerminalOutputReviewer({
 				modelRuntime: this._modelRuntime,
-				getModelSetting: () => this.settingsManager.getReviewModel(),
-				getPreferredProvider: () => this.agent.state.model?.provider,
+				modelResolver: reviewModelResolver,
 			}),
 		);
 		this.privilegeRuntime =
@@ -698,6 +788,43 @@ export class AgentSession {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
 			this.taskLedger.updateToolArgs(toolCall.id, args);
+			if (this.dynamicTaskRuntime && toolCall.name !== "tasks_update") {
+				try {
+					const analysis = classifyPolicyOperation({
+						toolName: toolCall.name,
+						args,
+						cwd: this._cwd,
+						availableTools: this.getActiveToolNames(),
+						config: resolvePolicyConfig(this.settingsManager.getPolicySettings()),
+					});
+					const command =
+						typeof args === "object" && args !== null && "command" in args
+							? (args as { command?: unknown }).command
+							: undefined;
+					const verification =
+						(typeof command === "string" && isVerificationCommand(command)) ||
+						["test", "tests", "check", "verify", "lint", "typecheck", "build"].includes(toolCall.name);
+					const mutationTool = [
+						"edit",
+						"write",
+						"bash",
+						"remote_edit",
+						"remote_write",
+						"remote_bash",
+						"remote_exec",
+						"terminal_bash",
+					].includes(toolCall.name);
+					await this.dynamicTaskRuntime.noteToolStarted({
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						args,
+						workspaceMutation: mutationTool && analysis?.descriptor.workspaceMutation === true,
+						verification,
+					});
+				} catch {
+					// Dynamic Task progress must never block Tool execution.
+				}
+			}
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
 			}
@@ -727,12 +854,14 @@ export class AgentSession {
 			const privilegeDetails = getPrivilegeToolDetails(result.details);
 			const workflowDetails = getWorkflowToolDetails(result.details);
 			const backgroundDetails = getBackgroundToolDetails(result.details);
+			const dynamicTaskDetails = getDynamicTaskToolDetails(result.details);
 			const runtimeError =
 				searchDetails?.ok === false ||
 				remoteDetails?.ok === false ||
 				privilegeDetails?.ok === false ||
 				workflowDetails?.ok === false ||
-				backgroundDetails?.ok === false;
+				backgroundDetails?.ok === false ||
+				dynamicTaskDetails?.ok === false;
 			const policyDetails = await this.policyRuntime.finalizeTool({
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
@@ -800,12 +929,14 @@ export class AgentSession {
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 			const previousContext = previousSnapshot?.context ?? turn.context;
+			const baseSystemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+			const taskProjection = this.dynamicTaskRuntime?.getPromptProjection({ consumeReminder: true });
 
 			return {
 				...previousSnapshot,
 				context: {
 					...previousContext,
-					systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+					systemPrompt: taskProjection ? `${baseSystemPrompt}\n\n${taskProjection}` : baseSystemPrompt,
 					tools: this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
@@ -843,7 +974,7 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
-		if (this._isAgentRunActive || !this._resolveIdleWait) {
+		if (this._isAgentRunActive || this._isTaskReviewActive || !this._resolveIdleWait) {
 			return;
 		}
 		const resolve = this._resolveIdleWait;
@@ -852,8 +983,14 @@ export class AgentSession {
 		resolve();
 	}
 
-	private async _emitAgentSettled(): Promise<void> {
+	private async _emitAgentSettled(runId: number): Promise<void> {
 		this._isAgentRunActive = false;
+		this._isTaskReviewActive = this.dynamicTaskRuntime !== undefined;
+		try {
+			await this.dynamicTaskRuntime?.reviewAfterSettled(runId, this.agent.signal);
+		} finally {
+			this._isTaskReviewActive = false;
+		}
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
 			this._emit({ type: "agent_settled" });
@@ -873,6 +1010,20 @@ export class AgentSession {
 		if (event.type === "tool_execution_end" && taskLedgerDetails) {
 			const result = event.result as { details?: unknown };
 			result.details = attachTaskLedgerToolDetails(result.details, taskLedgerDetails);
+			if (this.dynamicTaskRuntime && event.toolName !== "tasks_update") {
+				try {
+					await this.dynamicTaskRuntime.noteToolFinished({
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						status: taskLedgerDetails.status,
+						filesModified: taskLedgerDetails.filesModified,
+						verification: taskLedgerDetails.verification === true,
+						diagnostic: event.isError ? `${event.toolName} failed` : undefined,
+					});
+				} catch {
+					// Dynamic Task progress must never change the Tool result.
+				}
+			}
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			if (documentDetails?.contract) this.documentRuntime.restoreContract(documentDetails.contract);
 			const contract = await this.documentRuntime.noteFilesModified(taskLedgerDetails.filesModified ?? []);
@@ -1157,6 +1308,7 @@ export class AgentSession {
 			this.abortBash();
 			this.questionRuntime.cancelPending();
 			this.privilegeRuntime.cancelPending();
+			this.dynamicTaskRuntime?.dispose();
 			this.agent.abort();
 			void this.privilegeRuntime.dispose().finally(() => this.remoteRuntime.dispose());
 			void this.workflowRuntime?.dispose();
@@ -1177,10 +1329,14 @@ export class AgentSession {
 		this._unsubscribePolicyRuntime = undefined;
 		this._unsubscribePrivilegeRuntime?.();
 		this._unsubscribePrivilegeRuntime = undefined;
+		this._unsubscribeDynamicTaskRuntime?.();
+		this._unsubscribeDynamicTaskRuntime = undefined;
 		this._unsubscribeWorkflowRuntime?.();
 		this._unsubscribeWorkflowRuntime = undefined;
 		this._unsubscribeBackgroundRuntime?.();
 		this._unsubscribeBackgroundRuntime = undefined;
+		this._unsubscribeMonitorRuntime?.();
+		this._unsubscribeMonitorRuntime = undefined;
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
 	}
@@ -1206,12 +1362,12 @@ export class AgentSession {
 
 	/** Whether the session is currently processing an agent run or post-run continuation. */
 	get isStreaming(): boolean {
-		return this._isAgentRunActive || this._promptPreflightCount > 0;
+		return this._isAgentRunActive || this._isTaskReviewActive || this._promptPreflightCount > 0;
 	}
 
 	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
 	get isIdle(): boolean {
-		return !this._isAgentRunActive;
+		return !this._isAgentRunActive && !this._isTaskReviewActive;
 	}
 
 	/** Current effective system prompt (includes any per-turn extension modifications) */
@@ -1446,6 +1602,7 @@ export class AgentSession {
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._isAgentRunActive = true;
+		const dynamicTaskRunId = ++this._dynamicTaskRunId;
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
@@ -1454,7 +1611,7 @@ export class AgentSession {
 		} finally {
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
-			await this._emitAgentSettled();
+			await this._emitAgentSettled(dynamicTaskRunId);
 		}
 	}
 
@@ -1630,6 +1787,10 @@ export class AgentSession {
 				}
 			}
 
+			if (this.getActiveToolNames().includes("tasks_update")) {
+				this.dynamicTaskRuntime?.beginUserPrompt(expandedText);
+			}
+
 			// Build messages array (custom message if any, then user message)
 			messages = [];
 
@@ -1674,12 +1835,13 @@ export class AgentSession {
 			// Apply extension-modified system prompt, or reset to base
 			if (result?.systemPrompt !== undefined) {
 				this._systemPromptOverride = result.systemPrompt;
-				this.agent.state.systemPrompt = result.systemPrompt;
 			} else {
 				// Ensure we're using the base prompt (in case previous turn had modifications)
 				this._systemPromptOverride = undefined;
-				this.agent.state.systemPrompt = this._baseSystemPrompt;
 			}
+			const baseSystemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+			const taskProjection = this.dynamicTaskRuntime?.getPromptProjection({ consumeReminder: true });
+			this.agent.state.systemPrompt = taskProjection ? `${baseSystemPrompt}\n\n${taskProjection}` : baseSystemPrompt;
 		} catch (error) {
 			releasePreflight();
 			preflightResult?.(false);
@@ -1975,6 +2137,7 @@ export class AgentSession {
 		this.abortRetry();
 		this.questionRuntime.cancelPending();
 		this.privilegeRuntime.cancelPending();
+		this.dynamicTaskRuntime?.abortReview();
 		this.agent.abort();
 		if (this._pendingPromptPreflights.size > 0 && this._extensionCommandExecutionDepth === 0) {
 			await Promise.all(this._pendingPromptPreflights);
@@ -3011,6 +3174,9 @@ export class AgentSession {
 					documentRuntime: this.documentRuntime,
 					questionRuntime: this.questionRuntime,
 				});
+		if (this.dynamicTaskRuntime) {
+			baseToolDefinitions.tasks_update = createTasksUpdateToolDefinition(this.dynamicTaskRuntime) as ToolDefinition;
+		}
 		if (this._disableDocumentTools) {
 			delete baseToolDefinitions.docs_search;
 			delete baseToolDefinitions.docs_read;
@@ -3043,8 +3209,18 @@ export class AgentSession {
 		this._applyExtensionBindings(this._extensionRunner);
 
 		const defaultActiveToolNames = this._baseToolsOverride
-			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "docs_search", "docs_read", "docs_resolve_task", "ask_user_question"];
+			? [...Object.keys(this._baseToolsOverride), ...(this.dynamicTaskRuntime ? ["tasks_update"] : [])]
+			: [
+					"read",
+					"bash",
+					"edit",
+					"write",
+					"docs_search",
+					"docs_read",
+					"docs_resolve_task",
+					"ask_user_question",
+					...(this.dynamicTaskRuntime ? ["tasks_update"] : []),
+				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -3063,6 +3239,7 @@ export class AgentSession {
 		await this._resourceLoader.reload();
 		await this.documentRuntime.reload();
 		this.taskLedger.setDocumentRuntimeContract(this.documentRuntime.getContract());
+		this.dynamicTaskRuntime?.rebuild(this.sessionManager.getBranch());
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
@@ -3634,6 +3811,7 @@ export class AgentSession {
 			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
 			await this.backgroundRuntime.rebuild(this.sessionManager.getBranch());
 			await this.workflowRuntime?.rebuild(this.sessionManager.getBranch());
+			this.dynamicTaskRuntime?.rebuild(this.sessionManager.getBranch());
 			this.taskLedger.setBackgroundSnapshot(this.backgroundRuntime.getSnapshot());
 			if (this.workflowRuntime) this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
@@ -3692,6 +3870,11 @@ export class AgentSession {
 		const usageTotals = createUsageTotals();
 
 		for (const entry of this.sessionManager.getEntries()) {
+			if (entry.type === "custom" && entry.customType === DYNAMIC_TASK_REVIEW_ENTRY_TYPE) {
+				const review = getDynamicTaskReviewEntry(entry.data);
+				if (review?.usage) addUsageToTotals(usageTotals, review.usage);
+				continue;
+			}
 			if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(usageTotals, entry.usage);
 			}

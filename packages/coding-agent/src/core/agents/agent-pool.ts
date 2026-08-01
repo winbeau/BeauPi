@@ -178,6 +178,7 @@ const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
 const RESERVED_TOOL_NAMES = new Set([
 	"delegate_task",
 	"ask_user_question",
+	"tasks_update",
 	"privileged_exec",
 	"workflow_run",
 	"workflow_status",
@@ -747,6 +748,7 @@ export class AgentPool {
 				excludeTools: [
 					"delegate_task",
 					"ask_user_question",
+					"tasks_update",
 					"privileged_exec",
 					"workflow_run",
 					"workflow_status",
@@ -763,6 +765,7 @@ export class AgentPool {
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
 				synchronizeSearchBudget: false,
 				policyInteractionMode: "controlled",
+				dynamicTasks: false,
 				agentPool: false,
 			});
 			child = childResult.session;

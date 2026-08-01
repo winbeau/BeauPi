@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { MonitorRecord } from "../src/core/monitor/index.ts";
 import type { TaskLedgerSnapshot, TaskTodo } from "../src/core/state/task-ledger.ts";
+import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 import {
 	selectTimelineCommands,
 	TaskLedgerWidget,
@@ -68,7 +69,15 @@ describe("TaskLedgerWidget", () => {
 
 	it("renders pending, active, completed, failed, and blocked Todo states with owner and blocked summaries", () => {
 		const todos: TaskTodo[] = [
-			{ id: "pending", label: "Pending item", status: "pending", sequence: 0, updatedAt: 1, owner: "main" },
+			{
+				id: "pending",
+				label: "Pending item",
+				status: "pending",
+				sequence: 0,
+				updatedAt: 1,
+				owner: "main",
+				source: "tool",
+			},
 			{ id: "active", label: "Active item", status: "active", sequence: 1, updatedAt: 2, owner: "main" },
 			{
 				id: "completed",
@@ -94,7 +103,7 @@ describe("TaskLedgerWidget", () => {
 		const styledWide = widget.render(120).join("\n");
 		const wide = stripAnsi(styledWide);
 		expect(wide).toContain("Tasks · execute · 2 files · verify pending");
-		expect(wide).toContain("□ Pending item (@main)");
+		expect(wide).toContain("□ Pending item (@main) · tool");
 		expect(wide).toContain("□ Active item (@main)");
 		expect(wide).toContain("■ Completed item (@main)");
 		expect(wide).toContain("□ Failed item (@main)");
@@ -241,6 +250,81 @@ describe("TaskLedgerWidget", () => {
 		};
 		const rendered = renderPlain(createWidget(createSnapshot(), 45, [monitor]), 120);
 		expect(rendered).toContain("Monitor Agent(reviewer) · budget_exhausted · 8/8 turns · last: docs_read");
+	});
+
+	it("renders Dynamic Task revision, progress, attention, and active activity from structured state", () => {
+		const plan: DynamicTaskPlanV1 = {
+			version: 1,
+			planId: "plan-widget",
+			revision: 7,
+			goal: "Implement dynamic task projection",
+			createdAt: 1,
+			updatedAt: 7,
+			factSequence: 0,
+			facts: [],
+			tasks: [
+				{
+					id: "done",
+					title: "Completed contract",
+					status: "completed",
+					dependsOn: [],
+					matchHints: [],
+					evidence: [],
+					blockedBy: [],
+					createdAt: 1,
+					updatedAt: 2,
+					completedAt: 2,
+				},
+				{
+					id: "active",
+					title: "Implement projection",
+					status: "active",
+					dependsOn: ["done"],
+					matchHints: [],
+					activity: "Updating a very long structured projection activity without reading assistant text",
+					evidence: [],
+					blockedBy: [],
+					createdAt: 1,
+					updatedAt: 7,
+				},
+				{
+					id: "blocked",
+					title: "Run acceptance",
+					status: "blocked",
+					dependsOn: ["active"],
+					matchHints: [],
+					evidence: [],
+					blockedBy: ["provider unavailable"],
+					createdAt: 1,
+					updatedAt: 7,
+				},
+			],
+		};
+		const todos: TaskTodo[] = plan.tasks.map((task, sequence) => ({
+			id: `dynamic-task:${task.id}`,
+			label: task.title,
+			status: task.status,
+			sequence,
+			updatedAt: task.updatedAt,
+			completedAt: task.completedAt,
+			owner: "main",
+			activity: task.activity,
+			blockedBy: task.blockedBy,
+			source: "dynamic-task",
+		}));
+		for (const themeName of ["beaupi-dark", "beaupi-light"]) {
+			initTheme(themeName, false);
+			const widget = createWidget(createSnapshot({ dynamicTasks: plan, todos }), 80);
+			const wide = renderPlain(widget, 120);
+			expect(wide).toContain("plan r7");
+			expect(wide).toContain("1/3 completed");
+			expect(wide).toContain("1 attention");
+			expect(wide).toContain("Updating a very long structured projection activity");
+			expect(wide).not.toContain("dynamic-task");
+			for (const width of [40, 80, 120, 160]) {
+				for (const line of widget.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		}
 	});
 
 	it("keeps every rendered line within 40, 80, 120, and 160 columns", () => {

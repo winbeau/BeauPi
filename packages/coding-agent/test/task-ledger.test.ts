@@ -20,6 +20,7 @@ import {
 	type TaskLedgerToolDetails,
 	type TaskTodo,
 } from "../src/core/state/task-ledger.ts";
+import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 
 function toolStart(toolCallId: string, toolName: string, args: Record<string, unknown>): AgentEvent {
 	return { type: "tool_execution_start", toolCallId, toolName, args };
@@ -293,6 +294,55 @@ describe("TaskLedger", () => {
 		expect(snapshot.commands.map((command) => command.toolCallId)).toEqual(["read-branch", "status-current"]);
 		expect(snapshot.filesModified).toEqual([]);
 		expect(snapshot.filesRead.map((record) => record.path)).toEqual(["src/a.ts"]);
+	});
+
+	it("projects Dynamic Tasks and suppresses only generic discover, execute, and verify Todos", () => {
+		const ledger = new TaskLedger({ taskId: "dynamic", cwd: "/repo" });
+		ledger.handleAgentEvent({
+			type: "message_start",
+			message: { role: "user", content: [{ type: "text", text: "implement" }], timestamp: 1 },
+		});
+		ledger.handleAgentEvent(toolStart("write-1", "write", { path: "src/a.ts", content: "a" }));
+		ledger.handleAgentEvent(toolEnd("write-1", "write", { details: { path: "src/a.ts" } }));
+		const dynamicPlan: DynamicTaskPlanV1 = {
+			version: 1,
+			planId: "plan-1",
+			revision: 2,
+			goal: "Implement",
+			createdAt: 1,
+			updatedAt: 2,
+			factSequence: 0,
+			facts: [],
+			tasks: [
+				{
+					id: "implementation",
+					title: "Implement the feature",
+					status: "active",
+					dependsOn: [],
+					matchHints: [],
+					activity: "Editing src/a.ts",
+					evidence: [],
+					blockedBy: [],
+					createdAt: 1,
+					updatedAt: 2,
+				},
+			],
+		};
+		ledger.setDynamicTaskPlan(dynamicPlan);
+		const snapshot = ledger.getSnapshot();
+		expect(snapshot.dynamicTasks).toEqual(dynamicPlan);
+		expect(snapshot.todos).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "dynamic-task:implementation",
+					status: "active",
+					source: "dynamic-task",
+				}),
+			]),
+		);
+		expect(snapshot.todos.map((todo) => todo.id)).not.toEqual(
+			expect.arrayContaining(["discover", "execute", "verify"]),
+		);
 	});
 
 	it("rebuilds from Session entries and deduplicates repeated tool results by toolCallId", () => {

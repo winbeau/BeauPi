@@ -227,9 +227,9 @@ Persistent terminals use a local tmux session whose pane runs SSH. The remote ta
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `review.model` | string | `"gpt-5.6-luna"` | Shared small model for lightweight reviews, including failed `terminal_bash` calls or successful calls whose output exceeds 100 lines |
+| `review.model` | string | `"gpt-5.6-luna"` | Shared small model for lightweight reviews, including Terminal output review and bounded Dynamic Task progress review |
 
-A bare model ID first resolves under the active Agent provider, then under another configured provider. Use `provider/model-id` to fix the provider. Review requests use the model's normal output capacity; BeauPi does not impose a separate `maxTokens` limit. Review-capable runtimes reuse this setting instead of defining feature-specific model keys.
+A bare model ID first resolves under the active Agent provider, then under another configured provider. Use `provider/model-id` to fix the provider. Review requests use the model's normal output capacity; BeauPi does not impose a separate `maxTokens` limit. Review-capable runtimes reuse this setting instead of defining feature-specific model keys. The Dynamic Task Reviewer has no Tools, file access, main transcript, or separate model setting; it receives only a bounded current plan and new structured facts, and its patch remains subject to Runtime revision/hash/evidence validation.
 
 ```json
 {

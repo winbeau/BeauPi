@@ -42,9 +42,11 @@ export interface TerminalSettings {
 	showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
+export const DEFAULT_REVIEW_MODEL = "gpt-5.6-luna";
+
 export interface ReviewSettings {
 	/** Bare model id follows the active Agent provider first; provider/model fixes the provider. */
-	model?: string; // default: gpt-5.6-luna
+	model?: string; // default: DEFAULT_REVIEW_MODEL
 }
 
 export interface ImageSettings {
@@ -984,7 +986,7 @@ export class SettingsManager {
 
 	getReviewModel(): string {
 		const configured = this.settings.review?.model?.trim();
-		return configured || "gpt-5.6-luna";
+		return configured || DEFAULT_REVIEW_MODEL;
 	}
 
 	getSearchSettings(): SearchSettings | undefined {

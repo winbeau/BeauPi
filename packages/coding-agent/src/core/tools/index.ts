@@ -158,6 +158,7 @@ export const allToolNames: Set<string> = new Set([
 	"background_logs",
 	"background_wait",
 	"background_cancel",
+	"tasks_update",
 ]);
 
 export interface ToolsOptions {
