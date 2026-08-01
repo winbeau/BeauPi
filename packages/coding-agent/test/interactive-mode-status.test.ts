@@ -11,7 +11,7 @@ import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { appendToolComponent, ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { getPrivilegeInteractionLayout, InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function renderLastLine(container: Container, width = 120): string {
@@ -321,6 +321,21 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("__missing_theme__");
 		expect(settingsManager.setTheme).not.toHaveBeenCalled();
 		expect(fakeThis.ui.requestRender).not.toHaveBeenCalled();
+	});
+});
+
+describe("getPrivilegeInteractionLayout", () => {
+	test("uses a full-row overlay so base content cannot bleed through beside the permission prompt", () => {
+		expect(getPrivilegeInteractionLayout(55).overlay).toBe(false);
+		expect(getPrivilegeInteractionLayout(56)).toEqual({
+			overlay: true,
+			overlayOptions: {
+				anchor: "center",
+				width: "100%",
+				maxHeight: "90%",
+				margin: { top: 1, bottom: 1 },
+			},
+		});
 	});
 });
 

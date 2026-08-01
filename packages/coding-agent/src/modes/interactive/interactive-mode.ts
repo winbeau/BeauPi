@@ -350,6 +350,21 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 }
 
+export function getPrivilegeInteractionLayout(columns: number): {
+	overlay: boolean;
+	overlayOptions: OverlayOptions;
+} {
+	return {
+		overlay: columns >= 56,
+		overlayOptions: {
+			anchor: "center",
+			width: "100%",
+			maxHeight: "90%",
+			margin: { top: 1, bottom: 1 },
+		},
+	};
+}
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
@@ -2578,25 +2593,14 @@ export class InteractiveMode {
 		if (signal?.aborted) return { status: "cancelled" };
 		let abortHandler: (() => void) | undefined;
 		try {
-			return await this.showExtensionCustom<PrivilegeInteractionResponse>(
-				(tui, _theme, keybindings, done) => {
-					abortHandler = () => {
-						void control.cancel().catch(() => undefined);
-						done({ status: "cancelled" });
-					};
-					signal?.addEventListener("abort", abortHandler, { once: true });
-					return new PrivilegeTerminalComponent({ tui, keybindings, request, control, onDone: done });
-				},
-				{
-					overlay: this.ui.terminal.columns >= 56,
-					overlayOptions: () => ({
-						anchor: "center",
-						width: Math.max(52, Math.min(100, this.ui.terminal.columns - 4)),
-						maxHeight: "90%",
-						margin: 1,
-					}),
-				},
-			);
+			return await this.showExtensionCustom<PrivilegeInteractionResponse>((tui, _theme, keybindings, done) => {
+				abortHandler = () => {
+					void control.cancel().catch(() => undefined);
+					done({ status: "cancelled" });
+				};
+				signal?.addEventListener("abort", abortHandler, { once: true });
+				return new PrivilegeTerminalComponent({ tui, keybindings, request, control, onDone: done });
+			}, getPrivilegeInteractionLayout(this.ui.terminal.columns));
 		} finally {
 			if (abortHandler) signal?.removeEventListener("abort", abortHandler);
 		}
