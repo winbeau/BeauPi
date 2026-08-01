@@ -13,11 +13,12 @@ BeauPi CLI / TUI
 │   ├── Monitor Runtime
 │   ├── Workflow Engine
 │   ├── Background Task Manager
-│   └── Policy Engine
+│   ├── Policy Engine
+│   └── Privilege Runtime
 │
-├── Execution Modes
-│   ├── User Mode
-│   └── Controlled Sudo Mode
+├── Execution Boundaries
+│   ├── Ordinary User Execution
+│   └── Per-request Controlled Sudo
 │
 ├── Execution Backends
 │   ├── Local WSL
@@ -60,6 +61,7 @@ packages/coding-agent/
 │   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
 │   │   ├── questions/       # 询问 schema、pending interaction 和结构化答案
 │   │   ├── policy/          # 命令、失败、预算分类和 advisory
+│   │   ├── privilege/       # 逐请求 sudo 路由、受控 PTY、交互与审计
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
 │   └── modes/

@@ -109,7 +109,7 @@ Policy Engine 是确定性分类、诊断和 Footer 提示层，不是执行守�
 - Tool 调用摘要
 - 执行耗时
 - Shell、搜索和失败计数
-- 当前执行目标与权限模式
+- 当前执行目标与待确认 sudo 状态
 
 原始命令和完整输出默认折叠，需要时展开。普通 Tool 避免大面积背景色、粗边框和独立卡片；Diff 按参考实现使用整行红绿背景、词级高亮和上下实线边界。
 
@@ -250,31 +250,18 @@ M12 第一版实现约束：
 - 默认进程轮询只读取 Monitor/PID/exit/log/activity/resources，不调用模型。Progress Reviewer 默认关闭，启用时复用 AgentPool/ModelRuntime 并限制间隔、次数、输入字符、输出和 wall-clock。
 - Session dispose 停止轮询和新注入；恢复时不能确认的非终态目标必须为 `lost`。
 
-### 权限模式
+### 受控 sudo 终端
 
-#### 用户模式
-
-- 默认模式
-- 本地 Agent 进程保持普通用户身份
+- 本地 Agent 进程始终保持普通用户身份
 - 远程 Target 按已配置的 SSH 登录身份运行，可包含平台提供的 `root` 账户
-- 能够明确解析为直接执行的 `sudo`、`su`、`doas`、`pkexec` 登录后提权或身份切换只记录 Policy advisory，不由 Policy 阻断
-- 缺少权限时记录分类失败并建议操作，不因累计次数自动暂停
-
-#### Sudo 模式
-
-- Agent 进程始终保持普通用户身份
-- 通过结构化 `privileged_exec` 执行受控操作
-- 支持一次授权或限时会话授权
+- 不提供 `/mode user`、`/mode sudo once` 或 `/mode sudo session`，也不保存一次或限时会话授权
+- local Bash 和 `terminal_bash` 中能够明确解析的 sudo 命令必须在执行前自动路由到统一 `PrivilegeRuntime`
+- 每个 sudo request 独立显示只读命令并等待用户 Enter；系统 sudo credential cache 不能绕过该确认
+- 密码只进入受控 PTY，不进入 Tool 参数、argv、Session、Monitor、日志、审计或模型上下文
+- 非交互模式和没有可控 PTY 的远程 one-shot 路径默认阻止 sudo
+- `terminal_send` 的完整或分片 sudo command 在 Enter 前拦截，不能绕过受控执行路径
 - 默认不允许本地创建 root shell，也不允许远程登录后任意切换为其他身份；已配置 Target 本身使用 `root` 登录不视为 sudo 授权
-- 所有提权操作写入审计日志
-
-命令：
-
-```text
-/mode user
-/mode sudo once
-/mode sudo session 10m
-```
+- 所有 sudo request 和执行结果写入不含秘密的 JSONL 审计日志
 
 ### 文档驱动执行
 

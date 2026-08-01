@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 本地 Agent 进程的普通用户模式是默认权限边界；受信任远程 Target 可使用 OpenSSH 已配置的登录身份（包括平台提供的 `root`），任何登录后 sudo/su 提权能力延后到策略系统稳定后实现。
+7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求确认的受控 sudo，不提供 sudo mode、root shell 或 Session grant。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -685,24 +685,34 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 ## M13：受控权限能力
 
+状态：已完成（2026-08-01）。
+
 ### 目标
 
 在 SSH/tmux 和 Policy Engine 稳定后提供可审计的结构化提权，不改变 Agent 进程的普通用户边界。
 
 ### 交付物
 
-- `/mode user`
-- `/mode sudo once`
-- `/mode sudo session <duration>`
+- local Bash 和 `terminal_bash` 的 sudo 自动路由到统一 `PrivilegeRuntime`
 - 结构化 `privileged_exec`
-- 参数验证、显式确认和权限/超时降权
-- 非交互模式默认阻止
+- 每条 sudo 命令的只读预览、用户 Enter 确认和受控 PTY 输入
+- `terminal_send` sudo bypass 拦截
+- 非交互模式和无可控 PTY 的远程 one-shot 路径默认阻止
 - JSONL 审计日志
 - permission/confirm/blocked 状态复用统一 Tool renderer 和 Monitor
+- 不实现 `/mode sudo`、一次授权或限时会话授权
 
 ### 验收标准
 
-Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化授权到期后自动恢复用户模式；本地与远程提权均有审计记录。
+Agent 进程始终以普通用户运行；每个 sudo request 都经过受控权限终端和逐次用户确认；密码不进入 Agent 数据链；本地与远程提权均有审计记录。
+
+### 验收记录（2026-08-01）
+
+- `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一进入 session-scoped `PrivilegeRuntime`；普通执行器和 one-shot SSH 路径不能旁路。
+- 每个 request 独立显示只读命令并等待用户确认；不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
+- local 与 existing remote terminal 复用本地 tmux PTY 和 secure stdin buffer；认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
+- `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、echo cleanup、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
+- M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
 ## M14：发行准备
 
@@ -762,10 +772,10 @@ Agent 进程始终以普通用户运行；未授权 sudo 被阻止；结构化�
 
 ## 当前推荐开发入口
 
-M0–M11 已形成连续能力闭环。下一阶段推进 M12：
+M0–M13 已形成连续能力闭环。下一阶段推进 M14 发行准备：
 
-1. 在现有 Monitor Runtime、Workflow 状态、Task Ledger 和 Policy Runtime 上增加后台任务管理，不创建第二套进程状态或 Session 唤醒链。
-2. 先闭环任务启动/接管、增量日志、完成/失败/超时/停滞事件、Wake Queue 去重和恢复。
-3. 不提前实现 M13 sudo，也不增加专用 Git Tools。
+1. 确定 npm 包、CLI 和 Bun standalone binary 的发行策略。
+2. 完成安装、升级、卸载、GitHub Actions 发布和外部目录 smoke test。
+3. 验证 Node/Bun 交互启动、模型配置、真实 prompt、标准 Responses、Codex 和 Compact 兼容路径。
 
-继续复用现有 Runtime、Session、ResourceLoader、Task Ledger、Tool 执行链、统一状态符号和 TUI 宽度约束。
+继续复用现有 Runtime、Session、ResourceLoader 和安全边界，不在发行阶段引入第二套实现。

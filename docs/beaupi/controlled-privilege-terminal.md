@@ -1,5 +1,7 @@
 # 受控 sudo 终端
 
+状态：M13 已实现并完成全量验收（2026-08-01）。
+
 M13 在现有 `AgentSession`、Bash、Remote Runtime、本地 tmux SSH terminal、Monitor 和 Task Ledger 上增加逐请求 sudo 执行边界。它不是 sudo mode，也不保存授权。
 
 ## 用户流程
@@ -41,10 +43,10 @@ finally 路径始终尝试 `delete-buffer`。认证输入不会进入 argv、环
 `PrivilegeToolDetailsV1` 是 Tool/Session/Task Ledger 的结构化结果事实。每个 request 另外写入：
 
 ```text
-~/.pi/agent/audit/privileged/YYYY-MM-DD.jsonl
+<agentDir>/audit/privileged/YYYY-MM-DD.jsonl
 ```
 
-目录权限为 `0700`，文件权限为 `0600`。事件只有 `requested`、`confirmed`、`started`、`completed`、`failed`、`cancelled`、`blocked`，记录 command、target、时间、exit/duration、Monitor/log 引用和稳定诊断，不记录认证输入。
+默认 `agentDir` 为 `~/.beaupi/agent`；自定义 `agentDir` 时审计路径随其变化。目录权限为 `0700`，文件权限为 `0600`。事件只有 `requested`、`confirmed`、`started`、`completed`、`failed`、`cancelled`、`blocked`，记录 command、target、时间、exit/duration、Monitor/log 引用和稳定诊断，不记录认证输入。
 
 Session custom entry `beaupi.privilege.fact` 只用于当前 branch 的历史投影。resume、Compact 和 branch navigation 不恢复 pending request、授权或输入。
 

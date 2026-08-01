@@ -8,12 +8,12 @@ TUI 优先不代表先伪造尚未存在的运行时状态。阶段 2 只渲染�
 
 ## 当前优先主线
 
-M0–M11 已完成。近期开发转入阶段 13（M12）后台任务自动唤醒：
+M0–M13 已完成。近期开发转入 M14 发行准备：
 
-1. 继续复用 M6/M11 的 MonitorRuntime 和结构化状态，不创建第二套进程监控器或 Workflow 唤醒循环。
-2. 在模型回合结束后保持本地/远程任务运行，并通过去重 Wake Queue 在 Coordinator 空闲时恢复现有 Session turn。
-3. 复用 M11 已稳定的取消、lost 恢复、Task Ledger、Footer 和 branch-aware 生命周期。
-4. 自动唤醒稳定后再推进受控 sudo。
+1. 确定 BeauPi npm 包、CLI 和 Bun standalone binary 的独立分发策略。
+2. 完成安装、升级、卸载和 GitHub Actions 发布链路。
+3. 从仓库外目录验证 Node/Bun 启动、模型配置、真实 prompt 和交互会话。
+4. 将标准 Responses、Codex、手动/自动 Compact 和兼容降级纳入发布 smoke test。
 
 M10 已提供确定性分类、等价检查签名、失败/fallback 预算诊断、敏感路径与普通用户 advisory、Search-to-Shell advisory，以及 Session/Compact/branch 一致性。Policy authorization 始终返回 `execute: true`，不发起 TUI/SDK/RPC confirmation；当前执行或最近 Policy fact 的提示只显示在 Footer。普通 Git 操作继续使用 Bash，不增加专用 Git Tools。
 
@@ -269,18 +269,18 @@ M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置
 
 状态：已完成。M12 在单一 Monitor Registry 上实现 BackgroundTaskManager、runner-owned process exit facts、六个默认 Tool、自适应纯代码轮询、确定性 Trigger Evaluator、串行 Wake Queue、AgentSession idle/follow-up 注入、受预算 AgentPool Progress Reviewer、Session custom entry 恢复、Task Ledger/Todo/Footer 和暗/亮宽度安全 renderer。本地短进程、进程组 TERM→KILL、fake remote Monitor、faux Coordinator/reviewer、resume/lost/consumed/branch 路径均有定向测试；第一版不包含 daemon、IPC、通知或 sudo。
 
-## 阶段 14：权限模式
+## 阶段 14：受控 sudo 终端
 
-- `/mode user`
-- `/mode sudo once`
-- `/mode sudo session <duration>`
-- 结构化 privileged actions
-- 本地和远程非交互模式默认阻止未授权提权
-- JSONL 审计日志
-- 自动超时降权
-- permission/confirm/blocked 状态复用统一 Tool renderer
+状态：已完成（2026-08-01）。
 
-验收：Agent 进程始终以普通用户运行；未授权提权被阻止；授权到期后自动恢复用户模式。
+- `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一路由到 session-scoped `PrivilegeRuntime`
+- 每个 request 显示只读命令并独立等待用户确认
+- local 与 existing remote terminal 复用本地 tmux PTY 和 secure stdin buffer
+- `terminal_send` bypass 和无可控 PTY 的 one-shot remote sudo 默认阻止
+- Session、Monitor、Task Ledger、Footer、renderer 和 0600 JSONL audit 只保存非秘密结构化事实
+- 不提供 sudo mode、root shell、once/session grant、keepalive、`sudo -S` 或 askpass
+
+验收：Agent 保持普通用户身份；每个 sudo request 独立确认；认证输入不进入 Agent 数据链；本地和远程结果均可审计且不能通过普通执行器绕过。M13 定向测试、`./test.sh` 和 `npm run check` 已通过。
 
 ## 贯穿阶段：Provider 兼容与自动压缩可靠性
 
@@ -331,4 +331,4 @@ BeauPi 复用 Pi Runtime 时，普通对话、自动压缩、分支摘要和子 
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
 10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成）
 
-当前已连续完成子 Agent、Monitor、SSH/tmux、联网搜索、询问选择、advisory-only Policy Engine 和多 Agent Workflow 闭环。下一步推进 M12 后台任务自动唤醒，继续复用统一状态符号、gutter、折叠、宽度处理、Task Ledger、Monitor、Workflow 和共享 Runtime 生命周期；结构化 sudo 仍不提前实现。
+当前已连续完成 M0–M13。下一步推进 M14 发行准备，重点完成独立分发、Node/Bun 外部目录 smoke test、发布 CI、安装升级路径和 Provider/Compact 兼容验证。

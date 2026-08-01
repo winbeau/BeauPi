@@ -99,7 +99,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 - Terminal 系 Tool 在参数括号前显示 tmux 名称：`● Terminal Bash [pi5-env](npm run check)`；无额外参数时仍保留空括号，例如 `Terminal Status [pi5-env]()`
 - 结果使用 `  ⎿  ` 五列 gutter，后续换行与结果正文对齐
 - queued 状态显示灰色空心圆点；运行、成功和失败使用 accent、绿色和红色实心小圆点
-- 普通 Tool 不显示 Policy classifier 或权限等待状态；Policy 只在 Footer 给出 advisory
+- 普通 Tool 不显示 Policy classifier 或权限等待状态；Policy 只在 Footer 给出 advisory。M13 `privileged_exec` 和自动路由的 sudo 使用独立逐请求权限交互，不属于 Policy confirmation
 - 单行成功结果直接显示
 - 多行输出默认显示最后 3–10 行
 - 连续 Read/Search/List/Bash 默认聚合为一条摘要，Ctrl+O 后逐项展开
@@ -130,6 +130,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 | `workflow_run` | `Workflow` |
 | `background_start` | `Background` |
 | `terminal_bash` | `Terminal Bash` |
+| `privileged_exec` | `Sudo Bash` / `Sudo Terminal Bash` |
 
 底层 Tool 名称保持不变，只修改 renderer。
 
@@ -183,6 +184,14 @@ Policy 不再显示确认选择框，也不改变 Tool 的 queued/running/succes
 ```
 
 advisory 使用 warning 色；同时存在多个 advisory 时显示最后一条和附加计数。Tool 输出、Todo、SDK/RPC interaction 和子 Agent 结果不展示 Policy block/confirm/replace/pause 状态。
+
+## 受控 sudo 终端
+
+M13 权限交互先显示只读 command、target、cwd 和 audit path；用户确认前不得启动 command session。运行后 overlay 只显示受控 PTY capture，认证输入直接进入 secure stdin channel，不保存到组件状态。
+
+最终 Transcript 使用 `Sudo Bash` 或 `Sudo Terminal Bash [terminalId]`，并复用 Bash 的输出、截断、耗时、错误和完整日志路径。等待、运行、取消、阻止和失败状态只从版本化 privilege details 读取；Policy advisory 仍只显示在 Footer。
+
+暗色、亮色及 40/80/120/160 列必须无横向溢出。
 
 ## Diff
 
@@ -369,7 +378,7 @@ M11 已接入真实 `WorkflowSnapshotComponent`：组件只消费版本化 DAG �
 - Git branch
 - 当前执行或最近 Policy fact 的 advisory（仅在存在时显示，也是 Policy 唯一的 UI 展示位置）
 
-重复执行 advisory 使用 warning 色且不表示阻断；同时存在多个 advisory 时显示最后一条和附加计数。权限模式、远程目标仅在非默认状态时显示。
+重复执行 advisory 使用 warning 色且不表示阻断；同时存在多个 advisory 时显示最后一条和附加计数。待确认 sudo request、远程目标仅在非默认状态时显示。
 
 ### 第三行：Session 累计状态
 
@@ -565,3 +574,4 @@ Background Tasks · 2 running · wake 1
 11. Write Tool 折叠提示中的新增行数和总行数在写入过程中动态更新，样式调整不得移除该行为。
 12. 使用 tmux 截图进行视觉回归测试。
 13. Policy advisory 只出现在 Footer，不改变 Tool、Todo、子 Agent 或 SDK/RPC interaction 的展示状态。
+14. M13 受控 sudo overlay 在执行前显示只读命令并逐次确认，认证输入不进入组件状态，最终 `Sudo Bash` renderer 在暗色、亮色及 40/80/120/160 列下无横向溢出。

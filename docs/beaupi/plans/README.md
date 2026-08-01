@@ -24,6 +24,11 @@
 14. [实施批次与文件清单](./13-implementation-sequence.md)
 15. [最终验收清单](./14-acceptance-checklist.md)
 
+## 后续里程碑计划
+
+- [M12 后台任务与自动唤醒](./12-background-task-auto-wake.md)
+- [M13 受控 sudo 终端](./13-controlled-privilege-terminal.md)
+
 ## 计划状态
 
 | 计划 | 状态 | 前置条件 |
@@ -42,7 +47,7 @@
 | 未来组件契约 | 已定义接口 | 主题基础 |
 | 测试与视觉回归 | 已完成（Batch 10） | 所有批次 |
 
-M1 于 2026-07-28 完成验收。M2 Task Ledger、M3 Document Runtime 和 M4 Skill Registry 于 2026-07-29 完成并复用本计划定义的视觉接口；下一里程碑为 M5 进程内子 Agent。
+M1 于 2026-07-28 完成验收。后续 Runtime 里程碑继续复用本计划定义的视觉接口；M12 和 M13 均已完成并验收，当前里程碑为 M14 发行准备。
 
 ## 第一轮完成边界
 

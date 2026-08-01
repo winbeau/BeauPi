@@ -22,6 +22,7 @@
 - Added bounded sub-agent Monitor activity logs with turn, Tool, target path, outcome, last activity, and virtual `monitor_logs` output when no file log exists.
 - Added BeauPi M11 multi-agent Workflows with a strict versioned YAML/JSON DAG schema, bounded dependency conditions, AgentPool scheduling, shared single-writer coordination, isolated Git Worktrees, five built-in Workflows, `workflow_run/status/cancel`, Monitor and Task Ledger lifecycle integration, and a responsive DAG renderer.
 - Added BeauPi M12 session-scoped background tasks with six `background_*` Tools, runner-owned local process and existing SSH/tmux Monitor attachment, deterministic triggers, a persistent deduplicated Wake Queue, idle/follow-up AgentSession auto-wake, bounded AgentPool progress reviews, branch-aware recovery, Task Ledger integration, and responsive TUI rendering.
+- Added BeauPi M13 per-request controlled sudo execution with `privileged_exec`, automatic local `bash` and `terminal_bash` routing through a session-scoped `PrivilegeRuntime`, read-only per-request confirmation, secure local-tmux PTY input, one-shot and `terminal_send` bypass blocking, branch-aware Session/Monitor/Task Ledger integration, responsive TUI rendering, and permission-restricted JSONL audit logs.
 
 ### Changed
 
@@ -44,6 +45,7 @@
 - Changed Policy to advisory-only behavior: every managed operation reaches its original executor, former block/confirm/replace/pause conditions become non-sensitive Footer-only advisories, TUI/SDK/RPC confirmation handlers are not invoked, controlled sub-agents omit Policy requests, and Tool/Todo rendering ignores Policy status metadata while legacy Session Policy details remain parseable.
 - Changed the BeauPi roadmap to mark multi-agent Workflow complete and advance the active milestone to background task auto-wake.
 - Changed the default system prompt so plans for projects expected to exceed roughly 500 implementation lines use a phase-and-milestone main plan with an index to separate per-module sub-plans.
+- Changed the BeauPi roadmap to mark M13 controlled privilege execution complete and advance the active milestone to M14 release preparation.
 
 ### Fixed
 
