@@ -108,34 +108,70 @@ describe("remote controlled privilege terminal", () => {
 		expect(readFileSync(terminal.logPath, "utf8")).not.toContain(secret.toString("utf8").trim());
 	});
 
-	it("refuses sensitive input and leaves the pane non-reusable when echo cannot be disabled", async () => {
+	it("cancels an interactive root shell and returns the existing pane to the user shell", async () => {
 		const fixture = setup();
-		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "echo-failure-terminal" });
+		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "interactive-root-terminal" });
 		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, {
 			prompt: false,
-			output: "Unable to disable terminal echo\n",
-			exitCode: 125,
+			interactive: true,
+			output: "root shell exited\n",
 		});
 		fixture.privilegeRuntime.setHandler(async (_request, control) => {
 			await control.start();
 			await control.execute();
-			throw new Error("unreachable");
+			expect(await control.capture()).toMatchObject({ state: "running" });
+			await control.cancel();
+			return { status: "cancelled" };
 		});
 
 		const result = await fixture.privilegeRuntime.execute({
-			toolCallId: "remote-echo-failure",
+			toolCallId: "remote-interactive-cancel",
 			sourceTool: "privileged_exec",
 			route: "explicit_tool",
-			command: "sudo id",
+			command: "sudo bash",
 			target: { execution: "terminal", targetId: "fake", terminalId: terminal.terminalId },
 			cwd: fixture.cwd,
 		});
 
-		expect(result.details).toMatchObject({ status: "interaction_error" });
-		expect(fixture.adapter.getSensitiveInputForTest()).toHaveLength(0);
-		await expect(fixture.remoteRuntime.terminalBash(terminal.terminalId, "pwd")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_busy" },
+		expect(result.details).toMatchObject({ status: "cancelled" });
+		expect(fixture.adapter.tmuxKeyCalls).toEqual(
+			expect.arrayContaining([
+				{ terminalId: terminal.terminalId, key: "C-c" },
+				{ terminalId: terminal.terminalId, key: "C-d" },
+			]),
+		);
+		await expect(fixture.remoteRuntime.terminalBash(terminal.terminalId, "pwd")).resolves.toMatchObject({ ok: true });
+	});
+
+	it("keeps an interactive root shell active until the user exits", async () => {
+		const fixture = setup();
+		const terminal = await fixture.remoteRuntime.terminalCreate({ terminalId: "interactive-root-exit" });
+		fixture.adapter.setPrivilegeCommandResult(terminal.terminalId, {
+			prompt: false,
+			interactive: true,
+			output: "root shell exited\n",
 		});
+		fixture.privilegeRuntime.setHandler(async (_request, control) => {
+			await control.start();
+			await control.execute();
+			await control.sendSensitive(Buffer.from("whoami\r", "utf8"));
+			expect(await control.capture()).toMatchObject({ state: "running" });
+			await control.sendSensitive(Buffer.from("exit\r", "utf8"));
+			await control.wait();
+			return { status: "completed" };
+		});
+
+		const result = await fixture.privilegeRuntime.execute({
+			toolCallId: "remote-interactive-exit",
+			sourceTool: "privileged_exec",
+			route: "explicit_tool",
+			command: "sudo bash",
+			target: { execution: "terminal", targetId: "fake", terminalId: terminal.terminalId },
+			cwd: fixture.cwd,
+		});
+
+		expect(result.details).toMatchObject({ status: "succeeded", exitCode: 0 });
+		expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("root shell exited") });
 	});
 
 	it("routes terminal_bash sudo before the ordinary terminal executor", async () => {

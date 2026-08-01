@@ -26,7 +26,7 @@
 
 `terminal_bash` 是普通命令的首选接口：命令在该远端 shell 当前目录和导出环境中执行，一次调用等待完成并返回结构化退出状态。已知工作目录时 Agent 直接使用简短的 `cd <workdir> && <command>`，不先重复 `pwd`，也不追加无意义的 echo、sleep、status 或 capture。`terminal_send`/`terminal_capture` 只用于真正的交互式输入、终端诊断和增量观察。
 
-每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。失败或输出超过 100 行时，由 `settings.json` 的共享 `review.model` 指定的小模型筛选关键错误、警告和下一步；短成功命令使用确定性摘要。其他轻量 Review Runtime 复用同一模型配置。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
+每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。短成功输出直接进入主对话；失败、稳定诊断或输出超过 100 行时，由 `settings.json` 的共享 `review.model` 指定的小模型筛选关键错误、警告和下一步。`terminal_bash` 与 Sudo Bash 复用同一审阅管线，其他轻量 Review Runtime 复用同一模型配置。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
 
 Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；AutoDL 等平台直接提供的 `root` 登录账户属于合法目标身份。远程运行时只对能够确定为直接执行的 `sudo`、`su`、`doas`、`pkexec` 记录 Policy advisory；不因不透明脚本片段或文本命中推断提权，也不由 Policy 阻断执行。
 
@@ -271,11 +271,11 @@ M12 第一版实现约束：
 - 远程 Target 按已配置的 SSH 登录身份运行，可包含平台提供的 `root` 账户
 - 不提供 `/mode user`、`/mode sudo once` 或 `/mode sudo session`，也不保存一次或限时会话授权
 - local Bash 和 `terminal_bash` 中能够明确解析的 sudo 命令必须在执行前自动路由到统一 `PrivilegeRuntime`
-- 每个 sudo request 独立显示只读命令并等待用户 Enter；系统 sudo credential cache 不能绕过该确认
+- 每个 sudo request 独立显示完整只读命令或换行分隔批次并等待用户 Enter；系统 sudo credential cache 不能绕过该确认
 - 密码只进入受控 PTY，不进入 Tool 参数、argv、Session、Monitor、日志、审计或模型上下文
 - 非交互模式和没有可控 PTY 的远程 one-shot 路径默认阻止 sudo
 - `terminal_send` 的完整或分片 sudo command 在 Enter 前拦截，不能绕过受控执行路径
-- 默认不允许本地创建 root shell，也不允许远程登录后任意切换为其他身份；已配置 Target 本身使用 `root` 登录不视为 sudo 授权
+- 支持当前 request 内保持 attached 的 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s`；不提供持久 root shell、后台 root 会话或远程登录后的任意其他身份切换；已配置 Target 本身使用 `root` 登录不视为 sudo 授权
 - 所有 sudo request 和执行结果写入不含秘密的 JSONL 审计日志
 
 ### 文档驱动执行

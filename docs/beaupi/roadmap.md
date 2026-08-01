@@ -161,7 +161,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 实现 `terminal_create`、`terminal_bash`、`terminal_send`、`terminal_capture`、`terminal_status` 和 `terminal_close`
 - `terminal_create` 在本机创建 tmux，pane 内直接运行 SSH；远端不依赖 tmux
 - `terminal_bash` 将普通命令通过本地 `tmux send-keys` 注入现有 SSH shell，在 terminal 当前目录和导出环境中等待执行完成；普通命令不再手动组合 send/capture
-- 每 terminal 将完整脱敏输出追加到 `工作日志.log`；失败或超过 100 行的输出由可配置小模型审阅，Tool Result 最后一行固定为 `@绝对日志路径`
+- 每 terminal 将完整脱敏输出追加到 `工作日志.log`；短成功输出直接返回，失败或超过 100 行的输出由可配置小模型审阅，Tool Result 最后一行固定为 `@绝对日志路径`
 - tmux capture 使用增量 cursor；非零退出、超时和断线保留结构化 details、usage 和 `isError`
 - 将连接、远程命令和 tmux 会话接入阶段 7 的 Monitor Runtime
 - 结构化区分认证、主机密钥、连接、命令、超时和会话丢失错误
@@ -169,7 +169,7 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 - 真实环境预检固定使用现有 OpenSSH alias `h100-server`，先在远端执行 `curl -fsSL https://www.google.com` 验证 SSH、DNS、TLS 和 HTTPS 出网
 - 真实 E2E 继续使用 `h100-server` 验证无害远程命令、tmux 生命周期、Monitor 状态、增量日志和断线恢复；fake adapter 测试仍然必须保留
 
-验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内保持 SSH terminal；普通命令通过一次 `terminal_bash` 在现有远端 shell 当前目录执行，交互式场景才使用 send/capture；断线、超时、非零退出和会话丢失保留结构化状态；完整日志落盘且主上下文只接收审阅摘要和 `@日志路径`；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+验收：Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内保持 SSH terminal；普通命令通过一次 `terminal_bash` 在现有远端 shell 当前目录执行，交互式场景才使用 send/capture；断线、超时、非零退出和会话丢失保留结构化状态；完整日志落盘且主上下文只接收短成功输出或审阅摘要及 `@日志路径`；同时通过 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ## 阶段 9：联网搜索
 
@@ -275,11 +275,12 @@ M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置
 状态：已完成（2026-08-01）。
 
 - `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一路由到 session-scoped `PrivilegeRuntime`
-- 每个 request 第一帧直接把只读命令填充到双分割线 tmux；用户按 Enter 执行或 Escape 取消
-- local 与 existing remote terminal 复用本地 tmux PTY 和 secure stdin buffer
+- 每个 request 第一帧直接把完整只读命令或换行分隔批次填充到双分割线 tmux；用户按 Enter 执行或 Escape 取消
+- local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；existing remote terminal 复用原 pane，两者共用 secure stdin buffer
+- `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 在认证后保持 attached，直到用户退出或取消；取消不能留下隐藏 root shell
 - `terminal_send` bypass 和无可控 PTY 的 one-shot remote sudo 默认阻止
 - Session、Monitor、Task Ledger、Footer、renderer 和 0600 JSONL audit 只保存非秘密结构化事实
-- 不提供 sudo mode、root shell、once/session grant、keepalive、`sudo -S` 或 askpass
+- 不提供 sudo mode、持久 root shell、once/session grant、keepalive、`sudo -S` 或 askpass；当前 request 内的交互式 sudo shell除外
 
 验收：Agent 保持普通用户身份；每个 sudo request 都先填充且不执行，只由用户按 Enter 释放；认证输入不进入 Agent 数据链；本地和远程结果均可审计且不能通过普通执行器绕过。M13 定向测试、`./test.sh` 和 `npm run check` 已通过。
 

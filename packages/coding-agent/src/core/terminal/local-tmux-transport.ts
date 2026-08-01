@@ -84,6 +84,7 @@ async function defaultRunner(args: string[], options: TerminalProcessOptions): P
 export interface LocalTmuxTransportOptions {
 	runner?: LocalTmuxTransportRunner;
 	randomId?: () => string;
+	serverName?: string;
 }
 
 const TMUX_STATUS_SEPARATOR = "__BEAUPI_TMUX_FIELD__";
@@ -91,14 +92,16 @@ const TMUX_STATUS_SEPARATOR = "__BEAUPI_TMUX_FIELD__";
 export class LocalTmuxTransport {
 	private readonly runner: LocalTmuxTransportRunner;
 	private readonly randomId: () => string;
+	private readonly serverName: string | undefined;
 
 	constructor(options: LocalTmuxTransportOptions = {}) {
 		this.runner = options.runner ?? defaultRunner;
 		this.randomId = options.randomId ?? (() => `beaupi-${randomUUID().replaceAll("-", "")}`);
+		this.serverName = options.serverName;
 	}
 
 	run(args: string[], options: TerminalProcessOptions = {}): Promise<TerminalProcessResult> {
-		return this.runner(args, options);
+		return this.runner(this.serverName ? ["-L", this.serverName, ...args] : args, options);
 	}
 
 	async requireSuccess(

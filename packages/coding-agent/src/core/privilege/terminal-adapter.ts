@@ -16,7 +16,7 @@ import {
 } from "./types.ts";
 
 const POLL_MS = 50;
-const START_TIMEOUT_MS = 5_000;
+const START_TIMEOUT_MS = 15_000;
 
 function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -31,32 +31,14 @@ function sessionIdFor(request: PrivilegeRequestV1): string {
 	return `beaupi-priv-${digest}`;
 }
 
-function minimalEnvironment(): string {
-	const values: Record<string, string | undefined> = {
-		HOME: process.env.HOME,
-		USER: process.env.USER,
-		LOGNAME: process.env.LOGNAME,
-		PATH: process.env.PATH,
-		SHELL: process.env.SHELL,
-		TERM: process.env.TERM ?? "xterm-256color",
-	};
-	const entries = Object.entries(values).filter((entry): entry is [string, string] => typeof entry[1] === "string");
-	return ["env", "-i", ...entries.map(([name, value]) => `${name}=${shellQuote(value)}`)].join(" ");
-}
-
 function wrapper(command: string, stageMarker: string, beginMarker: string, endMarker: string): string {
 	const encoded = Buffer.from(command, "utf8").toString("base64");
 	return [
-		"__beaupi_restore_echo(){ stty echo >/dev/null 2>&1; }",
-		"trap '__beaupi_restore_echo || true' EXIT HUP INT TERM",
 		`printf '\\n%s\\n' ${shellQuote(stageMarker)}`,
 		`printf '$ %s' "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
-		"if IFS= read -r __beaupi_execute; then if ! stty -echo; then printf '\\n%s\\n' " +
+		"if IFS= read -r __beaupi_execute; then printf '\\n%s\\n' " +
 			shellQuote(beginMarker) +
-			"; printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else printf '\\n%s\\n' " +
-			shellQuote(beginMarker) +
-			`; eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi; else __beaupi_privilege_status=130; fi`,
-		"trap - EXIT HUP INT TERM",
+			`; eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; else __beaupi_privilege_status=130; fi`,
 		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
 		'exit "$__beaupi_privilege_status"',
 	].join("; ");
@@ -136,14 +118,24 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 			0o600,
 		);
 		await logHandle.close();
-		const shell = getShellConfig(this.shellPath);
+		const shell = getShellConfig(this.shellPath ?? process.env.SHELL);
 		if (shell.commandTransport === "stdin") {
 			throw new TerminalTransportError("new-session", "Local privilege tmux requires an argv-capable shell");
 		}
-		const interactiveArgs = shell.shell.toLowerCase().endsWith("bash") ? ["--noprofile", "--norc"] : [];
-		const childCommand = `${minimalEnvironment()} ${[shell.shell, ...interactiveArgs].map(shellQuote).join(" ")}`;
 		const created = await this.transport.run(
-			["new-session", "-d", "-s", this.sessionId, "-x", "100", "-y", "30", "-c", this.request.cwd, childCommand],
+			[
+				"new-session",
+				"-d",
+				"-s",
+				this.sessionId,
+				"-x",
+				"100",
+				"-y",
+				"30",
+				"-c",
+				this.request.cwd,
+				shellQuote(shell.shell),
+			],
 			{ signal: this.controller.signal },
 		);
 		if (created.exitCode !== 0) {
@@ -217,11 +209,9 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 			if (capture.exitCode !== 0)
 				throw new TerminalTransportError("capture-pane", "Privilege pane was lost during execution");
 			const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
-			if (parsed.output.includes("Unable to disable terminal echo"))
-				throw new TerminalTransportError("stty", "Privilege terminal echo could not be disabled");
 			if (parsed.found) break;
 			if (this.now() >= deadline)
-				throw new TerminalTransportError("capture-pane", "Privilege terminal echo handshake timed out");
+				throw new TerminalTransportError("capture-pane", "Privilege command start marker timed out");
 			await delay(POLL_MS);
 		}
 		this.executed = true;
@@ -286,16 +276,12 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 				if (parsed.found) output = parsed.output;
 				if (parsed.exitCode !== undefined) {
 					this.completed = true;
-					const echoFailure = /Unable to (?:disable|restore) terminal echo/.test(output);
 					return {
 						output,
 						exitCode: parsed.exitCode,
 						startedAt: this.startedAt,
 						completedAt: this.now(),
 						logPath: this.request.logPath,
-						diagnostic: echoFailure
-							? { code: "echo_recovery_failed", message: "Privilege terminal echo could not be secured" }
-							: undefined,
 					};
 				}
 			}
@@ -358,7 +344,8 @@ export class TmuxPrivilegeTerminalAdapter implements PrivilegeTerminalAdapter {
 	constructor(options: TmuxPrivilegeTerminalAdapterOptions = {}) {
 		this.remoteHost = options.remoteHost;
 		this.shellPath = options.shellPath;
-		this.transport = options.transport ?? new LocalTmuxTransport();
+		this.transport =
+			options.transport ?? new LocalTmuxTransport({ serverName: `beaupi-priv-${randomUUID().replaceAll("-", "")}` });
 		this.now = options.now ?? (() => Date.now());
 	}
 

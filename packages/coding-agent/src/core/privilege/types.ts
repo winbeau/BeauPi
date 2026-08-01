@@ -63,7 +63,7 @@ export type PrivilegeDiagnosticCodeV1 =
 	| "cancelled"
 	| "timeout"
 	| "command_failed"
-	| "echo_recovery_failed";
+	| "terminal_recovery_failed";
 
 export interface PrivilegeDiagnosticV1 {
 	code: PrivilegeDiagnosticCodeV1;
@@ -172,6 +172,12 @@ export interface PrivilegeToolDetailsV1 {
 	exitCode: number | null;
 	durationMs: number;
 	diagnostic?: PrivilegeDiagnosticV1;
+	review?: {
+		model?: string;
+		status: "completed" | "fallback" | "skipped";
+		inputTruncated: boolean;
+		error?: string;
+	};
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
@@ -235,6 +241,7 @@ const PRIVILEGE_DETAIL_VALUE_KEYS = new Set([
 	"exitCode",
 	"durationMs",
 	"diagnostic",
+	"review",
 	"truncation",
 	"fullOutputPath",
 ]);
@@ -255,6 +262,11 @@ const PRIVILEGE_STATUSES = new Set<PrivilegeResultStatusV1>([
 	"interaction_error",
 ]);
 const PRIVILEGE_ROUTES = new Set<PrivilegeRouteV1>(["explicit_tool", "local_bash", "terminal_bash"]);
+const PRIVILEGE_REVIEW_STATUSES = new Set<NonNullable<PrivilegeToolDetailsV1["review"]>["status"]>([
+	"completed",
+	"fallback",
+	"skipped",
+]);
 const PRIVILEGE_DIAGNOSTIC_CODES = new Set<PrivilegeDiagnosticCodeV1>([
 	"interaction_required",
 	"interaction_error",
@@ -270,7 +282,7 @@ const PRIVILEGE_DIAGNOSTIC_CODES = new Set<PrivilegeDiagnosticCodeV1>([
 	"cancelled",
 	"timeout",
 	"command_failed",
-	"echo_recovery_failed",
+	"terminal_recovery_failed",
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -286,6 +298,7 @@ export function getPrivilegeToolDetails(details: unknown): PrivilegeToolDetailsV
 			? direct
 			: asRecord(direct?.[PRIVILEGE_DETAILS_KEY]);
 	const diagnostic = asRecord(record?.diagnostic);
+	const review = asRecord(record?.review);
 	if (
 		!record ||
 		record.version !== PRIVILEGE_VERSION ||
@@ -319,6 +332,16 @@ export function getPrivilegeToolDetails(details: unknown): PrivilegeToolDetailsV
 				!PRIVILEGE_DIAGNOSTIC_CODES.has(diagnostic.code as PrivilegeDiagnosticCodeV1) ||
 				typeof diagnostic.message !== "string" ||
 				Object.keys(diagnostic).some((key) => key !== "code" && key !== "message"))) ||
+		(record.review !== undefined &&
+			(!review ||
+				typeof review.status !== "string" ||
+				!PRIVILEGE_REVIEW_STATUSES.has(review.status as NonNullable<PrivilegeToolDetailsV1["review"]>["status"]) ||
+				typeof review.inputTruncated !== "boolean" ||
+				(review.model !== undefined && typeof review.model !== "string") ||
+				(review.error !== undefined && typeof review.error !== "string") ||
+				Object.keys(review).some(
+					(key) => key !== "model" && key !== "status" && key !== "inputTruncated" && key !== "error",
+				))) ||
 		Object.keys(record).some((key) => !PRIVILEGE_DETAIL_VALUE_KEYS.has(key) && !PRIVILEGE_COMPOSITE_KEYS.has(key))
 	) {
 		return undefined;

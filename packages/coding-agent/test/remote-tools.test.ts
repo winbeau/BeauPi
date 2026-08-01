@@ -116,7 +116,7 @@ describe("M7 remote tools", () => {
 		});
 		expect(terminalBash.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringMatching(/^Command completed successfully:[\s\S]*\n@.*工作日志\.log$/),
+			text: expect.stringMatching(/^terminal-tool-ok\n@.*工作日志\.log$/),
 		});
 		const capture = await execute(setup.definitions.terminal_capture, { terminalId: "tool-terminal" });
 		expect(capture.details).toMatchObject({

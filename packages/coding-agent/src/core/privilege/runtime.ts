@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import { inspectShellPrivilege } from "../policy/index.ts";
+import {
+	type ReviewedTerminalOutput,
+	reviewTerminalOutput,
+	type TerminalOutputReviewer,
+} from "../remote/output-reviewer.ts";
 import { truncateTail } from "../tools/truncate.ts";
 import type {
 	PendingPrivilegeInteraction,
@@ -32,6 +37,7 @@ export interface PrivilegeRuntimeOptions {
 	now?: () => Date;
 	isRootTarget?: (targetId: string | undefined) => boolean;
 	monitorRuntime?: Pick<MonitorRuntime, "attach" | "update">;
+	outputReviewer?: TerminalOutputReviewer;
 }
 
 interface ActivePrivilegeRequest {
@@ -84,6 +90,7 @@ export class PrivilegeRuntime {
 	private readonly now: () => Date;
 	private readonly isRootTarget: (targetId: string | undefined) => boolean;
 	private readonly monitorRuntime: Pick<MonitorRuntime, "attach" | "update"> | undefined;
+	private outputReviewer: TerminalOutputReviewer | undefined;
 	private handler: PrivilegeInteractionHandler | undefined;
 	private active: ActivePrivilegeRequest | undefined;
 	private readonly inFlightByToolCallId = new Map<string, Promise<AgentToolResult<PrivilegeToolDetailsV1>>>();
@@ -99,6 +106,11 @@ export class PrivilegeRuntime {
 		this.now = options.now ?? (() => new Date());
 		this.isRootTarget = options.isRootTarget ?? (() => false);
 		this.monitorRuntime = options.monitorRuntime;
+		this.outputReviewer = options.outputReviewer;
+	}
+
+	setOutputReviewerIfUnset(reviewer: TerminalOutputReviewer): void {
+		this.outputReviewer ??= reviewer;
 	}
 
 	setHandler(handler: PrivilegeInteractionHandler | undefined): void {
@@ -252,11 +264,12 @@ export class PrivilegeRuntime {
 			issue?: PrivilegeDiagnosticV1,
 			commandResult?: PrivilegeCommandResultV1,
 			finalizeMonitor = true,
+			reviewedOutput?: ReviewedTerminalOutput,
 		): AgentToolResult<PrivilegeToolDetailsV1> => {
 			const completedAt = this.now();
 			const fullOutput = commandResult?.output ?? "";
 			const truncation = truncateTail(fullOutput);
-			const output = truncation.content || statusText(status, issue);
+			const output = reviewedOutput?.report ?? (truncation.content || statusText(status, issue));
 			const startedAtMs = commandResult?.startedAt ?? (active.startedAt ? Date.parse(active.startedAt) : undefined);
 			const durationMs = commandResult
 				? Math.max(0, commandResult.completedAt - commandResult.startedAt)
@@ -305,10 +318,11 @@ export class PrivilegeRuntime {
 				exitCode: commandResult?.exitCode ?? null,
 				durationMs,
 				diagnostic: issue ?? commandResult?.diagnostic,
+				review: reviewedOutput?.review,
 				truncation: truncation.truncated ? truncation : undefined,
 				fullOutputPath: truncation.truncated ? (commandResult?.logPath ?? request.logPath) : undefined,
 			};
-			return { content: [{ type: "text", text: output }], details };
+			return { content: [{ type: "text", text: output }], details, usage: reviewedOutput?.usage };
 		};
 
 		const inspection = inspectShellPrivilege(request.command);
@@ -547,10 +561,25 @@ export class PrivilegeRuntime {
 					commandResult,
 				);
 			}
+			const reviewedOutput = await reviewTerminalOutput(
+				{
+					command: request.command,
+					output: commandResult.output,
+					exitCode: commandResult.exitCode,
+					diagnosticCode: finalIssue?.code,
+					diagnosticMessage: finalIssue?.message,
+					durationMs: Math.max(0, commandResult.completedAt - commandResult.startedAt),
+					logPath: commandResult.logPath ?? request.logPath,
+				},
+				this.outputReviewer,
+				active.controller.signal,
+			);
 			return finish(
 				succeeded ? "succeeded" : commandResult.cancelled ? "cancelled" : "failed",
 				finalIssue,
 				commandResult,
+				true,
+				reviewedOutput,
 			);
 		} finally {
 			signal?.removeEventListener("abort", forwardAbort);

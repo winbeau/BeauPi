@@ -11,7 +11,10 @@ import type { PrivilegeToolDetailsV1 } from "./types.ts";
 const localPrivilegeSchema = Type.Object(
 	{
 		execution: Type.Literal("local"),
-		command: Type.String({ minLength: 1, description: "Complete command containing sudo" }),
+		command: Type.String({
+			minLength: 1,
+			description: "Complete sudo command or newline-separated command batch to stage in the terminal",
+		}),
 		timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
 	},
 	{ additionalProperties: false },
@@ -20,7 +23,10 @@ const terminalPrivilegeSchema = Type.Object(
 	{
 		execution: Type.Literal("terminal"),
 		terminalId: Type.String({ minLength: 1, description: "Existing interactive terminal id" }),
-		command: Type.String({ minLength: 1, description: "Complete command containing sudo" }),
+		command: Type.String({
+			minLength: 1,
+			description: "Complete sudo command or newline-separated command batch to stage in the terminal",
+		}),
 		timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
 	},
 	{ additionalProperties: false },
@@ -76,10 +82,15 @@ export function createPrivilegedExecToolDefinition(
 		name: "privileged_exec",
 		label: "privileged_exec",
 		description:
-			"Stage one complete sudo command in a controlled local or existing remote tmux terminal. The command is displayed but not executed until the user presses Enter; Escape cancels, and authentication input stays in the controlling TTY.",
-		promptSnippet: "Stage a sudo command for user-controlled execution in the secure tmux terminal",
+			"Stage one complete sudo command or newline-separated command batch in a controlled local or existing remote tmux terminal. The text is displayed but not executed until the user presses Enter; interactive sudo shells remain attached until the user exits or cancels, and authentication input stays in the controlling TTY.",
+		promptSnippet:
+			"Stage sudo commands or an interactive sudo shell for user-controlled execution in the secure tmux terminal",
 		promptGuidelines: [
 			"Use privileged_exec whenever a complete command requires sudo; the command is only staged in the controlled tmux terminal, and the user retains final execution control with Enter or cancels with Escape.",
+			"Prefer the direct sudo program that satisfies the task, such as `sudo id`; do not add a `bash -c` wrapper unless the user requests a root shell or the commands genuinely require one shared shell context.",
+			"The command may contain multiple newline-separated shell lines; preserve the intended line breaks so the terminal shows the full batch with the cursor at the end before the user executes it.",
+			"When the user explicitly requests an interactive root shell, `sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` are supported; keep the terminal interaction active until the user exits the shell or cancels it.",
+			"When a Bash-like Tool result includes a model review, trust it on the first pass; read the full log only after a reviewed failure, never after a reviewed success.",
 			"Pass one complete command that already contains sudo; do not add password, confirmation, mode, grant, or duration fields.",
 			"Never ask for, receive, repeat, log, or transmit a sudo password; sudo reads authentication input from its controlling TTY after the user executes the staged command.",
 		],

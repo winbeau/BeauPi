@@ -9,6 +9,7 @@ import {
 	PrivilegeRuntime,
 } from "../src/core/privilege/index.ts";
 import type { RemoteExecutionRuntime } from "../src/core/remote/runtime.ts";
+import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
 function runtime() {
 	const adapter = new FakePrivilegeTerminalAdapter();
@@ -35,9 +36,33 @@ describe("privileged_exec tool", () => {
 		const validator = Compile(PRIVILEGED_EXEC_PARAMETERS);
 		expect(validator.Check({ execution: "local", command: "sudo id" })).toBe(true);
 		expect(validator.Check({ execution: "terminal", terminalId: "term", command: "sudo id", timeout: 2 })).toBe(true);
+		expect(validator.Check({ execution: "local", command: "sudo apt update\nsudo apt install -y example" })).toBe(
+			true,
+		);
 		expect(validator.Check({ execution: "local", command: "sudo id", password: "secret" })).toBe(false);
 		expect(validator.Check({ execution: "local", command: "sudo id", grant: "session" })).toBe(false);
 		expect(validator.Check({ execution: "terminal", command: "sudo id" })).toBe(false);
+	});
+
+	it("teaches models to prefer direct sudo while supporting multiline and interactive shells", () => {
+		const fixture = runtime();
+		const tool = createPrivilegedExecToolDefinition(fixture.privilegeRuntime, fixture.remoteRuntime, "/workspace");
+		const systemPrompt = buildSystemPrompt({
+			selectedTools: [tool.name],
+			toolSnippets: { [tool.name]: tool.promptSnippet ?? "" },
+			promptGuidelines: tool.promptGuidelines,
+			contextFiles: [],
+			skills: [],
+			cwd: "/workspace",
+		});
+
+		expect(systemPrompt).toContain(
+			"- privileged_exec: Stage sudo commands or an interactive sudo shell for user-controlled execution",
+		);
+		expect(systemPrompt).toContain("Prefer the direct sudo program that satisfies the task, such as `sudo id`");
+		expect(systemPrompt).toContain("multiple newline-separated shell lines");
+		expect(systemPrompt).toContain("`sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` are supported");
+		expect(systemPrompt).toContain("the user retains final execution control with Enter or cancels with Escape");
 	});
 
 	it("executes local and existing-terminal requests through the same runtime", async () => {

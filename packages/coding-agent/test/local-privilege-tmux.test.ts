@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +16,9 @@ afterEach(() => {
 });
 
 const tmuxAvailable = spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
+const zshPath = spawnSync("which", ["zsh"], { encoding: "utf8" }).stdout.trim();
 const tmuxIt = tmuxAvailable ? it : it.skip;
+const zshTmuxIt = tmuxAvailable && zshPath ? it : it.skip;
 
 describe("local privilege tmux fixture", () => {
 	it("treats a password prompt as active only while the tmux cursor remains on that line", () => {
@@ -25,16 +27,18 @@ describe("local privilege tmux fixture", () => {
 		expect(isPrivilegeAuthenticationPrompt(screen, 1)).toBe(false);
 	});
 
-	it("does not accept sensitive input when the echo-disable handshake fails", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-echo-failure-"));
+	it("starts the configured user shell with normal tmux environment and stages multiline input", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-shell-"));
 		cleanup.push(cwd);
+		const command = "sudo apt update\nsudo apt install -y example";
+		const userShell = process.env.SHELL ?? "/bin/bash";
 		let capture = "";
 		const calls: string[][] = [];
 		const runner: LocalTmuxTransportRunner = vi.fn(async (args) => {
 			calls.push([...args]);
 			if (args[0] === "display-message") {
 				return {
-					stdout: "%1__BEAUPI_TMUX_FIELD__bash__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
+					stdout: "%1__BEAUPI_TMUX_FIELD__zsh__BEAUPI_TMUX_FIELD__2__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
 					stderr: "",
 					exitCode: 0,
 					startedAt: 1,
@@ -44,14 +48,7 @@ describe("local privilege tmux fixture", () => {
 			if (args[0] === "send-keys" && args.includes("-l")) {
 				const literal = args.at(-1) ?? "";
 				const stage = literal.match(/__BEAUPI_PRIV_STAGE_[A-Za-z0-9]+__/)?.[0] ?? "";
-				capture = `\n${stage}\n$ sudo id`;
-			}
-			if (args[0] === "send-keys" && args.at(-1) === "Enter") {
-				const literalCall = calls.find((call) => call[0] === "send-keys" && call.includes("-l"));
-				const literal = literalCall?.at(-1) ?? "";
-				const begin = literal.match(/__BEAUPI_PRIV_BEGIN_[A-Za-z0-9]+__/)?.[0] ?? "";
-				const end = literal.match(/__BEAUPI_PRIV_END_[A-Za-z0-9]+__/)?.[0] ?? "";
-				capture += `\n${begin}\nUnable to disable terminal echo\n${end}:125\n`;
+				capture = `\n${stage}\n$ ${command}`;
 			}
 			return {
 				stdout: args[0] === "capture-pane" ? capture : "",
@@ -61,27 +58,73 @@ describe("local privilege tmux fixture", () => {
 				completedAt: 2,
 			};
 		});
-		const adapter = new TmuxPrivilegeTerminalAdapter({ transport: new LocalTmuxTransport({ runner }) });
+		const adapter = new TmuxPrivilegeTerminalAdapter({
+			shellPath: userShell,
+			transport: new LocalTmuxTransport({ runner }),
+		});
 		const session = await adapter.create({
 			version: 1,
-			requestId: "local-echo-failure",
-			auditId: "audit-local-echo-failure",
-			toolCallId: "tool-local-echo-failure",
+			requestId: "local-user-shell",
+			auditId: "audit-local-user-shell",
+			toolCallId: "tool-local-user-shell",
 			sourceTool: "privileged_exec",
 			route: "explicit_tool",
-			command: "sudo id",
+			command,
 			target: { execution: "local" },
 			cwd,
 			createdAt: new Date(0).toISOString(),
 			logPath: join(cwd, "logs", "privilege.log"),
 		});
 
-		await session.start();
-		expect(await session.capture()).toMatchObject({ state: "waiting_for_user" });
-		await expect(session.sendSensitive(Buffer.from("M13-never-send"))).rejects.toThrow("not accepting input");
-		await expect(session.execute()).rejects.toThrow("echo could not be disabled");
-		expect(calls.some((args) => args[0] === "load-buffer")).toBe(false);
+		try {
+			await session.start();
+			expect(await session.capture()).toMatchObject({ state: "waiting_for_user", content: `$ ${command}` });
+			const create = calls.find((args) => args[0] === "new-session");
+			expect(create?.at(-1)).toContain(userShell);
+			expect(create?.join(" ")).not.toContain("env -i");
+			expect(create?.join(" ")).not.toContain("--noprofile");
+			expect(create?.join(" ")).not.toContain("--norc");
+		} finally {
+			await session.dispose();
+		}
 	});
+
+	zshTmuxIt(
+		"waits for normal zsh startup files before staging the command",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-zsh-"));
+			cleanup.push(cwd);
+			writeFileSync(join(cwd, ".zshrc"), "sleep 5.2\nexport BEAUPI_ZSH_READY=from-zshrc\n", "utf8");
+			const previousZdotdir = process.env.ZDOTDIR;
+			process.env.ZDOTDIR = cwd;
+			const adapter = new TmuxPrivilegeTerminalAdapter({ shellPath: zshPath });
+			const session = await adapter.create({
+				version: 1,
+				requestId: "local-zsh-startup",
+				auditId: "audit-local-zsh-startup",
+				toolCallId: "tool-local-zsh-startup",
+				sourceTool: "privileged_exec",
+				route: "explicit_tool",
+				command: "printf 'zsh-ready=%s\\n' \"$BEAUPI_ZSH_READY\"",
+				target: { execution: "local" },
+				cwd,
+				createdAt: new Date(0).toISOString(),
+				logPath: join(cwd, "logs", "zsh.log"),
+			});
+			try {
+				await session.start();
+				expect(await session.capture()).toMatchObject({ state: "waiting_for_user" });
+				await session.execute();
+				const result = await session.wait();
+				expect(result.output).toContain("zsh-ready=from-zshrc");
+			} finally {
+				if (previousZdotdir === undefined) delete process.env.ZDOTDIR;
+				else process.env.ZDOTDIR = previousZdotdir;
+				await session.dispose();
+			}
+		},
+		25_000,
+	);
 
 	tmuxIt(
 		"keeps a simulated password token out of pane output and the 0600 work log",
@@ -97,10 +140,11 @@ describe("local privilege tmux fixture", () => {
 				toolCallId: "tool-local-tmux-fixture",
 				sourceTool: "privileged_exec",
 				route: "explicit_tool",
-				command: "printf 'Password: '; IFS= read -r answer; printf '\\naccepted\\n'; sleep 1",
+				command:
+					"printf 'Password: '; stty -echo; IFS= read -r answer; stty echo; printf '\\naccepted\\n'; sleep 1",
 				target: { execution: "local" },
 				cwd,
-				timeoutMs: 5_000,
+				timeoutMs: 15_000,
 				createdAt: new Date(0).toISOString(),
 				logPath,
 			};
@@ -123,6 +167,48 @@ describe("local privilege tmux fixture", () => {
 				const workLog = readFileSync(logPath, "utf8");
 				expect(workLog).not.toContain(token);
 				expect(statSync(logPath).mode & 0o777).toBe(0o600);
+			} finally {
+				await session.dispose();
+			}
+		},
+		30_000,
+	);
+
+	tmuxIt(
+		"keeps a multiline interactive shell attached until the user exits",
+		async () => {
+			const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-interactive-"));
+			cleanup.push(cwd);
+			const command = "printf 'batch-one\\n'\nbash --noprofile --norc";
+			const request: PrivilegeRequestV1 = {
+				version: 1,
+				requestId: "local-interactive-shell",
+				auditId: "audit-local-interactive-shell",
+				toolCallId: "tool-local-interactive-shell",
+				sourceTool: "privileged_exec",
+				route: "explicit_tool",
+				command,
+				target: { execution: "local" },
+				cwd,
+				timeoutMs: 5_000,
+				createdAt: new Date(0).toISOString(),
+				logPath: join(cwd, "logs", "interactive.log"),
+			};
+			const adapter = new TmuxPrivilegeTerminalAdapter();
+			const session = await adapter.create(request);
+			try {
+				await session.start();
+				expect(await session.capture()).toMatchObject({
+					state: "waiting_for_user",
+					content: expect.stringContaining(command),
+				});
+				await session.execute();
+				expect(await session.capture()).toMatchObject({ state: "running" });
+				await session.sendSensitive(Buffer.from(`printf 'interactive-shell=%s\\n' "$SHELL"\rexit\r`, "utf8"));
+				const result = await session.wait();
+				expect(result).toMatchObject({ exitCode: 0 });
+				expect(result.output).toContain("batch-one");
+				expect(result.output).toMatch(/interactive-shell=\S+/);
 			} finally {
 				await session.dispose();
 			}

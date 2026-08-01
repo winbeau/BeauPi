@@ -29,8 +29,6 @@ export interface PrivilegeTerminalComponentOptions {
 type ViewState = "staging" | "waiting_for_user" | "starting" | "authenticating" | "running" | "cancelling" | "error";
 
 const POLL_MS = 75;
-const POST_AUTH_DETACH_FRAMES = 3;
-const NO_PROMPT_DETACH_FRAMES = 40;
 
 function wrap(value: string, width: number): string[] {
 	return value.split("\n").flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
@@ -65,8 +63,6 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 	private polling = false;
 	private renderWidth = 80;
 	private lastResize: { columns: number; rows: number } | undefined;
-	private sawAuthentication = false;
-	private runningFrames = 0;
 	private closed = false;
 	focused = false;
 
@@ -143,7 +139,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		const visible = outputLines.slice(start, end);
 		while (visible.length < paneRows) visible.push("");
 		if (
-			(this.state === "waiting_for_user" || this.state === "authenticating") &&
+			(this.state === "waiting_for_user" || this.state === "authenticating" || this.state === "running") &&
 			this.focused &&
 			this.scrollOffset === 0 &&
 			visible.length > 0
@@ -264,23 +260,13 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 				return;
 			}
 			if (frame.state === "waiting_for_user") {
-				this.runningFrames = 0;
 				if (this.startedAt === undefined) this.state = "waiting_for_user";
 			} else if (frame.state === "authenticating") {
-				this.sawAuthentication = true;
-				this.runningFrames = 0;
 				this.state = "authenticating";
 			} else if (frame.state === "starting") {
-				this.runningFrames = 0;
 				if (this.startedAt !== undefined) this.state = "starting";
 			} else if (frame.state === "running") {
 				this.state = "running";
-				this.runningFrames++;
-				const detachFrames = this.sawAuthentication ? POST_AUTH_DETACH_FRAMES : NO_PROMPT_DETACH_FRAMES;
-				if (this.runningFrames >= detachFrames) {
-					this.finish({ status: "completed" });
-					return;
-				}
 			}
 			await this.syncTerminalSize();
 			this.tui.requestRender();

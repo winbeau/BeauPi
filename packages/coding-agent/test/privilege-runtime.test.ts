@@ -5,6 +5,7 @@ import {
 	type PrivilegeAuditWriter,
 	PrivilegeRuntime,
 } from "../src/core/privilege/index.ts";
+import type { TerminalOutputReviewer, TerminalReviewInput } from "../src/core/remote/index.ts";
 
 class FakeAuditWriter implements PrivilegeAuditWriter {
 	readonly events: PrivilegeAuditEventV1[] = [];
@@ -15,6 +16,20 @@ class FakeAuditWriter implements PrivilegeAuditWriter {
 
 	async append(event: PrivilegeAuditEventV1): Promise<void> {
 		this.events.push(structuredClone(event));
+	}
+}
+
+class RecordingTerminalReviewer implements TerminalOutputReviewer {
+	readonly calls: TerminalReviewInput[] = [];
+
+	async review(input: TerminalReviewInput) {
+		this.calls.push(structuredClone(input));
+		return {
+			text: "Reviewed privilege output.",
+			model: "faux/gpt-5.6-luna",
+			status: "completed" as const,
+			inputTruncated: false,
+		};
 	}
 }
 
@@ -187,6 +202,50 @@ describe("PrivilegeRuntime", () => {
 		expect(adapter.createCalls).toBe(0);
 	});
 
+	it("returns short output directly and reviews failed or long privilege output", async () => {
+		const adapter = new FakePrivilegeTerminalAdapter();
+		const reviewer = new RecordingTerminalReviewer();
+		const runtime = new PrivilegeRuntime({
+			sessionId: "session",
+			cwd: "/tmp",
+			terminalAdapter: adapter,
+			auditWriter: new FakeAuditWriter(),
+			outputReviewer: reviewer,
+			handler: async (_interaction, control) => {
+				await control.start();
+				await control.execute();
+				await control.wait();
+				return { status: "completed" };
+			},
+		});
+
+		adapter.setResult({ output: "uid=0(root)\n", exitCode: 0, logPath: "/tmp/short.log" });
+		const short = await runtime.execute(request("review-short"));
+		expect(short.details.review).toMatchObject({ status: "skipped", inputTruncated: false });
+		expect(short.content[0]).toMatchObject({ type: "text", text: "uid=0(root)\n@/tmp/short.log" });
+		expect(reviewer.calls).toHaveLength(0);
+
+		adapter.setResult({ output: "permission denied\n", exitCode: 1, logPath: "/tmp/failed.log" });
+		const failed = await runtime.execute(request("review-failed"));
+		expect(failed.details.review).toMatchObject({
+			status: "completed",
+			model: "faux/gpt-5.6-luna",
+		});
+		expect(failed.content[0]).toMatchObject({
+			type: "text",
+			text: "Reviewed privilege output.\n@/tmp/failed.log",
+		});
+
+		adapter.setResult({
+			output: `${Array.from({ length: 101 }, (_, index) => `line ${index + 1}`).join("\n")}\n`,
+			exitCode: 0,
+			logPath: "/tmp/long.log",
+		});
+		const long = await runtime.execute(request("review-long"));
+		expect(long.details.review?.status).toBe("completed");
+		expect(reviewer.calls).toHaveLength(2);
+	});
+
 	it("maps nonzero exits and timeouts into stable result facts", async () => {
 		for (const configured of [
 			{ output: "denied\n", exitCode: 7 },
@@ -214,6 +273,30 @@ describe("PrivilegeRuntime", () => {
 		}
 	});
 
+	it("allows interactive root shells and multiline sudo batches", async () => {
+		const adapter = new FakePrivilegeTerminalAdapter();
+		adapter.setResult({ output: "done\n", exitCode: 0 });
+		const runtime = new PrivilegeRuntime({
+			sessionId: "session",
+			cwd: "/tmp",
+			terminalAdapter: adapter,
+			auditWriter: new FakeAuditWriter(),
+			handler: async (_interaction, control) => {
+				await control.start();
+				await control.execute();
+				await control.wait();
+				return { status: "completed" };
+			},
+		});
+		const commands = ["sudo -i", "sudo -s", "sudo bash", "sudo apt update\nsudo apt install -y example"];
+
+		for (const [index, command] of commands.entries()) {
+			const result = await runtime.execute({ ...request(`interactive-${index}`), command });
+			expect(result.details.status, command).toBe("succeeded");
+		}
+		expect(adapter.requests.map((entry) => entry.command)).toEqual(commands);
+	});
+
 	it("rejects unsupported identity switching and sudo stdin mode before interaction", async () => {
 		const adapter = new FakePrivilegeTerminalAdapter();
 		const handler = vi.fn();
@@ -236,9 +319,6 @@ describe("PrivilegeRuntime", () => {
 			"sudo --stdin id",
 			"sudo -A id",
 			"sudo --askpass id",
-			"sudo -i",
-			"sudo -s",
-			"sudo bash",
 		]) {
 			const result = await runtime.execute({ ...request(command), toolCallId: command, command });
 			expect(result.details.status, command).toBe("blocked");

@@ -8,7 +8,8 @@
 
 - 输入：完整 sudo command、cwd、shell config、timeout、source tool、AbortSignal。
 - 使用 shared local tmux privilege pane，不直接在 BeauPi 进程中 spawn sudo with pipes。
-- 每个 request创建独立pane，用户Enter前不发送命令，终态后关闭。
+- 每个 request创建独立pane并只读staging完整文本；用户Enter前不释放执行门控，终态后关闭。
+- pane使用独立tmux server继承当前环境、目标cwd、配置的真实用户shell和startup files。
 - 输出进入现有 Bash accumulator/truncation path；完整输出路径与 Bash一致或使用明确 privilege log path。
 - exit 126/127、permission、timeout、cancel 与普通 Bash保持结构化 failure category。
 - 无 handler、tmux unavailable 时不创建可执行command session。
@@ -19,7 +20,7 @@
 - 使用同一个 local tmux SSH pane，因此继承远程 shell cwd、export环境和 sudo tty ticket。
 - 扩展 `SshConnection`/Remote Runtime，提供受控 interactive command session，而不是让 TUI直接访问 private connection map。
 - existing terminal work log继续是完整输出事实源；privilege audit只引用该 logPath。
-- command terminal后恢复 `terminal.busy = false`，更新 Monitor并运行现有 output reviewer规则。
+- command或交互式sudo shell terminal后恢复 `terminal.busy = false`，更新 Monitor并运行共享 output reviewer规则。
 - 每个sudo request都重新显示权限框；系统sudo ticket可能省略密码prompt，但不省略用户Enter确认。
 
 ## 建议内部接口
@@ -28,6 +29,7 @@
 interface PrivilegeCommandSession {
   readonly request: PrivilegeRequestV1;
   start(): Promise<void>;
+  execute(): Promise<void>;
   sendSensitive(input: Buffer): Promise<void>;
   capture(): Promise<PrivilegeTerminalFrame>;
   resize(columns: number, rows: number): Promise<void>;
@@ -37,7 +39,7 @@ interface PrivilegeCommandSession {
 }
 ```
 
-- `start()` 在用户 Enter 前不得被调用。
+- `start()` 只创建pane并stage文本；`execute()`只在用户Enter后调用。
 - `wait()` 返回输出/exit/log/monitor facts，不返回用户输入。
 - fake implementation必须可控制 prompt、output、ticket、exit和lost。
 
@@ -59,19 +61,20 @@ interface PrivilegeCommandSession {
 
 - `remote_exec` one-shot交互 sudo。
 - remote target无 terminalId时自动创建长期 terminal。
-- `su -`、root login shell、PAM GUI、askpass、doas/pkexec。
+- `su -`、PAM GUI、askpass、doas/pkexec；当前request内的 `sudo bash`/`sudo sh`/`sudo -i`/`sudo -s` 受支持。
 - privileged background task和 detached root process。
 
 ## 失败路径
 
 - terminal busy/lost/disconnected：不打开重复交互，保留 partial output/log。
 - SSH断开：Monitor terminal/connection进入lost，当前request取消并清理。
-- timeout/abort：Ctrl-C、flush、echo restore、terminal state复核。
+- timeout/abort：Ctrl-C、必要时Ctrl-D退出交互式shell、flush和terminal state复核。
 - output reviewer失败：沿用 deterministic fallback，不影响 exit事实。
 
 ## 测试
 
-- local success/nonzero/timeout/cancel/truncation。
+- local success/nonzero/timeout/cancel/truncation、用户shell环境、慢zsh启动和多行staging。
+- local/remote交互式sudo shell保持attached，exit完成，取消恢复。
 - remote fake terminal cwd/export继承和work log。
 - terminal busy/lost/disconnect。
 - 每个request独立确认、target mismatch、系统ticket已缓存时仍要求Enter。

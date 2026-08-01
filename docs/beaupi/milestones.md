@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：命令先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；不提供 sudo mode、root shell 或 Session grant。
+7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：完整命令或批次先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；可在当前 request 内使用交互式 sudo shell，但不提供 sudo mode、持久 root shell 或 Session grant。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -418,7 +418,7 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - 本地 tmux pane 内直接运行 SSH，远端不再要求 tmux；所有 terminal 输入由本地 tmux 注入
 - `terminal_bash` 在现有远端 shell 当前目录和导出环境中执行普通 Bash 命令，一次调用等待完成；send/capture 保留给交互式控制和诊断
 - 每 terminal 的完整脱敏 `工作日志.log`、增量 capture、随机 marker/退出码协议和关闭时清理的本地 pane transcript
-- 可配置 `TerminalOutputReviewer`：失败或输出超过 100 行时审阅，短成功命令走确定性摘要，最后一行固定为 `@绝对日志路径`
+- 可配置 `TerminalOutputReviewer`：短成功输出直接返回，失败或输出超过 100 行时审阅，最后一行固定为 `@绝对日志路径`
 - 非零退出、超时、取消和断线保留 Tool details、usage、Monitor 关联和正确 `isError`
 - 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
 - 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
@@ -450,13 +450,13 @@ ssh h100-server 'hostname && curl -fsSL --max-time 20 -o /dev/null -w "http_code
 
 ### 验收标准
 
-Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内创建、控制和关闭 SSH terminal；普通命令可直接使用一次 `terminal_bash` 在现有远端 shell 当前目录执行，无需手动组合 send/capture/status；断线、超时、非零退出和会话丢失状态可见；完整输出进入工作日志，主上下文只接收审阅摘要。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
+Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，并在本地 tmux pane 内创建、控制和关闭 SSH terminal；普通命令可直接使用一次 `terminal_bash` 在现有远端 shell 当前目录执行，无需手动组合 send/capture/status；断线、超时、非零退出和会话丢失状态可见；完整输出进入工作日志，主上下文只接收短成功输出或审阅摘要。验收同时要求 fake adapter 测试和 `h100-server` 真实 E2E 测试。
 
 ### 补充验收记录（2026-07-31）
 
 - Terminal transport 已从“SSH 到远端 tmux”改为“本地 tmux pane 内运行 SSH”，并通过真实 `h100-server` E2E 验证 cwd、命令执行、增量 capture、连接重建、关闭和 5,000 行完整日志。
 - `terminal_bash` 使用本地 transcript 和 marker/退出码协议，完整脱敏输出按 terminal 追加到 `.beaupi/terminal-logs/.../工作日志.log`；临时 transcript 在关闭/dispose 时清理。
-- 共享 `review.model` 默认 `gpt-5.6-luna`，裸 model id 优先跟随当前 Agent provider；Terminal 失败或输出超过 100 行才审阅，未设置额外 `maxTokens` 硬限制。
+- 共享 `review.model` 默认 `gpt-5.6-luna`，裸 model id 优先跟随当前 Agent provider；Terminal 与 Sudo Bash 的短成功输出直接返回，失败或输出超过 100 行才审阅，未设置额外 `maxTokens` 硬限制。
 - Tool Result 最后一行由代码强制为 `@绝对日志路径`；模型失败使用确定性 fallback，review usage 进入 Tool Result/Session 使用统计。
 - AgentSession 根据 Remote details 的 `ok` 设置 `isError`，非零退出、超时和断线不再因通用异常路径丢失 terminal/monitor/log/review details。
 
@@ -696,7 +696,8 @@ Agent 可以选择受信任目标，通过结构化 Tool 执行远程命令，�
 
 - local Bash 和 `terminal_bash` 的 sudo 自动路由到统一 `PrivilegeRuntime`
 - 结构化 `privileged_exec`
-- 每条 sudo 命令直接填充到双分割线 tmux、用户 Enter 执行或 Escape 取消，以及受控 PTY 输入
+- 完整 sudo 命令或换行分隔批次直接填充到双分割线 tmux、用户 Enter 执行或 Escape 取消，以及受控 PTY 输入
+- 当前 request 内的 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 保持 attached，直到用户退出或取消
 - `terminal_send` sudo bypass 拦截
 - 非交互模式和无可控 PTY 的远程 one-shot 路径默认阻止
 - JSONL 审计日志
@@ -710,9 +711,10 @@ Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权
 ### 验收记录（2026-08-01）
 
 - `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一进入 session-scoped `PrivilegeRuntime`；普通执行器和 one-shot SSH 路径不能旁路。
-- 每个 request 第一帧直接在双分割线 tmux 中显示只读命令；Enter 执行、Escape 取消，不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
-- local 与 existing remote terminal 复用本地 tmux PTY 和 secure stdin buffer；认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
-- `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、echo cleanup、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
+- 每个 request 第一帧直接在双分割线 tmux 中显示完整只读命令或批次；Enter 执行、Escape 取消，不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
+- local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；local 与 existing remote terminal 共用 secure stdin buffer，认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
+- 交互式 sudo shell 在认证后保持 attached，`exit` 正常完成，取消不会留下隐藏 root shell；短成功输出直返，长输出或失败复用共享 `review.model`。
+- `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
 - M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
 ## M14：动态 Task 计划与进度审阅

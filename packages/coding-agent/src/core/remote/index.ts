@@ -9,8 +9,11 @@ export {
 export {
 	deterministicTerminalReport,
 	LunaTerminalOutputReviewer,
+	type ReviewedTerminalOutput,
+	reviewTerminalOutput,
 	type TerminalOutputReviewer,
 	type TerminalReviewInput,
+	type TerminalReviewMetadata,
 	type TerminalReviewResult,
 } from "./output-reviewer.ts";
 export {

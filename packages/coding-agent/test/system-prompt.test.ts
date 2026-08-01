@@ -83,13 +83,13 @@ describe("buildSystemPrompt", () => {
 			);
 			expect(prompt).toContain("do not place the entire plan in one monolithic file");
 			expect(prompt).toContain(
-				"When a Bash or terminal_bash result includes a review from a fast model such as gpt-5.6-luna",
+				"When any Bash-like Tool result—including bash, remote_bash, terminal_bash, privileged_exec/Sudo Bash, or an equivalent extension Tool—includes a review from a fast model such as gpt-5.6-luna",
 			);
 			expect(prompt).toContain(
 				"trust that reviewed conclusion on the first pass instead of immediately reading the full log",
 			);
 			expect(prompt).toContain(
-				"If the reviewed result reports success, do not read the full log; if it reports failure, read the full log before diagnosing or attempting a fix",
+				"If a reviewed result reports success, do not read the full log; if it reports failure, read the full log only after that first execution has failed and before diagnosing or attempting a fix",
 			);
 			expect(prompt).toContain("a reviewed Bash failure caused by a missing tool or a command absent from PATH");
 			expect(prompt).toContain("do not fall back to a user-local install, downloaded binary, or PATH workaround");

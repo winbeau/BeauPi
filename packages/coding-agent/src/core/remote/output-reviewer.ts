@@ -29,6 +29,19 @@ export interface TerminalReviewResult {
 	error?: string;
 }
 
+export interface TerminalReviewMetadata {
+	model?: string;
+	status: "completed" | "fallback" | "skipped";
+	inputTruncated: boolean;
+	error?: string;
+}
+
+export interface ReviewedTerminalOutput {
+	report: string;
+	review: TerminalReviewMetadata;
+	usage?: Usage;
+}
+
 export interface TerminalOutputReviewer {
 	review(input: TerminalReviewInput, signal?: AbortSignal): Promise<TerminalReviewResult>;
 }
@@ -207,8 +220,60 @@ export function deterministicTerminalReport(input: TerminalReviewInput): Termina
 	};
 }
 
-export function successfulTerminalReport(command: string, logPath: string): string {
-	return withLogPath(`Command completed successfully: ${command}`, logPath);
+function directTerminalReport(input: TerminalReviewInput): string {
+	return withLogPath(
+		input.output.trim() ||
+			(input.diagnosticCode === undefined && input.exitCode === 0
+				? `Command completed successfully: ${input.command}`
+				: fallbackBody(input)),
+		input.logPath,
+	);
+}
+
+export async function reviewTerminalOutput(
+	input: TerminalReviewInput,
+	reviewer?: TerminalOutputReviewer,
+	signal?: AbortSignal,
+): Promise<ReviewedTerminalOutput> {
+	const cancelled = input.diagnosticCode === "cancelled" || input.diagnosticCode === "remote_cancelled";
+	const shouldReview =
+		!cancelled && (input.diagnosticCode !== undefined || input.exitCode !== 0 || lineCount(input.output) > 100);
+	if (!shouldReview) {
+		return {
+			report: directTerminalReport(input),
+			review: { status: "skipped", inputTruncated: false },
+		};
+	}
+	if (reviewer) {
+		try {
+			const reviewed = await reviewer.review(input, signal);
+			return {
+				report: withLogPath(reviewed.text, input.logPath),
+				review: {
+					model: reviewed.model,
+					status: reviewed.status,
+					inputTruncated: reviewed.inputTruncated,
+					error: reviewed.error,
+				},
+				usage: reviewed.usage,
+			};
+		} catch (error) {
+			const fallback = deterministicTerminalReport(input);
+			return {
+				report: fallback.text,
+				review: {
+					status: "fallback",
+					inputTruncated: fallback.inputTruncated,
+					error: error instanceof Error ? error.message : String(error),
+				},
+			};
+		}
+	}
+	const fallback = deterministicTerminalReport(input);
+	return {
+		report: fallback.text,
+		review: { status: "fallback", inputTruncated: fallback.inputTruncated },
+	};
 }
 
 export { boundedReviewMaterial, lineCount, withLogPath };

@@ -588,7 +588,7 @@ If neither `questionHandler` nor an injected `questionRuntime` is provided, the 
 
 #### Controlled sudo terminal
 
-`privileged_exec` stages one complete, deterministically parsed sudo command in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the command: the user presses Enter to release that exact staged command, or Escape to cancel, including when the system sudo credential is cached.
+`privileged_exec` stages one complete, deterministically parsed sudo command or newline-separated batch in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the text: the user presses Enter to release that exact staged command/batch, or Escape to cancel, including when the system sudo credential is cached. Interactive `sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` remain attached until the user exits or cancels.
 
 ```typescript
 import {
@@ -605,8 +605,9 @@ const privilegeHandler: PrivilegeInteractionHandler = async (request, control, s
   if (!execute) return { status: "cancelled" };
 
   await control.execute();
-  // Authentication keystrokes may be forwarded with control.sendSensitive().
+  // Direct terminal bytes may be forwarded with control.sendSensitive().
   // Do not ask for or receive a password through application forms or callbacks.
+  // Keep the trusted terminal attached until the command or interactive shell exits.
   await control.wait();
   return { status: "completed" };
 };
@@ -614,7 +615,7 @@ const privilegeHandler: PrivilegeInteractionHandler = async (request, control, s
 const { session } = await createAgentSession({ privilegeHandler });
 ```
 
-The SDK also accepts `privilegeRuntime` or `privilegeTerminalAdapter` for custom trusted hosts and deterministic tests. Authentication input must only travel from the user's terminal to `control.sendSensitive(Buffer)` and the controlling TTY. It must not be placed in Tool parameters, argv, environment variables, Session entries, logs, RPC messages, or errors.
+The SDK also accepts `privilegeRuntime` or `privilegeTerminalAdapter` for custom trusted hosts and deterministic tests. Authentication input must only travel from the user's terminal to `control.sendSensitive(Buffer)` and the controlling TTY. It must not be placed in Tool parameters, argv, environment variables, Session entries, logs, RPC messages, or errors. Completed privileged commands use the same terminal review pipeline as `terminal_bash`: short successful output is returned directly, while failures, diagnostics, and output over 100 lines use the shared `review.model` with the complete log path retained.
 
 Without a handler, sudo returns structured `interaction_required` and does not create a pane or execute the command. Print, JSON, and RPC modes clear the handler and remain non-interactive. Controlled AgentPool children never receive `privileged_exec`; sudo attempted through their `bash` tool is also non-executing because no handler is installed.
 

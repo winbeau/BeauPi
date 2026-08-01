@@ -25,7 +25,7 @@ function request(): PrivilegeInteractionRequest {
 		requestId: "privilege-request",
 		sourceTool: "terminal_bash",
 		route: "terminal_bash",
-		command: "sudo install -m 0644 ./source /usr/local/share/example",
+		command: "sudo apt update\nsudo apt install -y example",
 		target: { execution: "terminal", targetId: "server", terminalId: "term", monitorId: "mon" },
 		cwd: "/workspace",
 		auditPath: "/home/user/.pi/audit/privileged/2026-01-01.jsonl",
@@ -79,7 +79,8 @@ describe("PrivilegeTerminalComponent", () => {
 			const rendered = component.render(width);
 			const plain = rendered.map(stripAnsi);
 			expect(plain.filter((line) => line.includes("─"))).toHaveLength(2);
-			expect(plain.join("\n")).toContain("sudo install");
+			expect(plain.join("\n")).toContain("sudo apt update");
+			expect(plain.join("\n")).toContain("sudo apt install -y example");
 			expect(plain.join("\n")).not.toContain("Permission required");
 			expect(rendered.every((line) => visibleWidth(line) <= width)).toBe(true);
 			component.dispose();
@@ -166,7 +167,7 @@ describe("PrivilegeTerminalComponent", () => {
 		expect(done).toHaveBeenCalledWith({ status: "cancelled" });
 	});
 
-	it("detaches after authentication while the command keeps waiting", async () => {
+	it("stays attached after authentication until the interactive command exits", async () => {
 		const fixture = controls();
 		let executedFrames = 0;
 		fixture.capture.mockImplementation(async () => {
@@ -193,9 +194,14 @@ describe("PrivilegeTerminalComponent", () => {
 		await new Promise((resolve) => setTimeout(resolve, 250));
 
 		expect(fixture.control.sendSensitive).toHaveBeenCalledWith(Buffer.from("secret\r"));
-		expect(done).toHaveBeenCalledWith({ status: "completed" });
+		expect(done).not.toHaveBeenCalled();
+		component.handleInput("whoami\r");
+		await flush();
+		expect(fixture.control.sendSensitive).toHaveBeenCalledWith(Buffer.from("whoami\r"));
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Running as root");
 		fixture.resolveWait({ output: "done\n", exitCode: 0, startedAt: 1, completedAt: 2 });
 		await flush();
+		expect(done).toHaveBeenCalledWith({ status: "completed" });
 		expect(done).toHaveBeenCalledTimes(1);
 	});
 

@@ -801,10 +801,14 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			output: string;
 			exitCode: number;
 			prompt: boolean;
+			interactive: boolean;
 			started: boolean;
 		}
 	>();
-	private readonly privilegeResults = new Map<string, { output: string; exitCode: number; prompt: boolean }>();
+	private readonly privilegeResults = new Map<
+		string,
+		{ output: string; exitCode: number; prompt: boolean; interactive: boolean }
+	>();
 	private nextPaneId = 1;
 	connectCalls = 0;
 	commandCalls: string[] = [];
@@ -840,12 +844,13 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 
 	setPrivilegeCommandResult(
 		terminalId: string,
-		result: { output?: string; exitCode?: number; prompt?: boolean },
+		result: { output?: string; exitCode?: number; prompt?: boolean; interactive?: boolean },
 	): void {
 		this.privilegeResults.set(terminalId, {
 			output: result.output ?? "privileged-ok\n",
 			exitCode: result.exitCode ?? 0,
 			prompt: result.prompt ?? true,
+			interactive: result.interactive ?? false,
 		});
 	}
 
@@ -932,6 +937,7 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			output: "privileged-ok\n",
 			exitCode: 0,
 			prompt: true,
+			interactive: false,
 		};
 		const encoded = input.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)?.[1] ?? "";
 		const command = encoded ? Buffer.from(encoded, "base64").toString("utf8") : "sudo command";
@@ -950,7 +956,18 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		if (!entry?.terminal.exists) return;
 		const privilege = this.privilegeTerminals.get(entry.terminalId);
 		if (!privilege?.started) return;
-		this.sensitiveInput.push(Buffer.from(input));
+		if (privilege.prompt) {
+			this.sensitiveInput.push(Buffer.from(input));
+			privilege.prompt = false;
+			if (privilege.interactive) {
+				entry.terminal.output += "\nroot# ";
+				return;
+			}
+		} else if (privilege.interactive) {
+			const text = input.toString("utf8");
+			entry.terminal.output += text.replaceAll("\r", "\n");
+			if (!/(?:^|\n)exit(?:\s|\n|$)/.test(text.replaceAll("\r", "\n"))) return;
+		}
 		entry.terminal.output += `\n${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 		this.privilegeTerminals.delete(entry.terminalId);
 	}
@@ -971,13 +988,18 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 		if (key === "Enter" && privilege && !privilege.started) {
 			privilege.started = true;
 			entry.terminal.output += `\n${privilege.beginMarker}\n${privilege.prompt ? "Password: " : ""}`;
-			if (!privilege.prompt) {
+			if (!privilege.prompt && privilege.interactive) entry.terminal.output += "root# ";
+			else if (!privilege.prompt) {
 				entry.terminal.output += `${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 				this.privilegeTerminals.delete(entry.terminalId);
 			}
 		}
-		if (key === "C-c" && privilege) {
+		if (key === "C-c" && privilege && !privilege.interactive) {
 			entry.terminal.output += `\n${privilege.endMarker}:130\n`;
+			this.privilegeTerminals.delete(entry.terminalId);
+		}
+		if (key === "C-d" && privilege?.interactive) {
+			entry.terminal.output += `\n${privilege.output}${privilege.endMarker}:${privilege.exitCode}\n`;
 			this.privilegeTerminals.delete(entry.terminalId);
 		}
 	}

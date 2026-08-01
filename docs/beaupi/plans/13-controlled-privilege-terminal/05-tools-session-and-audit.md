@@ -17,7 +17,7 @@
 - command不允许NUL、空白，且必须包含classifier可确定识别的sudo executable。
 - Tool参数不包含mode、grant、confirmation或password字段。
 - controlled child、reviewer和Workflow默认profile不暴露该Tool。
-- system prompt明确：可以直接调用`privileged_exec`；普通local Bash/terminal_bash中的sudo也会自动进入同一受控终端，绝不请求或传递密码。
+- system prompt明确：默认优先直接sudo命令；多行批次和当前request内的交互式sudo shell受支持；普通local Bash/terminal_bash中的sudo也会自动进入同一受控终端，绝不请求或传递密码。
 
 ## Tool Result
 
@@ -28,10 +28,11 @@
 - confirmedAt、startedAt和terminal lifecycle facts。
 - terminalId/targetId/monitorId/logPath。
 - exitCode、durationMs、diagnostic。
+- 短成功直返或长输出/失败审阅的review metadata与usage。
 - Bash truncation/fullOutputPath。
 - Policy metadata引用。
 
-Tool `content`沿用Bash输出与截断通知；details不复制完整日志或terminal transcript。
+Tool `content`复用共享Terminal输出管线：短成功直接返回，失败、诊断或超过100行时返回`review.model`报告；details不复制完整日志或terminal transcript。
 
 ## Renderer
 
@@ -39,7 +40,7 @@ Tool `content`沿用Bash输出与截断通知；details不复制完整日志或t
 - waiting：复用permission视觉槽位和`Waiting for user`。
 - running：复用Bash animation/elapsed。
 - result：调用共享Bash result renderer。
-- blocked/interaction_required/echo recovery失败使用不可折叠简短诊断。
+- blocked/interaction_required/terminal recovery失败使用不可折叠简短诊断。
 - `ToolExecutionComponent`只根据结构化details/Tool名称切换标题，不解析展示文本。
 
 ## AgentSession 与 SDK

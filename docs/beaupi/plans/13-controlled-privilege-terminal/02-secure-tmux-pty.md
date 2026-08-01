@@ -46,20 +46,19 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 
 - 每个 local sudo request 使用独立 ephemeral pane，命令完成、取消或失败后关闭。
 - 不为 AgentSession 保留 sudo pane，不建立 app-level grant，也不运行 sudo keepalive。
-- pane 在目标 cwd 启动用户 shell；command wrapper 使用配置的 shell path/args。
-- 不使用 `sudo --preserve-env`；root command 不显式继承 Provider/Auth/PI_* secrets。
+- pane 在目标 cwd 启动配置的真实用户 shell；local privilege transport 使用独立 tmux server，从当前进程安全继承环境并保留普通 shell startup files。
+- 不使用 `env -i`、`--noprofile`、`--norc` 或 `sudo --preserve-env`；sudo 自身仍决定 root command 保留哪些环境变量。
 - commandPrefix 与 Bash 语义保持一致，但审计展示实际发送的完整 sudo 命令。
 
 ## Echo 与 Wrapper
 
 交互 wrapper 必须：
 
-1. 记录 begin marker。
-2. `stty -echo`，安装 EXIT/HUP/INT/TERM cleanup。
-3. 用户按 Enter 后发送与审计记录完全一致的完整 sudo 命令；不预先执行 `sudo -v`，不改写为 `sudo -n`。
-4. sudo 是否显示密码 prompt 由目标系统 sudoers/timestamp policy决定，但每个 BeauPi request 都已经独立确认。
-5. 恢复 `stty echo`，记录 end marker 与 exit code。
-6. cleanup 不成功时关闭 local privilege pane；remote existing pane 标记 terminal recovery required并尝试 `stty echo`。
+1. 输出 stage marker 和与审计记录完全一致的完整单行或多行文本，然后阻塞等待用户 Enter。
+2. Enter 后输出 begin marker，并用原始文本执行；不预先执行 `sudo -v`，不改写为 `sudo -n`。
+3. sudo 是否显示密码 prompt 由目标系统 sudoers/timestamp policy决定，但每个 BeauPi request 都已经独立确认。
+4. wrapper 不在整个 command 或交互式 root shell 生命周期执行 `stty -echo`；密码期间的 no-echo 由 sudo controlling TTY负责，普通 shell 输入继续正常回显。
+5. command或交互式 shell退出后记录 end marker与exit code。取消时local关闭ephemeral pane；remote先Ctrl-C，必要时Ctrl-D恢复原用户shell。
 
 命令正文使用现有 base64/marker protocol或 argv-safe helper传递；不依赖模型生成 shell quoting。
 
@@ -75,8 +74,8 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - tmux missing/version unsupported：结构化 `tmux_unavailable`，不 fallback 到密码管道。
 - pane/session 消失：`terminal_lost`，取消当前request并清理交互。
 - load-buffer/paste 失败：交互失败并清除 buffer，不重试输入。
-- no-echo cleanup 未确认：关闭 pane或把现有 remote terminal标记 lost/recovery required。
-- Abort：发送 Ctrl-C、等待 marker/settle、恢复 echo、flush output。
+- 交互式 shell取消后未恢复原用户 shell：关闭 local pane，或把 existing remote terminal标记 recovery failed。
+- Abort：发送 Ctrl-C、等待 marker/settle；仍停留在交互式 root shell时发送Ctrl-D，然后flush output。
 
 ## 测试
 
@@ -84,7 +83,9 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - tmux buffer 在 success/failure 后删除。
 - password-like fixture input 不出现在 transcript、logs、errors、Session facts。
 - marker、exit code、timeout、cancel、pane lost、resize。
-- no-echo 恢复；硬失败时关闭 pane。
+- sudo密码输入不回显，而认证后的普通命令与交互式shell输入正常回显。
+- 用户shell startup环境、慢zsh初始化、cwd和多行staging。
+- 交互式shell的exit与取消恢复；硬失败时关闭pane或标记recovery failed。
 - existing Remote terminal tests继续通过，证明 transport extraction 无退化。
 
 ## 完成状态
@@ -93,5 +94,5 @@ Remote adapter 改为组合该 transport，不保留第二份 tmux implementatio
 - [x] shared transport extraction
 - [x] secure stdin channel
 - [x] per-request local privilege pane
-- [x] wrapper/echo/marker cleanup
+- [x] wrapper/echo/marker与交互式shell cleanup
 - [x] transport tests

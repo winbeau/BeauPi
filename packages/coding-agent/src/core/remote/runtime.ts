@@ -19,14 +19,7 @@ import type { EditOperations } from "../tools/edit.ts";
 import type { ReadOperations } from "../tools/read.ts";
 import type { WriteOperations } from "../tools/write.ts";
 import { OpenSshTmuxAdapter, parseTerminalCommandCapture } from "./adapter.ts";
-import {
-	deterministicTerminalReport,
-	lineCount,
-	successfulTerminalReport,
-	type TerminalOutputReviewer,
-	type TerminalReviewInput,
-	withLogPath,
-} from "./output-reviewer.ts";
+import { reviewTerminalOutput, type TerminalOutputReviewer, type TerminalReviewInput } from "./output-reviewer.ts";
 import { ExecutionTargetRegistry } from "./targets.ts";
 import {
 	EXECUTION_TARGET_VERSION,
@@ -214,14 +207,11 @@ function privilegeTerminalWrapper(
 ): string {
 	const encoded = Buffer.from(command, "utf8").toString("base64");
 	return [
-		"__beaupi_restore_echo(){ stty echo >/dev/null 2>&1; }",
-		"trap '__beaupi_restore_echo || true' EXIT HUP INT TERM",
 		`printf '\\n%s\\n' ${shellQuote(stageMarker)}`,
 		`printf '$ %s' "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
-		"if IFS= read -r __beaupi_execute; then stty -echo; __beaupi_echo_status=$?; printf '\\n%s\\n' " +
+		"if IFS= read -r __beaupi_execute; then printf '\\n%s\\n' " +
 			shellQuote(beginMarker) +
-			`; if [ "$__beaupi_echo_status" -ne 0 ]; then printf '%s\\n' 'Unable to disable terminal echo'; __beaupi_privilege_status=125; else eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; if ! __beaupi_restore_echo; then __beaupi_privilege_status=125; printf '%s\\n' 'Unable to restore terminal echo'; fi; fi; else __beaupi_privilege_status=130; fi`,
-		"trap - EXIT HUP INT TERM",
+			`; eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; else __beaupi_privilege_status=130; fi`,
 		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
 	].join("; ");
 }
@@ -705,7 +695,9 @@ export class RemoteExecutionRuntime {
 		): Promise<PrivilegeCommandResultV1> => {
 			if (!finalized) {
 				finalized = true;
-				reusable = !/Unable to (?:disable|restore) terminal echo/.test(result.output);
+				if (remoteDiagnostic?.code === "ssh_disconnected" || remoteDiagnostic?.code === "terminal_session_lost") {
+					reusable = false;
+				}
 				terminal.busy = !reusable;
 				const output = redactOutput(result.output);
 				await this.recordTerminalCommandOutput(terminal, connection, {
@@ -720,24 +712,25 @@ export class RemoteExecutionRuntime {
 			}
 			return result;
 		};
-		let restorePromise: Promise<boolean> | undefined;
-		const restoreEcho = (): Promise<boolean> => {
-			restorePromise ??= (async () => {
+		const waitForCompletionMarker = async (timeoutMs: number): Promise<boolean> => {
+			const deadline = this.now() + timeoutMs;
+			while (this.now() < deadline) {
+				const capture = await connection.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 }).catch(() => undefined);
+				if (!capture || capture.exitCode !== 0) return false;
+				if (parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker).exitCode !== undefined) return true;
+				await delay(50);
+			}
+			return false;
+		};
+		let recoveryPromise: Promise<boolean> | undefined;
+		const recoverTerminal = (): Promise<boolean> => {
+			recoveryPromise ??= (async () => {
 				await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
-				const deadline = this.now() + 2_000;
-				while (this.now() < deadline) {
-					const capture = await connection
-						.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 })
-						.catch(() => undefined);
-					if (!capture || capture.exitCode !== 0) return false;
-					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-					if (parsed.exitCode !== undefined)
-						return !/Unable to (?:disable|restore) terminal echo/.test(parsed.output);
-					await delay(50);
-				}
-				return false;
+				if (await waitForCompletionMarker(2_000)) return true;
+				await connection.tmuxSendKey(terminal.paneId, "C-d", { timeoutMs: 2_000 }).catch(() => undefined);
+				return waitForCompletionMarker(2_000);
 			})();
-			return restorePromise;
+			return recoveryPromise;
 		};
 		return {
 			start: async () => {
@@ -807,23 +800,13 @@ export class RemoteExecutionRuntime {
 					if (capture.exitCode !== 0)
 						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
 					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
-					if (parsed.output.includes("Unable to disable terminal echo")) {
-						reusable = false;
-						terminal.busy = true;
-						throw new RemoteExecutionError({
-							code: "terminal_busy",
-							message: "Privilege terminal echo could not be disabled",
-							targetId: target.id,
-							operationId: terminalId,
-						});
-					}
 					if (parsed.found) break;
 					if (this.now() >= deadline) {
 						reusable = false;
 						terminal.busy = true;
 						throw new RemoteExecutionError({
 							code: "terminal_busy",
-							message: "Privilege terminal echo handshake timed out",
+							message: "Privilege command start marker timed out",
 							targetId: target.id,
 							operationId: terminalId,
 						});
@@ -878,7 +861,7 @@ export class RemoteExecutionRuntime {
 					terminal.busy = false;
 					return;
 				}
-				reusable = await restoreEcho();
+				reusable = await recoverTerminal();
 				terminal.busy = !reusable;
 			},
 			wait: async () => {
@@ -891,7 +874,6 @@ export class RemoteExecutionRuntime {
 						if (parsed.found) lastOutput = parsed.output;
 						if (parsed.exitCode !== undefined) {
 							completed = true;
-							const echoFailure = /Unable to (?:disable|restore) terminal echo/.test(lastOutput);
 							return finalize({
 								output: lastOutput,
 								exitCode: parsed.exitCode,
@@ -899,9 +881,6 @@ export class RemoteExecutionRuntime {
 								completedAt: this.now(),
 								monitorId: terminal.monitorId,
 								logPath: terminal.logPath,
-								diagnostic: echoFailure
-									? { code: "echo_recovery_failed", message: "Privilege terminal echo could not be secured" }
-									: undefined,
 							});
 						}
 					} catch (error) {
@@ -921,7 +900,7 @@ export class RemoteExecutionRuntime {
 						);
 					}
 					if (controller.signal.aborted) {
-						reusable = await restoreEcho();
+						reusable = await recoverTerminal();
 						completed = true;
 						const remoteIssue: RemoteDiagnostic = {
 							code: "remote_cancelled",
@@ -940,13 +919,16 @@ export class RemoteExecutionRuntime {
 								logPath: terminal.logPath,
 								diagnostic: reusable
 									? { code: "cancelled", message: remoteIssue.message }
-									: { code: "echo_recovery_failed", message: "Privilege terminal echo recovery failed" },
+									: {
+											code: "terminal_recovery_failed",
+											message: "Privilege terminal did not return to the user shell",
+										},
 							},
 							remoteIssue,
 						);
 					}
 					if (deadline !== undefined && this.now() >= deadline) {
-						reusable = await restoreEcho();
+						reusable = await recoverTerminal();
 						completed = true;
 						const remoteIssue: RemoteDiagnostic = {
 							code: "remote_timeout",
@@ -965,7 +947,10 @@ export class RemoteExecutionRuntime {
 								logPath: terminal.logPath,
 								diagnostic: reusable
 									? { code: "timeout", message: remoteIssue.message }
-									: { code: "echo_recovery_failed", message: "Privilege terminal echo recovery failed" },
+									: {
+											code: "terminal_recovery_failed",
+											message: "Privilege terminal did not return to the user shell",
+										},
 							},
 							remoteIssue,
 						);
@@ -1004,7 +989,7 @@ export class RemoteExecutionRuntime {
 				if (prepared && !executionReleased && !completed) {
 					await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
 					reusable = true;
-				} else if (executionReleased && !completed) reusable = await restoreEcho();
+				} else if (executionReleased && !completed) reusable = await recoverTerminal();
 				terminal.busy = !reusable;
 			},
 		};
@@ -1117,44 +1102,7 @@ export class RemoteExecutionRuntime {
 			durationMs: Math.max(0, completedAt - startedAt),
 			logPath: terminal.logPath,
 		};
-		const shouldReview =
-			diagnostic?.code !== "remote_cancelled" &&
-			(diagnostic !== undefined || exitCode !== 0 || lineCount(output) > 100);
-		let report: string;
-		let review: TerminalBashResult["review"];
-		let usage: Usage | undefined;
-		if (shouldReview && this.outputReviewer) {
-			try {
-				const reviewed = await this.outputReviewer.review(reviewInput, options.signal);
-				report = withLogPath(reviewed.text, terminal.logPath);
-				review = {
-					model: reviewed.model,
-					status: reviewed.status,
-					inputTruncated: reviewed.inputTruncated,
-					error: reviewed.error,
-				};
-				usage = reviewed.usage;
-			} catch (error) {
-				const fallback = deterministicTerminalReport(reviewInput);
-				report = fallback.text;
-				review = {
-					status: "fallback",
-					inputTruncated: fallback.inputTruncated,
-					error: error instanceof Error ? error.message : String(error),
-				};
-			}
-		} else if (shouldReview) {
-			const fallback = deterministicTerminalReport(reviewInput);
-			report = fallback.text;
-			review = { status: "fallback", inputTruncated: fallback.inputTruncated };
-		} else if (diagnostic) {
-			const fallback = deterministicTerminalReport(reviewInput);
-			report = fallback.text;
-			review = { status: "skipped", inputTruncated: fallback.inputTruncated };
-		} else {
-			report = successfulTerminalReport(redactCommand(command), terminal.logPath);
-			review = { status: "skipped", inputTruncated: false };
-		}
+		const reviewed = await reviewTerminalOutput(reviewInput, this.outputReviewer, options.signal);
 		return {
 			ok: diagnostic === undefined && exitCode === 0,
 			terminalId,
@@ -1165,9 +1113,9 @@ export class RemoteExecutionRuntime {
 			exitCode,
 			logPath: terminal.logPath,
 			durationMs: reviewInput.durationMs,
-			report,
-			review,
-			usage,
+			report: reviewed.report,
+			review: reviewed.review,
+			usage: reviewed.usage,
 			diagnostic,
 		};
 	}

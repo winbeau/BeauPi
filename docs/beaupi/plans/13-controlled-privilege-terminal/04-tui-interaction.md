@@ -2,7 +2,7 @@
 
 ## 目标
 
-实现“已填充命令 + 临时终端”一体化权限组件：第一帧直接用受控 PTY替换提示词编辑器并显示只读命令；用户 Enter 后才执行，Escape取消；认证完成后 detach临时视图，command继续由 Monitor跟踪，最终由 Tool renderer显示结果。
+实现“已填充命令 + 临时终端”一体化权限组件：第一帧直接用受控 PTY替换提示词编辑器并显示完整只读命令或批次；用户 Enter 后才执行，Escape取消；认证后继续attached并转发输入，直到command或交互式sudo shell退出，最终由Tool renderer显示结果。
 
 ## 现有接入点
 
@@ -18,10 +18,11 @@ staging -> waiting_for_user
   ├─ Enter -> starting -> authenticating/running
   └─ Escape -> cancelled（command未执行）
 running
-  ├─ secure input -> pane
+  ├─ direct terminal bytes -> pane
   ├─ password prompt remains -> keep terminal attached
-  ├─ cursor leaves auth prompt -> detach view -> Monitor continues
-  └─ Abort -> cancelling -> cancelled/failed
+  ├─ authentication completes -> remain attached for command/root shell
+  ├─ command or `exit` -> complete
+  └─ Abort/Escape -> cancelling -> terminate privilege flow
 complete
   └─ Tool result renderer
 ```
@@ -36,13 +37,13 @@ complete
 
 ### Running 状态
 
-- 标题切换为 `Authenticating` 或 `Running as root`。
+- 标题切换为 `Authenticating` 或 `Running`，交互式sudo shell继续显示实时pane内容和光标。
 - 只渲染 pane capture，绝不把本地输入回显到 component state。
 - 输入字节直接传给 `control.sendSensitive()`。
-- sudo/outer wrapper负责 no-echo；component不保存 password buffer。
+- sudo controlling TTY负责密码期间的 no-echo；component不保存 password buffer，wrapper不关闭整个root shell的回显。
 - 显示 elapsed、target、cancel hint；Terminal output可滚动或只显示尾部窗口。
-- tmux当前光标离开认证提示后停止UI timer/poll并调用 done(response)；Runtime继续等待command完成。
-- 如果没有密码prompt，pane进入稳定running状态后detach；密码错误并再次提示时保持attached。
+- tmux当前光标离开认证提示后仍继续UI timer/poll和输入转发，直到command完成或用户从交互式sudo shell执行`exit`。
+- 如果没有密码prompt，pane直接进入running但不detach。Escape在running状态终止当前提权流程，不能留下隐藏root shell。
 
 ## Handler
 
@@ -78,7 +79,7 @@ handler必须：
 - pane高度按可见输出行数增长，最小3行、最大12行且不超过终端高度的三分之一；render和tmux resize使用同一行数。
 - 40/80/120/160列均保证 `visibleWidth <= width`。
 - dark/light复用现有 accent/warning/error/muted/tool色，不先新增Theme token。
-- Error、blocked、echo recovery失败不可完全折叠。
+- Error、blocked、terminal recovery失败不可完全折叠。
 - 组件必须实现 invalidate并停止poll timer。
 
 ## 用户输入安全
@@ -86,7 +87,7 @@ handler必须：
 - component state不含input string、字符计数或last key。
 - 不调用 `Editor.setText(password)`、clipboard、external editor或question notes。
 - secure send失败时错误只包含bufferId/requestId，不包含input。
-- debug/TUI raw ANSI log可能记录pane output，因此outer no-echo是强制条件。
+- debug/TUI raw ANSI log可能记录pane output，因此认证输入只能在sudo主动关闭TTY echo期间发送；component不得自行回显或缓存。
 - 执行结束后不得继续接受input。
 
 ## 测试
@@ -94,7 +95,7 @@ handler必须：
 - component首帧自动调用一次`control.start()`完成stage；Enter前`control.execute()`零调用，Enter后恰好一次。
 - Escape staged command、cancel during prompt、AbortSignal、dispose。
 - input只进入fake `sendSensitive`，render/cache/response无input。
-- capture更新、terminal exit、send failure、echo recovery warning。
+- capture更新、terminal/root-shell exit、send failure、terminal recovery warning。
 - editor文本和焦点在overlay关闭后恢复。
 - configurable keybindings，不能依赖hardcoded Enter/Escape。
 - dark/light 40/80/120/160、CJK/emoji/长command/path。

@@ -278,7 +278,7 @@ terminal_create
 
 本地 tmux 负责 session/pane 生命周期、`send-keys`、Ctrl-C、capture 和临时 pane transcript；OpenSSH 继续负责受信任 alias、Agent、known_hosts、ControlMaster 和登录身份。随机 begin/end marker 只属于 transport 协议，不要求 Agent 编写。pane transcript 用于无固定历史行上限地收集当前命令输出，命令完成后只把脱敏内容追加到每 terminal 的 `工作日志.log`；原始 transcript 在 terminal 关闭或 Runtime dispose 时删除。
 
-`TerminalOutputReviewer` 与 transport 解耦。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`，在失败或输出超过 100 行时进行一次无 Tool 审阅；不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 只保存审阅文本、结构化状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
+`TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 与 `PrivilegeRuntime` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
 
 ## Monitor 与后台任务
 
@@ -315,7 +315,7 @@ Background store 使用 `beaupi.background.snapshot` 版本化 custom entry。Ta
 
 ## 权限边界
 
-BeauPi 不以 root 身份启动，也不提供 sudo mode、root shell 或 session grant。M13 使用唯一的 session-scoped `PrivilegeRuntime` 接收 `privileged_exec`、local `bash` 和 `terminal_bash` 路由的完整 sudo command；每个 request 都必须在 TUI 中独立确认。
+BeauPi 不以 root 身份启动，也不提供 sudo mode、持久 root shell 或 session grant。M13 使用唯一的 session-scoped `PrivilegeRuntime` 接收 `privileged_exec`、local `bash` 和 `terminal_bash` 路由的完整 sudo command 或换行分隔批次；每个 request 都必须在 TUI 中独立确认。`sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 作为当前 request 的交互式 shell 受支持，并保持 attached 直到退出或取消。
 
 ```text
 AgentSession
@@ -326,9 +326,9 @@ AgentSession
 └── Session custom fact + 0600 JSONL audit
 ```
 
-Runtime 在确认前不创建 command session。确认后，local/remote adapter 必须先通过 controlling TTY 执行 `stty -echo` 并观察 begin marker，才开放敏感输入。输入只经 `tmux load-buffer` child stdin 和 `paste-buffer -d -r` 进入 TTY，finally 删除 buffer；不进入 Tool、argv、env、Session、Monitor、Task Ledger、日志、审计、RPC 或模型上下文。
+Local adapter 使用独立 tmux server 继承当前进程环境、目标 cwd 和配置的真实用户 shell，并保留 shell startup files；不使用 `env -i`、`--noprofile` 或 `--norc`。sudo 自己在 controlling TTY 上管理密码输入的 echo，wrapper 不在整个 command/root-shell 生命周期关闭回显。输入只经 `tmux load-buffer` child stdin 和 `paste-buffer -d -r` 进入 TTY，finally 删除 buffer；不进入 Tool、argv、env、Session、Monitor、Task Ledger、日志、审计、RPC 或模型上下文。
 
-`terminal_send` 在 Enter 前检查累计 line 并用 Ctrl-U 清理 sudo；one-shot remote 路径阻止提权。`sudo -S`、`su`、`doas`、`pkexec` 和 namespace/chroot identity switch 不支持。详细设计见 [受控 sudo 终端](./controlled-privilege-terminal.md)。
+`terminal_send` 在 Enter 前检查累计 line 并用 Ctrl-U 清理 sudo；one-shot remote 路径阻止提权。取消交互式 shell 时 local 关闭 ephemeral session，remote 先 Ctrl-C、必要时 Ctrl-D 恢复原用户 shell。`sudo -S`、`su`、`doas`、`pkexec` 和 namespace/chroot identity switch 不支持。详细设计见 [受控 sudo 终端](./controlled-privilege-terminal.md)。
 
 ## 搜索架构
 

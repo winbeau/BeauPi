@@ -491,10 +491,11 @@ function createTerminalBashTool(
 		name: "terminal_bash",
 		label: "terminal_bash",
 		description:
-			"Execute a Bash command through an existing local tmux terminal whose pane runs SSH. The command inherits the remote shell's current directory and exported environment, returns a concise reviewed report, and saves complete output to the work log.",
+			"Execute a Bash command through an existing local tmux terminal whose pane runs SSH. The command inherits the remote shell's current directory and exported environment, returns short successful output directly, reviews long or failed output, and saves complete output to the work log.",
 		promptSnippet: "Execute a command in an existing local tmux SSH terminal",
 		promptGuidelines: [
 			"Use terminal_bash for normal commands in an existing terminal; do not follow it with terminal_status or terminal_capture just to understand the result.",
+			"When a Bash-like Tool result includes a model review, trust it on the first pass; read the full log only after a reviewed failure, never after a reviewed success.",
 			"When the working directory is known, use one concise command such as cd <workdir> && <command>; do not add a preliminary pwd.",
 			"Only use terminal_send and terminal_capture for genuinely interactive input or terminal diagnosis.",
 			"Do not add explanatory echo commands, repeated status probes, sleeps, extra capture calls, or nested bash -lc wrappers.",

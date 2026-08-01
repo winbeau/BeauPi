@@ -414,7 +414,7 @@ describe("M7 fake tmux lifecycle", () => {
 		expect(capture.content).toBe("");
 	});
 
-	it("reviews failures and outputs over 100 lines while keeping short successes deterministic", async () => {
+	it("returns short successes directly and reviews failures or output over 100 lines", async () => {
 		const reviewer = new RecordingTerminalReviewer();
 		const setup = createSetup({ outputReviewer: reviewer });
 		setup.runtime.selectTarget("fake");
@@ -427,6 +427,7 @@ describe("M7 fake tmux lifecycle", () => {
 		const short = await setup.runtime.terminalBash(created.terminalId, "printf short");
 		expect(short.review.status).toBe("skipped");
 		expect(reviewer.calls).toHaveLength(0);
+		expect(short.report).toContain("short output");
 		expect(short.report.split("\n").at(-1)).toBe(`@${created.logPath}`);
 
 		setup.adapter.setTerminalCommandResult(created.terminalId, "false", {

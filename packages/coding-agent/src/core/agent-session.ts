@@ -643,12 +643,11 @@ export class AgentSession {
 				settingsManager: config.settingsManager,
 				monitorRuntime: this.monitorRuntime,
 			});
-		this.remoteRuntime.setOutputReviewerIfUnset(
-			new LunaTerminalOutputReviewer({
-				modelRuntime: this._modelRuntime,
-				modelResolver: reviewModelResolver,
-			}),
-		);
+		const terminalOutputReviewer = new LunaTerminalOutputReviewer({
+			modelRuntime: this._modelRuntime,
+			modelResolver: reviewModelResolver,
+		});
+		this.remoteRuntime.setOutputReviewerIfUnset(terminalOutputReviewer);
 		this.privilegeRuntime =
 			config.privilegeRuntime ??
 			new PrivilegeRuntime({
@@ -661,7 +660,9 @@ export class AgentSession {
 				auditWriter: new JsonlPrivilegeAuditWriter(getAgentDir()),
 				isRootTarget: (targetId) => this.remoteRuntime.isRootTarget(targetId),
 				monitorRuntime: this.monitorRuntime,
+				outputReviewer: terminalOutputReviewer,
 			});
+		this.privilegeRuntime.setOutputReviewerIfUnset(terminalOutputReviewer);
 		this._unsubscribePrivilegeRuntime = this.privilegeRuntime.subscribe((pending) => {
 			this.taskLedger.setPendingPrivilegeInteraction(pending);
 		});

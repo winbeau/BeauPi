@@ -20,7 +20,7 @@
 - `PrivilegeRequestV1`: requestId、toolCallId、sourceTool、完整 sudo command、target、cwd、timeout、createdAt、logPath。
 - `PrivilegeRequestStateV1`: waiting_for_user/starting/running/completed/failed/cancelled/blocked/interaction_required。
 - `PrivilegeResultV1`: succeeded/failed/cancelled/blocked/interaction_required/interaction_error。
-- `PrivilegeToolDetailsV1`: 严格版本、route/audit/monitor/log/truncation/diagnostic facts。
+- `PrivilegeToolDetailsV1`: 严格版本、route/audit/monitor/log/truncation/diagnostic/review facts。
 - `PrivilegeAuditEventV1`: requested/confirmed/started/completed/failed/cancelled/blocked。
 
 所有 TypeBox object 使用 `additionalProperties: false`；所有 Session/audit parser 拒绝未知版本。
@@ -35,13 +35,13 @@
 3. `terminal_send` 复用现有pending input classifier；在Enter提交前识别完整sudo command，禁止发送Enter并用Ctrl+U清理尚未执行的shell line，然后返回受控路径诊断。
 4. `remote_exec`、`remote_bash` 和没有可控 PTY 的路径检测到 sudo 时不执行，返回要求使用现有 Terminal 路径的结构化诊断。
 5. `privileged_exec.command` 必须包含可确定解析的 sudo；Runtime 不添加、删除或重排命令。
-6. `su`、interactive root shell、`doas`、`pkexec`、身份切换和任意 namespace/chroot 能力第一版保持 unsupported。
+6. `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 作为当前 request 的交互式 shell 受支持；`su`、`doas`、`pkexec`、其他身份切换和任意 namespace/chroot 能力保持 unsupported。
 7. 已配置 SSH login identity 为 root 时不走 sudo broker；普通 Remote Tool 继续按受信任登录身份执行。
 
 ## Request 状态机
 
 - 每个 request 初始为 `waiting_for_user`，不存在全局 user/sudo mode。
-- 用户按 Enter 后进入 `starting`；在此之前不得创建可执行 command session 或发送命令。
+- TUI 进入时可以创建受控 command session 并只读 staging 完整文本；用户按 Enter 后才进入 `starting` 并释放执行门控。
 - command start 后进入 `running`，最终只能进入 completed/failed/cancelled。
 - 用户取消、handler 缺失、PTY 不可用或生命周期终止时进入 blocked/interaction_required/cancelled，不自动重试。
 - 系统 sudo ticket 只影响 sudo 是否再次显示密码 prompt，不改变 BeauPi 的逐次确认状态机。
@@ -59,7 +59,7 @@ interface PrivilegeInteractionHandler {
 }
 ```
 
-`PrivilegeTerminalControl` 只暴露 start、secureSend、capture、resize、cancel 和 wait；不暴露 transcript 文件写入或 password getter。
+`PrivilegeTerminalControl` 只暴露 start、execute、sendSensitive、capture、resize、cancel 和 wait；不暴露 transcript 文件写入或 password getter。
 
 ## 失败路径
 
@@ -74,7 +74,7 @@ interface PrivilegeInteractionHandler {
 - direct sudo 在 local Bash和terminal_bash中不会进入原执行器，而是自动路由到fake PrivilegeRuntime。
 - remote_exec/remote_bash无受控command session时不得执行sudo；terminal_send分片输入在Enter前被拦截并清理shell line。
 - nested shell/quoted separator中的sudo继续被classifier识别并保留完整命令。
-- `privileged_exec` 拒绝不含sudo或包含unsupported identity switch的command。
+- `privileged_exec` 拒绝不含sudo或包含unsupported identity switch的command，同时接受交互式 sudo shell 和换行分隔批次。
 - 每个request独立确认；不存在once/session mode、expiry或grant恢复。
 - resume/Compact/branch不恢复pending request。
 - controlled child profile不暴露 `privileged_exec`。
