@@ -199,13 +199,15 @@ await showMenu();  // "Back" = just call again
 
 See [overlay-qa-tests.ts](../examples/extensions/overlay-qa-tests.ts) for comprehensive examples covering anchors, margins, stacking, responsive visibility, and animation.
 
-### Controlled Privilege Overlay
+### Controlled Privilege Terminal
 
-Interactive mode installs a built-in `PrivilegeTerminalComponent` for controlled sudo requests. At 56 columns and wider it uses a centered overlay; narrower terminals use the editor-area fallback so the command and controls remain usable without horizontal overflow.
+Interactive mode installs a built-in `PrivilegeTerminalComponent` for controlled sudo requests. It always replaces the prompt editor while active, so keyboard input has one unambiguous destination. The running view renders the captured tmux pane between two horizontal separators and grows up to a bounded height based on the visible command output.
 
 The review state shows `Permission required`, request source, target, cwd, a read-only command, audit path, and the statement that every sudo command requires confirmation. `app.privilege.confirm` starts exactly that request; `app.privilege.cancel` cancels it. Running/authenticating states forward raw terminal bytes only through `PrivilegeTerminalControl.sendSensitive(Buffer)` and never store them in component state, render output, cache, Session, or response objects.
 
-This component is a trusted built-in boundary, not an extension password prompt. Extensions and SDK hosts must not collect sudo passwords in forms, return values, Tool parameters, or RPC messages. A host integration may render the same `PrivilegeInteractionRequest`, call `control.start()` after one-request confirmation, forward direct terminal keystrokes, and wait for completion.
+When the tmux cursor leaves an authentication prompt, the temporary terminal view detaches and the original editor text and focus are restored. The privileged command continues through the same `PrivilegeRuntime` and Monitor until completion; a repeated password prompt keeps the terminal attached for another attempt. If sudo uses a cached credential and shows no prompt, the terminal detaches after the pane reaches a stable running state.
+
+This component is a trusted built-in boundary, not an extension password prompt. Extensions and SDK hosts must not collect sudo passwords in forms, return values, Tool parameters, or RPC messages. A host integration may render the same `PrivilegeInteractionRequest`, call `control.start()` after one-request confirmation, forward direct terminal keystrokes, and return after authentication while the Runtime continues waiting for completion.
 
 ## Built-in Components
 

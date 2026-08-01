@@ -17,6 +17,7 @@ export interface TerminalPaneStatus {
 	exists: boolean;
 	paneId?: string;
 	currentCommand?: string;
+	cursorY?: number;
 	dead?: boolean;
 	exitCode?: number;
 }

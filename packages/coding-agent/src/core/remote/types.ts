@@ -96,6 +96,7 @@ export interface TmuxStatus {
 	attached: boolean;
 	paneId?: string;
 	currentCommand?: string;
+	cursorY?: number;
 	lastActivityAt?: number;
 	dead?: boolean;
 	exitCode?: number;
@@ -117,6 +118,7 @@ export interface SshConnection {
 	): Promise<RemoteCommandResult>;
 	tmuxExecute(target: string, command: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxCapture(target: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
+	tmuxCaptureScreen(target: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxStatus(target: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus>;
 	tmuxClose(sessionId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	close(): Promise<void>;

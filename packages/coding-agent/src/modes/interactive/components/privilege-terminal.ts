@@ -1,4 +1,12 @@
-import { type Component, type Focusable, type TUI, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	CURSOR_MARKER,
+	type Focusable,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { Keybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import type {
 	PrivilegeCommandResultV1,
@@ -20,8 +28,26 @@ export interface PrivilegeTerminalComponentOptions {
 
 type ViewState = "review" | "starting" | "authenticating" | "running" | "cancelling" | "error";
 
+const POLL_MS = 75;
+const NO_PROMPT_DETACH_FRAMES = 8;
+
 function wrap(value: string, width: number): string[] {
 	return value.split("\n").flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+}
+
+function divider(label: string, width: number): string {
+	const available = Math.max(1, width);
+	if (!label) return theme.fg("borderMuted", "─".repeat(available));
+	const reservedBorder = Math.min(2, available);
+	const labelWidth = available - reservedBorder;
+	const text = labelWidth > 0 ? truncateToWidth(` ${label} `, labelWidth, "") : "";
+	const fill = Math.max(0, available - visibleWidth(text));
+	const left = Math.min(2, fill);
+	return (
+		theme.fg("borderMuted", "─".repeat(left)) +
+		theme.fg("muted", text) +
+		theme.fg("borderMuted", "─".repeat(fill - left))
+	);
 }
 
 export class PrivilegeTerminalComponent implements Component, Focusable {
@@ -35,6 +61,11 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 	private scrollOffset = 0;
 	private startedAt: number | undefined;
 	private pollTimer: NodeJS.Timeout | undefined;
+	private polling = false;
+	private renderWidth = 80;
+	private lastResize: { columns: number; rows: number } | undefined;
+	private sawAuthentication = false;
+	private runningFrames = 0;
 	private closed = false;
 	focused = false;
 
@@ -44,6 +75,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		this.request = options.request;
 		this.control = options.control;
 		this.onDone = options.onDone;
+		this.renderWidth = Math.max(1, options.tui.terminal.columns);
 	}
 
 	handleInput(data: string): void {
@@ -58,7 +90,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 			return;
 		}
 		if (this.state === "starting" || this.state === "cancelling" || this.state === "error") return;
-		const page = Math.max(1, Math.floor(this.tui.terminal.rows / 3));
+		const page = this.paneRows(this.renderWidth);
 		if (this.keybindings.matches(data, "app.privilege.scrollUp")) this.scrollOffset += page;
 		else if (this.keybindings.matches(data, "app.privilege.scrollDown"))
 			this.scrollOffset = Math.max(0, this.scrollOffset - page);
@@ -72,6 +104,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 
 	render(width: number): string[] {
 		const available = Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 1;
+		this.renderWidth = available;
 		const target =
 			this.request.target.execution === "local"
 				? "Local"
@@ -79,15 +112,17 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		const title =
 			this.state === "review"
 				? "Permission required"
-				: this.state === "authenticating"
-					? "Authenticating"
-					: this.state === "cancelling"
-						? "Cancelling"
-						: this.state === "error"
-							? "Privilege terminal error"
-							: "Running as root";
-		const lines = [theme.bold(theme.fg(this.state === "error" ? "error" : "warning", title))];
+				: this.state === "starting"
+					? "Starting sudo"
+					: this.state === "authenticating"
+						? "Authenticating"
+						: this.state === "cancelling"
+							? "Cancelling"
+							: this.state === "error"
+								? "Privilege terminal error"
+								: "Running as root";
 		if (this.state === "review") {
+			const lines = [theme.bold(theme.fg("warning", title))];
 			lines.push(
 				theme.fg("muted", `Source: ${this.request.sourceTool} · every sudo command requires confirmation`),
 				theme.fg("muted", `Target: ${target}`),
@@ -101,20 +136,38 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 				"",
 				this.hints(["app.privilege.confirm", "app.privilege.cancel"]),
 			);
-		} else {
-			const elapsed = this.startedAt === undefined ? 0 : (Date.now() - this.startedAt) / 1000;
-			lines.push(theme.fg("muted", `Target: ${target} · ${elapsed.toFixed(1)}s`), "");
-			const outputLines = this.output ? wrap(theme.fg("toolOutput", this.output), available) : [];
-			const height = Math.max(3, this.tui.terminal.rows - 8);
-			const end = Math.max(0, outputLines.length - this.scrollOffset);
-			const start = Math.max(0, end - height);
-			lines.push(
-				...(outputLines.length
-					? outputLines.slice(start, end)
-					: [theme.fg("muted", "Waiting for terminal output…")]),
-			);
-			lines.push("", this.hints(["app.privilege.cancel", "app.privilege.scrollUp", "app.privilege.scrollDown"]));
+			return lines.map((line) => truncateToWidth(line, available, "…"));
 		}
+
+		const elapsed = this.startedAt === undefined ? 0 : (Date.now() - this.startedAt) / 1000;
+		const outputLines = this.output
+			? wrap(theme.fg("toolOutput", this.output), available)
+			: [
+					theme.fg(
+						"muted",
+						this.state === "starting" ? "Starting secure tmux terminal…" : "Waiting for terminal output…",
+					),
+				];
+		const paneRows = this.paneRows(available, outputLines.length);
+		const maxOffset = Math.max(0, outputLines.length - paneRows);
+		this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
+		const end = Math.max(0, outputLines.length - this.scrollOffset);
+		const start = Math.max(0, end - paneRows);
+		const visible = outputLines.slice(start, end);
+		while (visible.length < paneRows) visible.push("");
+		if (this.state === "authenticating" && this.focused && this.scrollOffset === 0 && visible.length > 0) {
+			const cursorIndex = Math.min(outputLines.length, visible.length) - 1;
+			visible[cursorIndex] =
+				truncateToWidth(visible[cursorIndex] ?? "", Math.max(1, available - 1), "") +
+				CURSOR_MARKER +
+				theme.fg("accent", "▌");
+		}
+		const lines = [
+			divider(`sudo · ${title} · ${target} · ${elapsed.toFixed(1)}s`, available),
+			...visible,
+			divider("", available),
+			this.hints(["app.privilege.cancel", "app.privilege.scrollUp", "app.privilege.scrollDown"]),
+		];
 		return lines.map((line) => truncateToWidth(line, available, "…"));
 	}
 
@@ -148,6 +201,20 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		);
 	}
 
+	private paneRows(width: number, outputLineCount?: number): number {
+		const lines = outputLineCount ?? (this.output ? wrap(this.output, width).length : 1);
+		const maxRows = Math.max(3, Math.min(12, Math.floor(this.tui.terminal.rows / 3)));
+		return Math.max(3, Math.min(maxRows, lines));
+	}
+
+	private async syncTerminalSize(): Promise<void> {
+		const columns = Math.max(1, this.renderWidth);
+		const rows = this.paneRows(columns);
+		if (this.lastResize?.columns === columns && this.lastResize.rows === rows) return;
+		this.lastResize = { columns, rows };
+		await this.control.resize(columns, rows);
+	}
+
 	private async start(): Promise<void> {
 		if (this.state !== "review" || this.closed) return;
 		this.state = "starting";
@@ -155,34 +222,58 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 		this.tui.requestRender();
 		try {
 			await this.control.start();
-			await this.control.resize(this.tui.terminal.columns, Math.max(3, this.tui.terminal.rows - 6));
+			if (this.closed) return;
 			this.state = "running";
+			await this.syncTerminalSize();
 			this.startPolling();
-			this.complete(await this.control.wait());
+			void this.control
+				.wait()
+				.then((result) => this.complete(result))
+				.catch(() => this.finish({ status: "error", diagnostic: "Privilege terminal command failed" }));
 		} catch {
 			this.finish({ status: "error", diagnostic: "Privilege terminal failed to start" });
 		}
 	}
 
 	private startPolling(): void {
-		let polling = false;
-		this.pollTimer = setInterval(() => {
-			if (polling || this.closed) return;
-			polling = true;
-			void this.control
-				.capture()
-				.then((frame) => {
-					this.output = frame.content;
-					if (frame.state === "authenticating") this.state = "authenticating";
-					else if (frame.state === "running") this.state = "running";
-					this.tui.requestRender();
-				})
-				.catch(() => this.finish({ status: "error", diagnostic: "Privilege terminal capture failed" }))
-				.finally(() => {
-					polling = false;
-				});
-		}, 75);
+		void this.poll();
+		this.pollTimer = setInterval(() => void this.poll(), POLL_MS);
 		this.pollTimer.unref();
+	}
+
+	private async poll(): Promise<void> {
+		if (this.polling || this.closed) return;
+		this.polling = true;
+		try {
+			const frame = await this.control.capture();
+			if (this.closed) return;
+			this.output = frame.content;
+			if (frame.state === "lost") {
+				this.finish({ status: "error", diagnostic: "Privilege tmux pane was lost" });
+				return;
+			}
+			if (frame.state === "authenticating") {
+				this.sawAuthentication = true;
+				this.runningFrames = 0;
+				this.state = "authenticating";
+			} else if (frame.state === "starting") {
+				this.runningFrames = 0;
+				this.state = "starting";
+			} else if (frame.state === "running") {
+				this.state = "running";
+				this.runningFrames++;
+				if (this.sawAuthentication || this.runningFrames >= NO_PROMPT_DETACH_FRAMES) {
+					this.finish({ status: "completed" });
+					return;
+				}
+			}
+			await this.syncTerminalSize();
+			this.tui.requestRender();
+		} catch {
+			this.finish({ status: "error", diagnostic: "Privilege terminal capture failed" });
+		} finally {
+			this.polling = false;
+		}
 	}
 
 	private stopPolling(): void {
@@ -202,6 +293,7 @@ export class PrivilegeTerminalComponent implements Component, Focusable {
 	}
 
 	private complete(result: PrivilegeCommandResultV1): void {
+		if (this.closed) return;
 		this.output = result.output;
 		this.finish(result.cancelled ? { status: "cancelled" } : { status: "completed" });
 	}

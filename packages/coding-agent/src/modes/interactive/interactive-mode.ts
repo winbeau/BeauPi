@@ -350,21 +350,6 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 }
 
-export function getPrivilegeInteractionLayout(columns: number): {
-	overlay: boolean;
-	overlayOptions: OverlayOptions;
-} {
-	return {
-		overlay: columns >= 56,
-		overlayOptions: {
-			anchor: "center",
-			width: "100%",
-			maxHeight: "90%",
-			margin: { top: 1, bottom: 1 },
-		},
-	};
-}
-
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
@@ -2600,7 +2585,7 @@ export class InteractiveMode {
 				};
 				signal?.addEventListener("abort", abortHandler, { once: true });
 				return new PrivilegeTerminalComponent({ tui, keybindings, request, control, onDone: done });
-			}, getPrivilegeInteractionLayout(this.ui.terminal.columns));
+			});
 		} finally {
 			if (abortHandler) signal?.removeEventListener("abort", abortHandler);
 		}

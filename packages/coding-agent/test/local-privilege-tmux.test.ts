@@ -3,7 +3,11 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type PrivilegeRequestV1, TmuxPrivilegeTerminalAdapter } from "../src/core/privilege/index.ts";
+import {
+	isPrivilegeAuthenticationPrompt,
+	type PrivilegeRequestV1,
+	TmuxPrivilegeTerminalAdapter,
+} from "../src/core/privilege/index.ts";
 import { LocalTmuxTransport, type LocalTmuxTransportRunner } from "../src/core/terminal/local-tmux-transport.ts";
 
 const cleanup: string[] = [];
@@ -15,6 +19,12 @@ const tmuxAvailable = spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 
 const tmuxIt = tmuxAvailable ? it : it.skip;
 
 describe("local privilege tmux fixture", () => {
+	it("treats a password prompt as active only while the tmux cursor remains on that line", () => {
+		const screen = "[sudo] password for user:\n\n";
+		expect(isPrivilegeAuthenticationPrompt(screen, 0)).toBe(true);
+		expect(isPrivilegeAuthenticationPrompt(screen, 1)).toBe(false);
+	});
+
 	it("does not accept sensitive input when the echo-disable handshake fails", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "beaupi-local-privilege-echo-failure-"));
 		cleanup.push(cwd);
@@ -24,7 +34,7 @@ describe("local privilege tmux fixture", () => {
 			calls.push([...args]);
 			if (args[0] === "display-message") {
 				return {
-					stdout: "%1__BEAUPI_TMUX_FIELD__bash__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
+					stdout: "%1__BEAUPI_TMUX_FIELD__bash__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
 					stderr: "",
 					exitCode: 0,
 					startedAt: 1,
@@ -79,7 +89,7 @@ describe("local privilege tmux fixture", () => {
 				toolCallId: "tool-local-tmux-fixture",
 				sourceTool: "privileged_exec",
 				route: "explicit_tool",
-				command: "printf 'Password: '; IFS= read -r answer; printf '\\naccepted\\n'",
+				command: "printf 'Password: '; IFS= read -r answer; printf '\\naccepted\\n'; sleep 1",
 				target: { execution: "local" },
 				cwd,
 				timeoutMs: 5_000,
@@ -92,6 +102,7 @@ describe("local privilege tmux fixture", () => {
 				await session.start();
 				expect(await session.capture()).toMatchObject({ state: "authenticating" });
 				await session.sendSensitive(Buffer.from(`${token}\r`, "utf8"));
+				expect(await session.capture()).toMatchObject({ state: "running" });
 				const result = await session.wait();
 				expect(result).toMatchObject({ exitCode: 0 });
 				expect(result.output).toContain("accepted");

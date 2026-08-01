@@ -54,6 +54,7 @@
 
 ### Fixed
 
+- Fixed controlled sudo interaction to replace the prompt editor with an adaptive two-divider tmux pane, keep password retries attached, detach after authentication, and continue command progress through the existing Monitor.
 - Fixed sub-agent timeouts to preserve finalized or streamed assistant text, fall back to the last structured activity instead of an empty summary, and limit concurrent child agents to one third of available CPUs with a minimum of one.
 - Fixed sub-agent turn-budget termination to stop before an extra provider request, preventing `turnsUsed` from exceeding `maxTurns`, and surfaced failures as `budget_exhausted · N/N turns · last: Tool` in Agent and Monitor UI.
 - Fixed Monitor auto-attachment to ignore ordinary Tool executions and short bash calls while retaining long-running bash, sub-agent, SSH/tmux, and explicit `monitor_attach` targets.

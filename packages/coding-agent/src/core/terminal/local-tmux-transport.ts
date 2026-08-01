@@ -170,6 +170,10 @@ export class LocalTmuxTransport {
 		return this.run(["capture-pane", "-p", "-J", "-S", "-", "-t", target], options);
 	}
 
+	captureScreen(target: string, options: TerminalProcessOptions = {}): Promise<TerminalProcessResult> {
+		return this.run(["capture-pane", "-p", "-t", target], options);
+	}
+
 	async status(target: string, options: TerminalProcessOptions = {}): Promise<TerminalPaneStatus> {
 		const result = await this.run(
 			[
@@ -177,16 +181,19 @@ export class LocalTmuxTransport {
 				"-p",
 				"-t",
 				target,
-				`#{pane_id}${TMUX_STATUS_SEPARATOR}#{pane_current_command}${TMUX_STATUS_SEPARATOR}#{pane_dead}${TMUX_STATUS_SEPARATOR}#{pane_dead_status}`,
+				`#{pane_id}${TMUX_STATUS_SEPARATOR}#{pane_current_command}${TMUX_STATUS_SEPARATOR}#{cursor_y}${TMUX_STATUS_SEPARATOR}#{pane_dead}${TMUX_STATUS_SEPARATOR}#{pane_dead_status}`,
 			],
 			options,
 		);
 		if (result.exitCode !== 0) return { exists: false };
-		const [paneId, currentCommand, dead, deadStatus] = result.stdout.trimEnd().split(TMUX_STATUS_SEPARATOR, 4);
+		const [paneId, currentCommand, cursorY, dead, deadStatus] = result.stdout
+			.trimEnd()
+			.split(TMUX_STATUS_SEPARATOR, 5);
 		return {
 			exists: dead !== "1",
 			paneId: paneId || undefined,
 			currentCommand: currentCommand || undefined,
+			cursorY: /^\d+$/.test(cursorY ?? "") ? Number(cursorY) : undefined,
 			dead: dead === "1",
 			exitCode: /^\d+$/.test(deadStatus ?? "") ? Number(deadStatus) : undefined,
 		};

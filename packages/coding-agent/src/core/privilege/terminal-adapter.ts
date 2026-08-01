@@ -6,12 +6,13 @@ import { getShellConfig } from "../../utils/shell.ts";
 import { parseTerminalCommandCapture } from "../remote/adapter.ts";
 import { LocalTmuxTransport } from "../terminal/local-tmux-transport.ts";
 import { TerminalTransportError } from "../terminal/types.ts";
-import type {
-	PrivilegeCommandResultV1,
-	PrivilegeCommandSession,
-	PrivilegeRequestV1,
-	PrivilegeTerminalAdapter,
-	PrivilegeTerminalFrameV1,
+import {
+	isPrivilegeAuthenticationPrompt,
+	type PrivilegeCommandResultV1,
+	type PrivilegeCommandSession,
+	type PrivilegeRequestV1,
+	type PrivilegeTerminalAdapter,
+	type PrivilegeTerminalFrameV1,
 } from "./types.ts";
 
 const POLL_MS = 50;
@@ -198,18 +199,23 @@ class LocalPrivilegeCommandSession implements PrivilegeCommandSession {
 
 	async capture(): Promise<PrivilegeTerminalFrameV1> {
 		if (!this.paneId) return { content: "", state: "starting" };
-		const capture = await this.transport.capture(this.paneId, { signal: this.controller.signal });
-		if (capture.exitCode !== 0) return { content: "", state: "lost" };
+		const [capture, screen, status] = await Promise.all([
+			this.transport.capture(this.paneId, { signal: this.controller.signal }),
+			this.transport.captureScreen(this.paneId, { signal: this.controller.signal }),
+			this.transport.status(this.paneId, { signal: this.controller.signal }),
+		]);
+		if (capture.exitCode !== 0 || screen.exitCode !== 0 || !status.exists) {
+			return { content: "", state: "lost" };
+		}
 		const parsed = parseTerminalCommandCapture(capture.stdout, this.beginMarker, this.endMarker);
 		const content = parsed.found ? parsed.output : capture.stdout;
+		const authenticating =
+			status.cursorY === undefined
+				? /(?:password|passphrase)[^:\r\n]*:/i.test(content)
+				: isPrivilegeAuthenticationPrompt(screen.stdout, status.cursorY);
 		return {
 			content,
-			state:
-				parsed.exitCode !== undefined
-					? "complete"
-					: /(?:password|passphrase)\s*:/i.test(content)
-						? "authenticating"
-						: "running",
+			state: parsed.exitCode !== undefined ? "complete" : authenticating ? "authenticating" : "running",
 		};
 	}
 

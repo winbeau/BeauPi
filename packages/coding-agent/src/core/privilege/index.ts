@@ -14,6 +14,7 @@ export {
 export {
 	attachPrivilegeToolDetails,
 	getPrivilegeToolDetails,
+	isPrivilegeAuthenticationPrompt,
 	type PendingPrivilegeInteraction,
 	PRIVILEGE_DETAILS_KEY,
 	PRIVILEGE_FACT_ENTRY_TYPE,

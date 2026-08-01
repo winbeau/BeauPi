@@ -469,6 +469,10 @@ class OpenSshConnection implements SshConnection {
 		return this.tmux.capture(this.localSessionId(targetId), commandOptions);
 	}
 
+	async tmuxCaptureScreen(targetId: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		return this.tmux.captureScreen(this.localSessionId(targetId), commandOptions);
+	}
+
 	async tmuxStatus(targetId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
 		const status = await this.tmux.status(this.localSessionId(targetId), commandOptions);
 		return { ...status, attached: false };
@@ -754,6 +758,11 @@ class FakeSshConnection implements SshConnection {
 		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
 	}
 
+	async tmuxCaptureScreen(targetId: string, _commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
+		const output = this.adapter.captureFakeTerminal(targetId);
+		return { stdout: output, stderr: "", exitCode: 0, startedAt: Date.now(), completedAt: Date.now() };
+	}
+
 	async tmuxStatus(targetId: string, commandOptions?: RemoteCommandOptions): Promise<TmuxStatus> {
 		if (commandOptions?.signal?.aborted)
 			throw new RemoteExecutionError({ code: "remote_cancelled", message: "Remote SSH operation was cancelled" });
@@ -977,6 +986,7 @@ export class FakeSshTmuxAdapter implements SshTmuxAdapter {
 			attached: false,
 			paneId: entry.terminal.paneId,
 			currentCommand: entry.terminal.currentCommand,
+			cursorY: Math.max(0, entry.terminal.output.replaceAll("\r", "").split("\n").length - 1),
 		};
 	}
 

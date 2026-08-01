@@ -44,10 +44,19 @@ describe("LocalTmuxTransport sensitive input", () => {
 		}
 	});
 
-	it("parses pane status with a printable separator under the C locale", async () => {
+	it("captures the visible pane separately from joined history", async () => {
+		const runner: LocalTmuxTransportRunner = vi.fn(async () => ok());
+		const transport = new LocalTmuxTransport({ runner });
+
+		await transport.captureScreen("%7");
+
+		expect(runner).toHaveBeenCalledWith(["capture-pane", "-p", "-t", "%7"], {});
+	});
+
+	it("parses pane status with cursor position under the C locale", async () => {
 		const runner: LocalTmuxTransportRunner = vi.fn(async () => ({
 			...ok(),
-			stdout: "%13__BEAUPI_TMUX_FIELD__bash__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
+			stdout: "%13__BEAUPI_TMUX_FIELD__bash__BEAUPI_TMUX_FIELD__4__BEAUPI_TMUX_FIELD__0__BEAUPI_TMUX_FIELD__\n",
 		}));
 		const transport = new LocalTmuxTransport({ runner });
 
@@ -55,6 +64,7 @@ describe("LocalTmuxTransport sensitive input", () => {
 			exists: true,
 			paneId: "%13",
 			currentCommand: "bash",
+			cursorY: 4,
 			dead: false,
 			exitCode: undefined,
 		});

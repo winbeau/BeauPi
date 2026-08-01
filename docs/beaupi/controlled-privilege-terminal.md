@@ -11,7 +11,8 @@ M13 在现有 `AgentSession`、Bash、Remote Runtime、本地 tmux SSH terminal�
 3. 用户必须为这一条 request 单独按确认键；取消不会执行。
 4. Runtime 创建或占用一个 controlling TTY，先关闭 terminal echo，再启动 command。
 5. sudo 直接从 controlling TTY 读取认证输入。输入不经过 Tool 参数、Session、Monitor、Task Ledger、RPC 或模型上下文。
-6. command 完成、失败、取消或超时后，echo 被恢复，结果按 Bash 语义返回，并写入无秘密审计。
+6. tmux 当前光标离开认证提示后，临时终端视图自动 detach，原提示词编辑器恢复；command 继续由同一个 Runtime 和 Monitor 跟踪。密码错误并再次出现提示时不会 detach。
+7. command 完成、失败、取消或超时后，echo 被恢复，结果按 Bash 语义返回，并写入无秘密审计。
 
 系统 sudo ticket 可以让 sudo 不再显示密码 prompt，但不会跳过 BeauPi 的逐请求确认。
 

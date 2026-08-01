@@ -5,11 +5,12 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import type { MonitorAdapterSnapshot } from "../monitor/types.ts";
 import { hasPotentialShellPrivilege } from "../policy/index.ts";
-import type {
-	PrivilegeCommandResultV1,
-	PrivilegeCommandSession,
-	PrivilegeRequestV1,
-	PrivilegeTerminalFrameV1,
+import {
+	isPrivilegeAuthenticationPrompt,
+	type PrivilegeCommandResultV1,
+	type PrivilegeCommandSession,
+	type PrivilegeRequestV1,
+	type PrivilegeTerminalFrameV1,
 } from "../privilege/types.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { SettingsManager } from "../settings-manager.ts";
@@ -788,18 +789,23 @@ export class RemoteExecutionRuntime {
 			},
 			capture: async (): Promise<PrivilegeTerminalFrameV1> => {
 				if (startedAt === undefined) return { content: "", state: "starting" };
-				const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
-				if (capture.exitCode !== 0) return { content: "", state: "lost" };
+				const [capture, screen, status] = await Promise.all([
+					connection.tmuxCapture(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxCaptureScreen(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxStatus(terminal.paneId, { signal: controller.signal }),
+				]);
+				if (capture.exitCode !== 0 || screen.exitCode !== 0 || !status.exists) {
+					return { content: "", state: "lost" };
+				}
 				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
 				const content = parsed.found ? redactOutput(parsed.output) : "";
+				const authenticating =
+					status.cursorY === undefined
+						? /(?:password|passphrase)[^:\r\n]*:/i.test(content)
+						: isPrivilegeAuthenticationPrompt(screen.stdout, status.cursorY);
 				return {
 					content,
-					state:
-						parsed.exitCode !== undefined
-							? "complete"
-							: /(?:password|passphrase)\s*:/i.test(content)
-								? "authenticating"
-								: "running",
+					state: parsed.exitCode !== undefined ? "complete" : authenticating ? "authenticating" : "running",
 				};
 			},
 			resize: async (columns, rows) => {

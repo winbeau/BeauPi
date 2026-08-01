@@ -2,7 +2,7 @@
 
 ## 目标
 
-实现“询问 + 输入框 + 临时终端”一体化权限组件：先展示只读命令并等待用户 Enter，再把焦点切换到受控 PTY输入；执行完成后关闭 overlay并由 Tool renderer显示最终结果。
+实现“询问 + 输入框 + 临时终端”一体化权限组件：先展示只读命令并等待用户 Enter，再用受控 PTY替换提示词编辑器；认证完成后 detach临时视图，command继续由 Monitor跟踪，最终由 Tool renderer显示结果。
 
 ## 现有接入点
 
@@ -19,10 +19,11 @@ review
   └─ Cancel -> cancelled
 running
   ├─ secure input -> pane
-  ├─ Abort -> cancelling -> cancelled/failed
-  └─ marker exit -> complete
+  ├─ password prompt remains -> keep terminal attached
+  ├─ cursor leaves auth prompt -> detach view -> Monitor continues
+  └─ Abort -> cancelling -> cancelled/failed
 complete
-  └─ close overlay -> Tool result renderer
+  └─ Tool result renderer
 ```
 
 ### Review 状态
@@ -46,7 +47,8 @@ complete
 - 输入字节直接传给 `control.sendSensitive()`。
 - sudo/outer wrapper负责 no-echo；component不保存 password buffer。
 - 显示 elapsed、target、cancel hint；Terminal output可滚动或只显示尾部窗口。
-- command exit后停止 timer/poll，再调用 done(response)。
+- tmux当前光标离开认证提示后停止UI timer/poll并调用 done(response)；Runtime继续等待command完成。
+- 如果没有密码prompt，pane进入稳定running状态后detach；密码错误并再次提示时保持attached。
 
 ## Handler
 
@@ -78,7 +80,8 @@ handler必须：
 
 ## Layout
 
-- overlay建议 width `min(100, 90%)`、maxHeight `80%`；窄于40列降级为替换 editor的非overlay component。
+- 所有宽度都替换 editor，不使用overlay；上下两条分割线之间渲染tmux pane，避免原提示词输入框继续占据焦点或造成输入目标歧义。
+- pane高度按可见输出行数增长，最小3行、最大12行且不超过终端高度的三分之一；render和tmux resize使用同一行数。
 - 40/80/120/160列均保证 `visibleWidth <= width`。
 - dark/light复用现有 accent/warning/error/muted/tool色，不先新增Theme token。
 - Error、blocked、echo recovery失败不可完全折叠。

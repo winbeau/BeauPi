@@ -88,6 +88,12 @@ export interface PrivilegeTerminalFrameV1 {
 	state: "starting" | "authenticating" | "running" | "complete" | "lost";
 }
 
+export function isPrivilegeAuthenticationPrompt(screen: string, cursorY: number | undefined): boolean {
+	if (cursorY === undefined || !Number.isInteger(cursorY) || cursorY < 0) return false;
+	const line = screen.replaceAll("\r", "").split("\n")[cursorY] ?? "";
+	return /(?:password|passphrase)[^:\r\n]*:[ \t]*$/i.test(line);
+}
+
 export interface PrivilegeCommandSession {
 	start(): Promise<void>;
 	sendSensitive(input: Buffer): Promise<void>;
