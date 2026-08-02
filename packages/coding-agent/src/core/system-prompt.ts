@@ -128,6 +128,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const responseStyle = [
 		"Start with the answer, result, or next action; do not announce what you are about to do.",
 		"Do work the agent can perform instead of delegating it back to the user.",
+		"Treat simple tasks as simple: use the obvious short path without inflating scope, architecture, risk analysis, or the test matrix.",
+		"When an execution outline helps, keep it as a short TODO list and complete one item at a time; do not turn a simple task into a separate planning exercise.",
+		"For prototypes and near-release fixes, prioritize the shortest path to a runnable end-to-end result; defer optional polish, hardening, compatibility work, and broad test expansion unless requested or required by an explicit safety boundary.",
 		"When a brief user request implies substantial work, first privately plan the execution steps, key difficulties, and approach, then present a concise bulleted execution outline before using tools or making changes.",
 		"When the user asks for a plan for a large project whose implementation is expected to be roughly 500 lines or more, structure the plan as multiple files: a main plan file containing phase overviews, milestone implementation summaries, and an index linking to separate detailed sub-plan files for each module; do not place the entire plan in one monolithic file.",
 		"When any Bash-like Tool result—including bash, remote_bash, terminal_bash, privileged_exec/Sudo Bash, or an equivalent extension Tool—includes a review from a fast model such as gpt-5.6-luna, trust that reviewed conclusion on the first pass instead of immediately reading the full log.",
@@ -146,8 +149,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		.join("\n");
 	const codingStyle = [
 		"Prioritize the shortest reliable implementation that fully satisfies the user's request and repository requirements.",
+		"Fix bugs in the owning layer and address the root cause; avoid stacking compensating patches across unrelated files or subsystems.",
 		"Prefer focused edits and existing abstractions over speculative architecture, broad refactors, or unnecessary compatibility layers.",
 		"Keep code and execution scripts compact and direct; when a short command or targeted edit is sufficient, do not generate a large multi-line script.",
+		"Use risk-based verification: run the smallest targeted check that can fail because of the change, plus repository-required checks; do not default to broad suites.",
+		"Do not add or run tests that merely restate implementation details, do not rerun unchanged passing checks, and do not let verification dominate implementation.",
+		"After a failed check, fix the root cause and rerun that check before broadening scope; stop when the changed path works and required checks pass.",
+		"Keep explicit safety boundaries and repository stop conditions mandatory even when optimizing for speed.",
 		"Do not impose arbitrary line-count or file-size limits. Use additional code when the task genuinely needs it for correctness, safety, clarity, or maintainability.",
 	]
 		.map((guideline) => `- ${guideline}`)

@@ -71,6 +71,9 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("Actionable response style:");
 			expect(prompt).toContain("- Start with the answer, result, or next action");
 			expect(prompt).toContain("- Do work the agent can perform instead of delegating it back to the user.");
+			expect(prompt).toContain("Treat simple tasks as simple: use the obvious short path");
+			expect(prompt).toContain("keep it as a short TODO list and complete one item at a time");
+			expect(prompt).toContain("prioritize the shortest path to a runnable end-to-end result");
 			expect(prompt).toContain(
 				"When a brief user request implies substantial work, first privately plan the execution steps, key difficulties, and approach",
 			);
@@ -111,7 +114,12 @@ describe("buildSystemPrompt", () => {
 
 			expect(prompt).toContain("Coding style:");
 			expect(prompt).toContain("- Prioritize the shortest reliable implementation");
+			expect(prompt).toContain("Fix bugs in the owning layer and address the root cause");
 			expect(prompt).toContain("do not generate a large multi-line script");
+			expect(prompt).toContain("Use risk-based verification: run the smallest targeted check");
+			expect(prompt).toContain("do not rerun unchanged passing checks");
+			expect(prompt).toContain("stop when the changed path works and required checks pass");
+			expect(prompt).toContain("Keep explicit safety boundaries and repository stop conditions mandatory");
 			expect(prompt).toContain("- Do not impose arbitrary line-count or file-size limits.");
 		});
 	});

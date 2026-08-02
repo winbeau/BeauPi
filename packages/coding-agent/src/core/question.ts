@@ -329,7 +329,10 @@ export function validateQuestionAnswers(
 function resultText(result: QuestionResult): string {
 	switch (result.status) {
 		case "answered":
-			return `User answered ${result.answers.length} question${result.answers.length === 1 ? "" : "s"}.`;
+			return [
+				`User answered ${result.answers.length} question${result.answers.length === 1 ? "" : "s"}.`,
+				`Answers: ${JSON.stringify(result.answers)}`,
+			].join("\n");
 		case "cancelled":
 			return "User cancelled the question request.";
 		case "rejected":

@@ -34,7 +34,13 @@ describe("ask_user_question SDK integration", () => {
 		harnesses.push(harness);
 		const handler = vi.fn(async (request: QuestionInteractionRequest) => ({
 			status: "answered" as const,
-			answers: [{ header: request.questions[0].header, selectedLabels: [request.questions[0].options[1].label] }],
+			answers: [
+				{
+					header: request.questions[0].header,
+					selectedLabels: [request.questions[0].options[1].label],
+					notes: "Prefer the fast path",
+				},
+			],
 		}));
 		const created = await createAgentSession({
 			cwd: harness.tempDir,
@@ -54,7 +60,19 @@ describe("ask_user_question SDK integration", () => {
 				expect(context.systemPrompt).toContain("Never use ask_user_question to request passwords");
 				return fauxAssistantMessage(fauxToolCall("ask_user_question", params), { stopReason: "toolUse" });
 			},
-			fauxAssistantMessage("done"),
+			(context) => {
+				const toolResult = context.messages.find(
+					(message) => message.role === "toolResult" && message.toolName === "ask_user_question",
+				);
+				const visibleContent =
+					toolResult?.role === "toolResult"
+						? toolResult.content.map((block) => (block.type === "text" ? block.text : "")).join("\n")
+						: "";
+				expect(visibleContent).toContain('"header":"Target"');
+				expect(visibleContent).toContain('"selectedLabels":["B"]');
+				expect(visibleContent).toContain('"notes":"Prefer the fast path"');
+				return fauxAssistantMessage("done");
+			},
 		]);
 
 		await created.session.prompt("Choose");
@@ -62,7 +80,7 @@ describe("ask_user_question SDK integration", () => {
 		const result = created.session.messages.find((message) => message.role === "toolResult");
 		expect(result?.role === "toolResult" ? result.details : undefined).toMatchObject({
 			status: "answered",
-			answers: [{ header: "Target", selectedLabels: ["B"] }],
+			answers: [{ header: "Target", selectedLabels: ["B"], notes: "Prefer the fast path" }],
 		});
 	});
 

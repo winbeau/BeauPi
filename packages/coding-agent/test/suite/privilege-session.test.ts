@@ -80,6 +80,7 @@ describe("M13 Privilege AgentSession lifecycle", () => {
 			ledger: result.session.taskLedger.getSnapshot(),
 			monitor: result.session.monitorRuntime.list(),
 		});
+		expect(JSON.stringify(nextContext)).toContain("uid=0(root)");
 		expect(serialized).not.toContain(secretText);
 		expect(privilege).not.toHaveProperty("input");
 		expect(toolResult).not.toHaveProperty("input");

@@ -38,6 +38,7 @@
 - Changed Tool and task completion/failure markers to green/red dots, Diff boundaries to solid lines, and Compact progress to an indented second line.
 - Changed ordinary coding sessions to resolve local document constraints through the existing AgentSession/System Prompt lifecycle without injecting full `docs/**/*.md` contents.
 - Changed the default system prompt to use action-first, ADHD-friendly responses and focused implementations, preferring compact commands and scripts without arbitrary code-size limits.
+- Changed the default system prompt to keep simple tasks on a short TODO-driven path, prioritize runnable prototypes and near-release fixes, repair root causes in the owning layer, and use risk-based minimal verification without repeated broad test loops.
 - Changed Skill updates to reload through an atomic transaction and restore the previous Skill and Registry projection when reload fails.
 - Changed Task Todo projection to keep Execution Contracts and requirements in the Task Ledger without rendering separate document-contract or `Requirement` Todo rows.
 - Changed Assistant Thinking summaries to render one item as plain italic text, two as a complete `Thought Chain`, and longer streams as first/ellipsis/latest without duplicate rows.
@@ -56,6 +57,7 @@
 
 ### Fixed
 
+- Fixed `ask_user_question` answers being stored only in Tool Result metadata by also including selected labels, custom answers, and notes in model-visible result content.
 - Fixed Sudo Bash system guidance to prefer the smallest direct sudo command, preserve intentional multiline batches, and reject interactive root shells that would remain hidden after authentication detach.
 - Fixed controlled sudo interaction to stage the exact command or multiline batch unexecuted in an adaptive two-divider tmux pane from the first frame, execute only when the user presses Enter, cancel with Escape before execution, preserve ANSI colors, and detach after authentication while Runtime, partial Tool output, and work-log processing continue.
 - Fixed completed local privilege panes being reported as lost by parsing the command end marker before treating a normally dead tmux pane as a terminal failure.
