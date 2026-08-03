@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an API-first two-file model configuration: global `settings.json` can now contain `models.providers` and `review.model`, while `auth.json` remains the credential store; optional `models.json` overrides stay supported with higher precedence. Documented built-in DeepSeek API and review-model setup.
+
+### Changed
+
+- BeauPi `1.0.1` npm installs now run a one-time `postinstall` migration that backs up and replaces `~/.beaupi/agent/settings.json`, `models.json`, and `auth.json`. Existing API keys and OAuth credentials must be configured again. Default npm install and self-update commands now allow lifecycle scripts.
+
 ## [1.0.0] - 2026-08-03
 
 ### Breaking Changes

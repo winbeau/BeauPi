@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { ModelsSettings } from "./model-config.ts";
 import type { PolicySettings } from "./policy/types.ts";
 import type { ExecutionTargetConfig } from "./remote/types.ts";
 import type { SearchSettings } from "./search/types.ts";
@@ -95,6 +96,8 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
+	/** Global provider/model endpoint configuration. models.json remains an optional higher-priority override. */
+	models?: ModelsSettings;
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";

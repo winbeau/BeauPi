@@ -133,7 +133,6 @@ function getSelfUpdateCommandForMethod(
 				makeSelfUpdateCommandStep("pnpm", [
 					"install",
 					"-g",
-					"--ignore-scripts",
 					"--config.minimumReleaseAge=0",
 					...binDirArgs,
 					target.installSpec,
@@ -145,20 +144,14 @@ function getSelfUpdateCommandForMethod(
 		}
 		case "yarn":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("yarn", ["global", "add", "--ignore-scripts", target.installSpec]),
+				makeSelfUpdateCommandStep("yarn", ["global", "add", target.installSpec]),
 				target.packageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("yarn", ["global", "remove", installedPackageName]),
 			);
 		case "bun":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("bun", [
-					"install",
-					"-g",
-					"--ignore-scripts",
-					"--minimum-release-age=0",
-					target.installSpec,
-				]),
+				makeSelfUpdateCommandStep("bun", ["install", "-g", "--minimum-release-age=0", target.installSpec]),
 				target.packageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("bun", ["uninstall", "-g", installedPackageName]),
@@ -171,7 +164,6 @@ function getSelfUpdateCommandForMethod(
 				...prefixArgs,
 				"install",
 				"-g",
-				"--ignore-scripts",
 				"--min-release-age=0",
 				target.installSpec,
 			]);

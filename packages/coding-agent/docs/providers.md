@@ -1,6 +1,6 @@
 # Providers
 
-Pi supports subscription-based providers via OAuth and API key providers via environment variables or auth file. Built-in catalogs ship with pi; configured providers may refresh newer catalogs and cache them in `~/.pi/agent/models-store.json` for offline use.
+BeauPi supports subscription-based providers via OAuth and API key providers via environment variables or auth file. Built-in catalogs ship with BeauPi; configured providers may refresh newer catalogs and cache them in `~/.beaupi/agent/models-store.json` for offline use.
 
 ## Table of Contents
 
@@ -23,7 +23,7 @@ Use `/login` in interactive mode, then select a provider:
 - OpenRouter (OAuth-minted API key billed from OpenRouter credits)
 - Radius
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.pi/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
+Use `/logout` to clear credentials. Tokens are stored in `~/.beaupi/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
 
 ### OpenAI Codex
 
@@ -104,9 +104,23 @@ pi
 
 Reference for environment variables and `auth.json` keys: [`const envMap`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts) in [`packages/ai/src/env-api-keys.ts`](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/env-api-keys.ts).
 
+#### DeepSeek
+
+DeepSeek is a built-in API provider. Run `/login deepseek` or export `DEEPSEEK_API_KEY`, then select a model with `/model`. No `models.json` entry is required. To make DeepSeek the main and shared review provider, configure global `settings.json`:
+
+```json
+{
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro",
+  "review": {
+    "model": "deepseek/deepseek-v4-flash"
+  }
+}
+```
+
 #### Auth File
 
-Store credentials in `~/.pi/agent/auth.json`:
+Store credentials in `~/.beaupi/agent/auth.json`:
 
 ```json
 {
@@ -295,7 +309,7 @@ See [llama.cpp](llama-cpp.md) for server setup, model directory layout, environm
 
 ## Custom Providers
 
-**Via models.json:** Add Ollama, LM Studio, vLLM, or any provider that speaks a supported API (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI). See [models.md](models.md).
+**Via settings.json:** Add Ollama, LM Studio, vLLM, endpoint overrides, or any provider that speaks a supported API under `models.providers` in global `~/.beaupi/agent/settings.json`. Keep API credentials in `auth.json`. The standalone `models.json` shape remains available as an optional higher-priority advanced override. See [models.md](models.md).
 
 **Via extensions:** For providers that need custom API implementations or OAuth flows, create an extension. See [custom-provider.md](custom-provider.md) and [examples/extensions/custom-provider-gitlab-duo](../examples/extensions/custom-provider-gitlab-duo/).
 
@@ -306,4 +320,4 @@ When resolving credentials for a provider:
 1. CLI `--api-key` flag
 2. `auth.json` entry (API key or OAuth token)
 3. Environment variable
-4. Custom provider keys from `models.json`
+4. Custom provider keys from `settings.json` `models.providers`, then optional `models.json` overrides

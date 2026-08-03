@@ -92,6 +92,9 @@ function copyPackageJsonEntry(packageJson, options) {
 	const entry = options.includeName
 		? { name: packageJson.name, version: packageJson.version }
 		: { version: packageJson.version };
+	if (["preinstall", "install", "postinstall"].some((name) => typeof packageJson.scripts?.[name] === "string")) {
+		entry.hasInstallScript = true;
+	}
 
 	for (const field of [
 		"license",
@@ -259,7 +262,7 @@ function createRootLockEntry(installerPackageJson) {
 	return sortedPackageEntry(entry);
 }
 
-function validateGeneratedFiles(installerPackageJson, installLock, internalNames) {
+function validateGeneratedFiles(installerPackageJson, installLock, internalNames, codingAgentPackageName) {
 	const errors = [];
 	const rootEntry = installLock.packages[""];
 	const includedPackageNames = new Set();
@@ -298,6 +301,7 @@ function validateGeneratedFiles(installerPackageJson, installLock, internalNames
 			errors.push(`${lockPath} internal package version ${entry.version} does not match ${installerPackageJson.version}`);
 		}
 		if (entry.hasInstallScript) {
+			if (packageName === codingAgentPackageName) continue;
 			if (!packageName || !entry.version) {
 				errors.push(`${lockPath || "root"} has install scripts but no package name/version`);
 			} else {
@@ -399,7 +403,7 @@ function generateInstallLock() {
 		packages: sortedObject(installLockPackages),
 	};
 
-	validateGeneratedFiles(installerPackageJson, installLock, internalNames);
+	validateGeneratedFiles(installerPackageJson, installLock, internalNames, codingAgentPackage.name);
 	return { installerPackageJson, installLock };
 }
 

@@ -4,22 +4,22 @@ Pi uses JSON settings files with project settings overriding global settings.
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (current directory) |
+| `~/.beaupi/agent/settings.json` | Global (all projects) |
+| `.beaupi/settings.json` | Project (current directory) |
 
 Edit directly or use `/settings` for common options.
 
 ## Project Trust
 
-On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.pi/agent/trust.json`. Trusting a project allows pi to load `.pi/settings.json` and `.pi` resources, install missing project packages, and execute project extensions.
+On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.beaupi/agent/trust.json`. Trusting a project allows pi to load `.beaupi/settings.json` and `.beaupi` resources, install missing project packages, and execute project extensions.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.pi/agent/settings.json`, or change it with `/settings`.
+If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.beaupi/agent/settings.json`, or change it with `/settings`.
 
 `pi config` and package commands use the same project trust flow, except `pi update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.pi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.beaupi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
 
 ## All Settings
 
@@ -30,6 +30,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `defaultProvider` | string | - | Default provider (e.g., `"anthropic"`, `"openai"`) |
 | `defaultModel` | string | - | Default model ID |
 | `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
+| `models.providers` | object | - | Global-only provider endpoints, custom models, and model overrides; same provider schema as optional `models.json` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
@@ -46,6 +47,52 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
   }
 }
 ```
+
+### API-first two-file model setup
+
+Keep non-secret model configuration in global `settings.json` and credentials in `auth.json`. The optional `models.json` is only needed when a separate advanced override file is preferred; it wins for duplicate provider IDs.
+
+DeepSeek is built in, including its official endpoint and reasoning compatibility:
+
+`~/.beaupi/agent/settings.json`:
+
+```json
+{
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro",
+  "defaultThinkingLevel": "high",
+  "review": {
+    "model": "deepseek/deepseek-v4-flash"
+  }
+}
+```
+
+`~/.beaupi/agent/auth.json`:
+
+```json
+{
+  "deepseek": {
+    "type": "api_key",
+    "key": "sk-..."
+  }
+}
+```
+
+Use `/login deepseek` to write the credential, or omit the `auth.json` entry and export `DEEPSEEK_API_KEY`. For an API proxy or custom endpoint, add a global provider override:
+
+```json
+{
+  "models": {
+    "providers": {
+      "deepseek": {
+        "baseUrl": "https://proxy.example.com/v1"
+      }
+    }
+  }
+}
+```
+
+Do not place API keys in project settings. See [models.md](models.md) for the complete provider schema.
 
 ### UI & Display
 
@@ -195,7 +242,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 }
 ```
 
-`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.pi/agent/npm/`; project-scoped npm packages install under `.pi/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
+`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.beaupi/agent/npm/`; project-scoped npm packages install under `.beaupi/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
 
 ### SSH execution targets
 
@@ -275,7 +322,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 These settings define where to load extensions, skills, prompts, and themes from.
 
-Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in `.pi/settings.json` resolve relative to `.pi`. Absolute paths and `~` are supported.
+Paths in `~/.beaupi/agent/settings.json` resolve relative to `~/.beaupi/agent`. Paths in `.beaupi/settings.json` resolve relative to `.beaupi`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -341,16 +388,16 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.pi/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.beaupi/settings.json`) override global settings. Nested objects are merged:
 
 ```json
-// ~/.pi/agent/settings.json (global)
+// ~/.beaupi/agent/settings.json (global)
 {
   "theme": "dark",
   "compaction": { "enabled": true, "reserveTokens": 16384 }
 }
 
-// .pi/settings.json (project)
+// .beaupi/settings.json (project)
 {
   "compaction": { "reserveTokens": 8192 }
 }

@@ -59,7 +59,10 @@ export interface CreateModelRuntimeOptions {
 	/** Credential storage. Defaults to the file at authPath. */
 	credentials?: CredentialStore;
 	authPath?: string;
+	/** Optional advanced models.json override. Set to null to disable file-based model configuration. */
 	modelsPath?: string | null;
+	/** settings.json may contain models.providers. Defaults beside modelsPath. */
+	settingsPath?: string | null;
 	modelsStore?: ModelsStore;
 	modelsStorePath?: string;
 	/** Allow create() to refresh model catalogs over the network. Defaults to false. */
@@ -102,6 +105,7 @@ export class ModelRuntime implements Models {
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
+	private readonly settingsPath: string | undefined;
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -118,6 +122,7 @@ export class ModelRuntime implements Models {
 		credentials: RuntimeCredentials,
 		config: ModelConfig,
 		modelsPath: string | undefined,
+		settingsPath: string | undefined,
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
 		modelNetworkEnabled: boolean,
@@ -125,6 +130,7 @@ export class ModelRuntime implements Models {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
+		this.settingsPath = settingsPath;
 		this.modelNetworkEnabled = modelNetworkEnabled;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
@@ -136,11 +142,16 @@ export class ModelRuntime implements Models {
 		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
-		const config = await ModelConfig.load(modelsPath);
+		const settingsPath =
+			options.settingsPath === null
+				? undefined
+				: (options.settingsPath ?? (modelsPath ? join(dirname(modelsPath), "settings.json") : undefined));
+		const config = await ModelConfig.load({ settingsPath, modelsPath });
+		const configDir = modelsPath ? dirname(modelsPath) : settingsPath ? dirname(settingsPath) : undefined;
 		const modelsStore =
 			options.modelsStore ??
-			(modelsPath
-				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
+			(configDir
+				? new FileModelsStore(options.modelsStorePath ?? join(configDir, "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
 		const providers = builtinProviderCatalog
@@ -154,6 +165,7 @@ export class ModelRuntime implements Models {
 			credentials,
 			config,
 			modelsPath,
+			settingsPath,
 			modelsStore,
 			providers,
 			process.env.PI_OFFLINE === undefined,
@@ -516,7 +528,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
-		this.config = await ModelConfig.load(this.modelsPath);
+		this.config = await ModelConfig.load({ settingsPath: this.settingsPath, modelsPath: this.modelsPath });
 		this.configureRadiusProviders();
 		this.rebuildProviders();
 		const refreshOptions = {

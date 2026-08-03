@@ -1,10 +1,14 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+For normal API usage, BeauPi can keep model selection, endpoint overrides, and `review.model` in `~/.beaupi/agent/settings.json`, with credentials isolated in `~/.beaupi/agent/auth.json`. This is the recommended two-file layout.
+
+`~/.beaupi/agent/models.json` remains optional for advanced or legacy provider/model overrides. When both files configure the same provider, `models.json` has higher priority.
 
 ## Table of Contents
 
-- [Minimal Example](#minimal-example)
+- [Recommended Two-file Setup](#recommended-two-file-setup)
+- [DeepSeek API](#deepseek-api)
+- [Minimal Custom Provider](#minimal-custom-provider)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
@@ -14,21 +18,87 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
 
-## Minimal Example
+## Recommended Two-file Setup
 
-For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
+Use `settings.json` for non-secret model configuration:
 
 ```json
 {
-  "providers": {
-    "ollama": {
-      "baseUrl": "http://localhost:11434/v1",
-      "api": "openai-completions",
-      "apiKey": "ollama",
-      "models": [
-        { "id": "llama3.1:8b" },
-        { "id": "qwen2.5-coder:7b" }
-      ]
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.6-sol",
+  "review": {
+    "model": "openai/gpt-5.6-luna"
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://proxy.example.com/v1"
+      }
+    }
+  }
+}
+```
+
+Use `auth.json` only for credentials. `/login` writes this shape automatically:
+
+```json
+{
+  "openai": {
+    "type": "api_key",
+    "key": "sk-..."
+  }
+}
+```
+
+Do not commit `auth.json`. Environment variables such as `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` can be used instead, in which case no provider entry is required in `auth.json`.
+
+## DeepSeek API
+
+DeepSeek is built in; no custom model definition or `models.json` is required. A complete DeepSeek profile uses only the two primary files:
+
+`~/.beaupi/agent/settings.json`:
+
+```json
+{
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro",
+  "defaultThinkingLevel": "high",
+  "review": {
+    "model": "deepseek/deepseek-v4-flash"
+  }
+}
+```
+
+`~/.beaupi/agent/auth.json`:
+
+```json
+{
+  "deepseek": {
+    "type": "api_key",
+    "key": "sk-..."
+  }
+}
+```
+
+Alternatively, omit the `auth.json` entry and export `DEEPSEEK_API_KEY`. Run `/login deepseek` to save the key interactively. Built-in DeepSeek models use the official `https://api.deepseek.com` endpoint and DeepSeek reasoning format.
+
+## Minimal Custom Provider
+
+For local models (Ollama, LM Studio, vLLM), only `id` is required per model. Put the provider block under `models.providers` in `settings.json`:
+
+```json
+{
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://localhost:11434/v1",
+        "api": "openai-completions",
+        "apiKey": "ollama",
+        "models": [
+          { "id": "llama3.1:8b" },
+          { "id": "qwen2.5-coder:7b" }
+        ]
+      }
     }
   }
 }
@@ -64,6 +134,8 @@ You can set `compat` at the provider level to apply to all models, or at the mod
 
 ## Full Example
 
+The remaining examples use the standalone `models.json` shape. To keep the two-file layout, place the same `providers` object under `models` in global `settings.json`.
+
 Override defaults when you need specific values:
 
 ```json
@@ -89,7 +161,7 @@ Override defaults when you need specific values:
 }
 ```
 
-The file reloads each time you open `/model`. Edit during session; no restart needed.
+Provider configuration reloads each time you open `/model`. Edit `settings.json` or the optional `models.json` during a session; no restart is needed.
 
 ## Google AI Studio Example
 
@@ -169,7 +241,7 @@ The `apiKey` and `headers` fields support command execution, environment interpo
   "apiKey": "sk-..."
   ```
 
-For `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
+For provider configuration in `settings.json` or `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
 
 If your command is slow, expensive, rate-limited, or should keep using a previous value on transient failures, wrap it in your own script or command that implements the caching or TTL behavior you want.
 

@@ -232,7 +232,7 @@ if (!options.skipInstall) {
 	const installPackageJson = `${JSON.stringify({ private: true, dependencies, overrides: dependencies }, undefined, "\t")}\n`;
 	writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
 
-	run("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
+	run("npm", ["install", "--omit=dev"], { cwd: nodeInstallDirectory });
 	createBeauPiShim(nodeInstallDirectory);
 
 	if (!options.skipBunInstall) {
@@ -244,7 +244,7 @@ if (!options.skipInstall) {
 			packages.map((pkg) => [pkg.publishName, fileSpecifier(bunInstallDirectory, tarballs.get(pkg.publishName))]),
 		);
 		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: bunDependencies }, undefined, "\t")}\n`);
-		run("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
+		run("bun", ["install", "--production"], { cwd: bunInstallDirectory });
 		createBeauPiShim(bunInstallDirectory);
 	}
 }

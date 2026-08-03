@@ -89,6 +89,9 @@ function copyPackageJsonEntry(packageJson, options) {
 	const entry = options.includeName
 		? { name: packageJson.name, version: packageJson.version }
 		: { version: packageJson.version };
+	if (["preinstall", "install", "postinstall"].some((name) => typeof packageJson.scripts?.[name] === "string")) {
+		entry.hasInstallScript = true;
+	}
 
 	for (const field of [
 		"license",
@@ -239,6 +242,7 @@ function validateShrinkwrap(shrinkwrap, internalNames) {
 			errors.push(`${lockPath} has a local resolved value: ${entry.resolved}`);
 		}
 		if (entry.hasInstallScript) {
+			if (lockPath === "") continue;
 			if (!packageName || !entry.version) {
 				errors.push(`${lockPath || "root"} has install scripts but no package name/version`);
 			} else {

@@ -60,10 +60,10 @@ I regularly publish my own `pi-mono` work sessions here:
 ## Quick Start
 
 ```bash
-npm install -g --ignore-scripts @winbeau/beaupi
+npm install -g @winbeau/beaupi
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. BeauPi does not require install scripts for normal npm installs.
+BeauPi `1.0.1` runs a reviewed npm `postinstall` migration that replaces `~/.beaupi/agent/settings.json`, `models.json`, and `auth.json`. Previous files are backed up under `~/.beaupi/agent/backups/config-overwrite-v1.0.1/`; saved credentials must be configured again.
 
 Standalone binary alternative for Linux and macOS:
 
@@ -136,7 +136,7 @@ Pi also supports the llama.cpp router server. Configure it with `/login llama.cp
 
 See [docs/providers.md](docs/providers.md) for other provider setup instructions.
 
-**Custom providers & models:** Add providers via `~/.pi/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
+**Custom providers & models:** For the recommended two-file layout, put provider endpoints and model overrides under `models.providers` in `~/.beaupi/agent/settings.json`, keep API credentials in `~/.beaupi/agent/auth.json`, and configure shared lightweight reviews with `review.model`. The optional `models.json` remains available as a higher-priority advanced override. DeepSeek is built in and works with `/login deepseek` or `DEEPSEEK_API_KEY`. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 
 ---
 
@@ -283,24 +283,24 @@ Use `/settings` to modify common options, or edit JSON files directly:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (overrides global) |
+| `~/.beaupi/agent/settings.json` | Global (all projects) |
+| `.beaupi/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
 
 ### Project Trust
 
-On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.pi/agent/trust.json`. Trusting a project allows pi to load `.pi/settings.json` and `.pi` resources, install missing project packages, and execute project extensions.
+On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.beaupi/agent/trust.json`. Trusting a project allows pi to load `.beaupi/settings.json` and `.beaupi` resources, install missing project packages, and execute project extensions.
 
 Before the trust decision, pi loads only context files, user/global extensions, and CLI `-e` extensions so they can handle the `project_trust` event. Project-local extensions, project package-managed extensions, and project settings are loaded only after the project is trusted. This split also applies when switching to a session from a different cwd whose trust has not been resolved in the current process.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.pi/agent/settings.json`, or change it with `/settings`.
+If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.beaupi/agent/settings.json`, or change it with `/settings`.
 
 `pi config` and package commands use the same project trust flow, except `pi update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.pi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.beaupi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
 
 ### Telemetry and update checks
 

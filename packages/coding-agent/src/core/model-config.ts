@@ -1,4 +1,4 @@
-/** Immutable, credential-blind models.json snapshot. */
+/** Immutable, credential-blind provider configuration from settings.json and optional models.json overrides. */
 
 import { readFile } from "node:fs/promises";
 import { type Static, Type } from "typebox";
@@ -200,14 +200,20 @@ const ProviderConfigSchema = Type.Object({
 });
 
 const ModelsConfigSchema = Type.Object({
-	providers: Type.Record(Type.String(), ProviderConfigSchema),
+	providers: Type.Optional(Type.Record(Type.String(), ProviderConfigSchema)),
 });
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
-type ModelsJson = Static<typeof ModelsConfigSchema>;
+export type ModelsSettings = Static<typeof ModelsConfigSchema>;
+type ModelsJson = ModelsSettings;
+
+export interface ModelConfigPaths {
+	settingsPath?: string;
+	modelsPath?: string;
+}
 
 function formatValidationPath(error: TLocalizedValidationError): string {
 	if (error.keyword === "required") {
@@ -228,7 +234,73 @@ function deepFreeze<T>(value: T): T {
 	return Object.freeze(value);
 }
 
-/** One immutable load of models.json. */
+function mergeProviderConfig(base: ModelsJsonProvider, override: ModelsJsonProvider): ModelsJsonProvider {
+	return deepFreeze({ ...structuredClone(base), ...structuredClone(override) });
+}
+
+interface ModelConfigSource {
+	path: string | undefined;
+	name: "settings.json" | "models.json";
+}
+
+function extractModelsConfig(source: ModelConfigSource, parsed: unknown): unknown {
+	if (source.name === "models.json") return parsed;
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+	return (parsed as Record<string, unknown>).models;
+}
+
+async function loadModelConfigSource(source: ModelConfigSource): Promise<{
+	providers: ReadonlyMap<string, ModelsJsonProvider>;
+	error?: string;
+}> {
+	if (!source.path) return { providers: new Map() };
+	const path = normalizePath(source.path);
+	let content: string;
+	try {
+		content = await readFile(path, "utf-8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { providers: new Map() };
+		return {
+			providers: new Map(),
+			error: `Failed to load ${source.name}: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
+		};
+	}
+	if (!content.trim()) return { providers: new Map() };
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(source.name === "models.json" ? stripJsonComments(content) : content);
+	} catch (error) {
+		return {
+			providers: new Map(),
+			error: `Failed to parse ${source.name}: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
+		};
+	}
+
+	const modelsConfig = extractModelsConfig(source, parsed);
+	if (modelsConfig === undefined) return { providers: new Map() };
+	if (!validateModelsConfig.Check(modelsConfig)) {
+		const errors =
+			validateModelsConfig
+				.Errors(modelsConfig)
+				.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+				.join("\n") || "Unknown schema error";
+		const schemaName = source.name === "settings.json" ? "settings.json models" : "models.json";
+		return {
+			providers: new Map(),
+			error: `Invalid ${schemaName} schema:\n${errors}\n\nFile: ${path}`,
+		};
+	}
+
+	const config = modelsConfig as ModelsJson;
+	const providers = new Map<string, ModelsJsonProvider>();
+	for (const [providerId, provider] of Object.entries(config.providers ?? {})) {
+		providers.set(providerId, deepFreeze(structuredClone(provider)));
+	}
+	return { providers };
+}
+
+/** Immutable provider configuration loaded from settings.json and optional models.json overrides. */
 export class ModelConfig {
 	private readonly providers: ReadonlyMap<string, ModelsJsonProvider>;
 	private readonly error: string | undefined;
@@ -238,45 +310,21 @@ export class ModelConfig {
 		this.error = error;
 	}
 
-	static async load(modelsJsonPath: string | undefined): Promise<ModelConfig> {
-		if (!modelsJsonPath) return new ModelConfig(new Map());
-		const path = normalizePath(modelsJsonPath);
-		let content: string;
-		try {
-			content = await readFile(path, "utf-8");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return new ModelConfig(new Map());
-			return new ModelConfig(
-				new Map(),
-				`Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
-			);
-		}
-
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(stripJsonComments(content));
-		} catch (error) {
-			return new ModelConfig(
-				new Map(),
-				`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
-			);
-		}
-
-		if (!validateModelsConfig.Check(parsed)) {
-			const errors =
-				validateModelsConfig
-					.Errors(parsed)
-					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-					.join("\n") || "Unknown schema error";
-			return new ModelConfig(new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
-		}
-
-		const config = parsed as ModelsJson;
+	static async load(paths: ModelConfigPaths): Promise<ModelConfig> {
 		const providers = new Map<string, ModelsJsonProvider>();
-		for (const [providerId, provider] of Object.entries(config.providers)) {
-			providers.set(providerId, deepFreeze(structuredClone(provider)));
+		const errors: string[] = [];
+		for (const source of [
+			{ path: paths.settingsPath, name: "settings.json" as const },
+			{ path: paths.modelsPath, name: "models.json" as const },
+		]) {
+			const loaded = await loadModelConfigSource(source);
+			for (const [providerId, provider] of loaded.providers) {
+				const previous = providers.get(providerId);
+				providers.set(providerId, previous ? mergeProviderConfig(previous, provider) : provider);
+			}
+			if (loaded.error) errors.push(loaded.error);
 		}
-		return new ModelConfig(providers);
+		return new ModelConfig(providers, errors.length > 0 ? errors.join("\n\n") : undefined);
 	}
 
 	getProvider(providerId: string): ModelsJsonProvider | undefined {

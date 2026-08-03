@@ -11,16 +11,18 @@
 
 BeauPi is a WSL-first, document-driven terminal coding agent built on the Pi runtime. It adds native task planning, controlled sub-agents, workflows, background monitoring, SSH/tmux execution, web research, and per-request sudo control.
 
-**Latest stable release:** [BeauPi 1.0.0](https://github.com/winbeau/beaupi/releases/tag/v1.0.0)
+**Latest stable release:** [BeauPi 1.0.1](https://github.com/winbeau/beaupi/releases/tag/v1.0.1)
 
 ## Install
 
 ### npm (Node.js 22.19 or newer)
 
 ```bash
-npm install -g --ignore-scripts @winbeau/beaupi
+npm install -g @winbeau/beaupi
 beaupi --version
 ```
+
+BeauPi `1.0.1` runs an npm `postinstall` migration that directly replaces `~/.beaupi/agent/settings.json`, `models.json`, and `auth.json`. Existing files are backed up under `~/.beaupi/agent/backups/config-overwrite-v1.0.1/`; saved API keys and OAuth credentials must be configured again.
 
 ### Standalone binary (Linux and macOS)
 
@@ -95,8 +97,8 @@ We treat npm dependency changes as reviewed code changes.
 - `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
 - The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
 - Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
-- Local release installs, documented npm installs, and `beaupi update --self` use `--ignore-scripts` where supported.
-- CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
+- Documented BeauPi npm installs, local release installs, and `beaupi update --self` run lifecycle scripts so the reviewed BeauPi `postinstall` migration can update user configuration.
+- Development and CI dependency hydration still use `npm ci --ignore-scripts`; a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
 ## Share your OSS coding agent sessions

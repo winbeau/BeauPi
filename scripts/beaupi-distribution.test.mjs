@@ -16,6 +16,8 @@ describe("BeauPi distribution metadata", () => {
 				"@earendil-works/pi-agent-core": "^1.2.3",
 				chalk: "5.6.2",
 			},
+			files: ["dist", "postinstall.mjs"],
+			scripts: { postinstall: "node postinstall.mjs" },
 			repository: {
 				type: "git",
 				url: "git+https://github.com/earendil-works/pi.git",
@@ -34,6 +36,8 @@ describe("BeauPi distribution metadata", () => {
 			directory: "packages/coding-agent",
 		});
 		assert.equal(rewritten.publishConfig.access, "public");
+		assert.deepEqual(rewritten.files, ["dist", "postinstall.mjs"]);
+		assert.deepEqual(rewritten.scripts, { postinstall: "node postinstall.mjs" });
 	});
 
 	it("rewrites internal lockfile tarball URLs and dependency ranges", () => {

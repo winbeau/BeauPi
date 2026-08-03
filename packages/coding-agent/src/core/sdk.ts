@@ -58,7 +58,7 @@ export interface CreateAgentSessionOptions {
 	/** Global config directory. Default: ~/.pi/agent */
 	agentDir?: string;
 
-	/** Canonical model/auth runtime. Defaults to a runtime using agentDir/auth.json and models.json. */
+	/** Canonical model/auth runtime. Defaults to agentDir/auth.json, settings.json models, and optional models.json overrides. */
 	modelRuntime?: ModelRuntime;
 
 	/** Model to use. Default: from settings, else first available */

@@ -19,9 +19,11 @@ BeauPi 已在现有 `packages/coding-agent` 中完成基础品牌整合。当前
 Node.js：
 
 ```bash
-npm install -g --ignore-scripts @winbeau/beaupi
+npm install -g @winbeau/beaupi
 beaupi
 ```
+
+BeauPi `1.0.1` 安装时会运行 npm `postinstall`，直接覆盖 `~/.beaupi/agent/settings.json`、`models.json` 和 `auth.json`。旧文件备份到 `~/.beaupi/agent/backups/config-overwrite-v1.0.1/`；已有 API Key/OAuth 凭据需要重新配置。
 
 Linux/macOS standalone binary：
 
@@ -78,10 +80,58 @@ BeauPi 会保留调用时的当前工作目录，因此 Agent 操作的是 `your
 
 ## 配置位置
 
+日常 API 使用只需管理两个主配置文件：
+
 ```text
-~/.beaupi/agent/settings.json
-~/.beaupi/agent/auth.json
-~/.beaupi/agent/models.json
+~/.beaupi/agent/settings.json  # 模型选择、endpoint 覆盖、review.model 和其他非敏感设置
+~/.beaupi/agent/auth.json      # API key 与 OAuth 凭据，文件权限 0600
+```
+
+`~/.beaupi/agent/models.json` 仍可作为可选高级覆盖；同一 Provider 同时出现在两个位置时，`models.json` 优先。`models-store.json` 是自动维护的模型目录缓存，不需要手工编辑。
+
+DeepSeek 已内置，无需定义自定义模型。两文件配置示例：
+
+`settings.json`：
+
+```json
+{
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro",
+  "defaultThinkingLevel": "high",
+  "review": {
+    "model": "deepseek/deepseek-v4-flash"
+  }
+}
+```
+
+`auth.json`：
+
+```json
+{
+  "deepseek": {
+    "type": "api_key",
+    "key": "sk-..."
+  }
+}
+```
+
+也可不写 DeepSeek 的 `auth.json` 条目，直接设置 `DEEPSEEK_API_KEY`，或运行 `/login deepseek` 保存密钥。自定义 OpenAI/DeepSeek 兼容 endpoint 时，在全局 `settings.json` 增加：
+
+```json
+{
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://proxy.example.com/v1"
+      }
+    }
+  }
+}
+```
+
+其他用户数据目录：
+
+```text
 ~/.beaupi/agent/sessions/
 ~/.beaupi/agent/extensions/
 ~/.beaupi/agent/skills/
