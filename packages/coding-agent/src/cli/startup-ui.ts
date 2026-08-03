@@ -23,7 +23,7 @@ import {
 	type Theme,
 } from "../modes/interactive/theme/theme.ts";
 
-const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+const OFFICIAL_PACKAGE_NAMES = new Set(["@earendil-works/pi-coding-agent", "@winbeau/beaupi"]);
 const OFFICIAL_APP_NAME = "beaupi";
 const OFFICIAL_CONFIG_DIR_NAME = ".beaupi";
 
@@ -35,7 +35,7 @@ interface DistributionMetadata {
 
 function isOfficialDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
 	return (
-		packageName === OFFICIAL_PACKAGE_NAME &&
+		OFFICIAL_PACKAGE_NAMES.has(packageName) &&
 		appName === OFFICIAL_APP_NAME &&
 		configDirName === OFFICIAL_CONFIG_DIR_NAME
 	);

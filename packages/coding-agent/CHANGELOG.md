@@ -28,6 +28,7 @@
 - Added BeauPi M11 multi-agent Workflows with a strict versioned YAML/JSON DAG schema, bounded dependency conditions, AgentPool scheduling, shared single-writer coordination, isolated Git Worktrees, five built-in Workflows, `workflow_run/status/cancel`, Monitor and Task Ledger lifecycle integration, and a responsive DAG renderer.
 - Added BeauPi M12 session-scoped background tasks with six `background_*` Tools, runner-owned local process and existing SSH/tmux Monitor attachment, deterministic triggers, a persistent deduplicated Wake Queue, idle/follow-up AgentSession auto-wake, bounded AgentPool progress reviews, branch-aware recovery, Task Ledger integration, and responsive TUI rendering.
 - Added BeauPi M13 per-request controlled sudo execution with `privileged_exec`, automatic local `bash` and `terminal_bash` routing through a session-scoped `PrivilegeRuntime`, exact single-line or multiline read-only staging with user-controlled Enter execution or Escape cancellation, post-authentication detach with continued work-log capture, interactive-root-shell blocking, secure local-tmux PTY input, one-shot and `terminal_send` bypass blocking, branch-aware Session/Monitor/Task Ledger integration, responsive TUI rendering, and permission-restricted JSONL audit logs.
+- Added the `@winbeau/beaupi` npm distribution, checksummed GitHub Release standalone binaries, and a versioned `install.sh` installer for Linux and macOS.
 
 ### Changed
 

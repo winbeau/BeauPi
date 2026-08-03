@@ -1,7 +1,7 @@
 import { compare, valid } from "semver";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+const LATEST_VERSION_URL = "https://registry.npmjs.org/@winbeau%2fbeaupi/latest";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
@@ -43,6 +43,7 @@ export async function getLatestPiRelease(
 	if (!response.ok) return undefined;
 
 	const data = (await response.json()) as {
+		name?: unknown;
 		packageName?: unknown;
 		version?: unknown;
 		note?: unknown;
@@ -50,8 +51,9 @@ export async function getLatestPiRelease(
 	if (typeof data.version !== "string" || !data.version.trim()) {
 		return undefined;
 	}
+	const packageNameValue = data.packageName ?? data.name;
 	const packageName =
-		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
+		typeof packageNameValue === "string" && packageNameValue.trim() ? packageNameValue.trim() : undefined;
 	const note = typeof data.note === "string" && data.note.trim() ? data.note.trim() : undefined;
 	return {
 		version: data.version.trim(),

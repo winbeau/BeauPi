@@ -9,9 +9,32 @@ BeauPi 已在现有 `packages/coding-agent` 中完成基础品牌整合。当前
 - 应用配置名：`beaupi`
 - 用户配置：`~/.beaupi/agent/`
 - 项目配置：`.beaupi/`
-- 内部 npm 包名暂时保持不变
-- 不创建新的 BeauPi Package
+- 源码工作区继续使用上游内部包名，发布时生成 `@winbeau/beaupi-*` 包
+- 正式 npm 包：`@winbeau/beaupi`
+- GitHub Release：`winbeau/beaupi`
 - 开发时直接运行 TypeScript 源码，不要求先构建
+
+## 正式安装
+
+Node.js：
+
+```bash
+npm install -g --ignore-scripts @winbeau/beaupi
+beaupi
+```
+
+Linux/macOS standalone binary：
+
+```bash
+curl -fsSL https://github.com/winbeau/beaupi/releases/latest/download/install.sh | sh
+beaupi
+```
+
+升级 standalone binary 时重新执行安装命令。卸载：
+
+```bash
+curl -fsSL https://github.com/winbeau/beaupi/releases/latest/download/install.sh | sh -s -- --uninstall
+```
 
 ## 安装依赖
 

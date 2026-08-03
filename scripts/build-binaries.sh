@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build pi binaries for all platforms locally.
+# Build BeauPi binaries for all supported release platforms.
 # Mirrors .github/workflows/build-binaries.yml
 #
 # Usage:
@@ -16,16 +16,17 @@
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
-#     pi-windows-arm64.zip
+#     beaupi-darwin-arm64.tar.gz
+#     beaupi-darwin-x64.tar.gz
+#     beaupi-linux-x64.tar.gz
+#     beaupi-linux-arm64.tar.gz
+#     beaupi-windows-x64.zip
+#     beaupi-windows-arm64.zip
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 SKIP_INSTALL=false
 SKIP_DEPS=false
@@ -145,9 +146,9 @@ for platform in "${PLATFORMS[@]}"; do
     # explicit build entrypoints. The runtime can still use new URL(...), but the
     # worker must be present in the compiled executable.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi"
     fi
 done
 
@@ -155,7 +156,9 @@ echo "==> Creating release archives..."
 
 # Copy shared files to each platform directory
 for platform in "${PLATFORMS[@]}"; do
-    cp package.json "$OUTPUT_DIR/$platform/"
+    node "$REPO_ROOT/scripts/beaupi-distribution.mjs" package-json \
+        --source "$REPO_ROOT/packages/coding-agent/package.json" \
+        --out "$OUTPUT_DIR/$platform/package.json"
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
     cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm "$OUTPUT_DIR/$platform/"
@@ -221,12 +224,12 @@ cd "$OUTPUT_DIR"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
         # Windows (zip)
-        echo "Creating pi-$platform.zip..."
-        (cd "$platform" && zip -r ../pi-$platform.zip .)
+        echo "Creating beaupi-$platform.zip..."
+        (cd "$platform" && zip -r ../beaupi-$platform.zip .)
     else
-        # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
-        echo "Creating pi-$platform.tar.gz..."
-        mv "$platform" pi && tar -czf pi-$platform.tar.gz pi && mv pi "$platform"
+        # Unix platforms use a stable beaupi/ wrapper directory for installers.
+        echo "Creating beaupi-$platform.tar.gz..."
+        mv "$platform" beaupi && tar -czf beaupi-$platform.tar.gz beaupi && mv beaupi "$platform"
     fi
 done
 
@@ -235,9 +238,9 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf "$platform"
     if [[ "$platform" == windows-* ]]; then
-        mkdir -p "$platform" && (cd "$platform" && unzip -q ../pi-$platform.zip)
+        mkdir -p "$platform" && (cd "$platform" && unzip -q ../beaupi-$platform.zip)
     else
-        tar -xzf pi-$platform.tar.gz && mv pi "$platform"
+        tar -xzf beaupi-$platform.tar.gz && mv beaupi "$platform"
     fi
 done
 
@@ -249,8 +252,8 @@ echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        echo "  $OUTPUT_DIR/$platform/pi.exe"
+        echo "  $OUTPUT_DIR/$platform/beaupi.exe"
     else
-        echo "  $OUTPUT_DIR/$platform/pi"
+        echo "  $OUTPUT_DIR/$platform/beaupi"
     fi
 done

@@ -4,14 +4,9 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symli
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { BEAUPI_PACKAGES, prepareBeauPiPackages } from "./beaupi-distribution.mjs";
 
-const packages = [
-	{ directory: "packages/ai", name: "@earendil-works/pi-ai" },
-	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
-	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
-	{ directory: "packages/storage/sqlite-node", name: "@earendil-works/pi-storage-sqlite-node" },
-	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
-];
+const packages = BEAUPI_PACKAGES;
 
 function printUsage() {
 	console.log(`Usage: node scripts/local-release.mjs [options]
@@ -22,10 +17,12 @@ isolated directory outside the repository for local release testing.
 Options:
   --out <dir>          Output directory. Defaults to a new directory under ${tmpdir()}
   --force              Remove --out first if it already exists
+  --offline-model-data Use the checked-in provider catalogs without a network refresh
   --skip-check         Do not run npm run check before building
   --skip-test          Do not run ./test.sh before building
   --skip-install       Only create tarballs; do not create isolated installs
-  --skip-bun-install   Do not create the isolated Bun install
+  --skip-binary        Skip the local standalone binary build
+  --skip-bun-install   Do not create the isolated Bun package install
   --help               Show this help
 `);
 }
@@ -33,7 +30,9 @@ Options:
 function parseArgs() {
 	const options = {
 		force: false,
+		offlineModelData: false,
 		outDir: undefined,
+		skipBinary: false,
 		skipBunInstall: false,
 		skipCheck: false,
 		skipInstall: false,
@@ -51,6 +50,10 @@ function parseArgs() {
 			options.force = true;
 			continue;
 		}
+		if (arg === "--offline-model-data") {
+			options.offlineModelData = true;
+			continue;
+		}
 		if (arg === "--skip-check") {
 			options.skipCheck = true;
 			continue;
@@ -61,6 +64,10 @@ function parseArgs() {
 		}
 		if (arg === "--skip-install") {
 			options.skipInstall = true;
+			continue;
+		}
+		if (arg === "--skip-binary") {
+			options.skipBinary = true;
 			continue;
 		}
 		if (arg === "--skip-bun-install") {
@@ -112,7 +119,7 @@ function isInsidePath(child, parent) {
 
 function prepareOutputDirectory(options, repoRoot) {
 	if (!options.outDir) {
-		return mkdtempSync(join(tmpdir(), "pi-local-release-"));
+		return mkdtempSync(join(tmpdir(), "beaupi-local-release-"));
 	}
 
 	const outDir = resolve(options.outDir);
@@ -161,38 +168,22 @@ function buildBunBinaryRelease(targetDirectory, archiveDirectory) {
 	]);
 	rmSync(targetDirectory, { force: true, recursive: true });
 	cpSync(join(binaryBuildDirectory, platform), targetDirectory, { recursive: true });
-	const archiveName = platform.startsWith("windows-") ? `pi-${platform}.zip` : `pi-${platform}.tar.gz`;
+	const archiveName = platform.startsWith("windows-") ? `beaupi-${platform}.zip` : `beaupi-${platform}.tar.gz`;
 	cpSync(join(binaryBuildDirectory, archiveName), join(archiveDirectory, archiveName));
 	return platform;
 }
 
-function createPiShim(installDirectory) {
+function createBeauPiShim(installDirectory) {
 	const binDirectory = join(installDirectory, "node_modules", ".bin");
 	if (process.platform === "win32") {
-		if (existsSync(join(binDirectory, "pi.cmd"))) {
-			writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.cmd" %*\r\n');
-			writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.ps1" @args\n');
-			return;
-		}
-		writeFileSync(join(installDirectory, "pi.cmd"), '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.exe" %*\r\n');
-		writeFileSync(join(installDirectory, "pi.ps1"), '& "$PSScriptRoot/node_modules/.bin/pi.exe" @args\n');
+		writeFileSync(
+			join(installDirectory, "beaupi.cmd"),
+			'@ECHO off\r\n"%~dp0node_modules\\.bin\\beaupi.cmd" %*\r\n',
+		);
+		writeFileSync(join(installDirectory, "beaupi.ps1"), '& "$PSScriptRoot/node_modules/.bin/beaupi.ps1" @args\n');
 		return;
 	}
-	symlinkSync(join("node_modules", ".bin", "pi"), join(installDirectory, "pi"));
-}
-
-function packPackage(pkg, tarballDirectory) {
-	const packageJson = readPackageJson(pkg.directory);
-	if (packageJson.name !== pkg.name) {
-		throw new Error(`${pkg.directory}/package.json has name ${packageJson.name}, expected ${pkg.name}`);
-	}
-
-	const output = run("npm", ["pack", "--json", "--pack-destination", tarballDirectory], {
-		capture: true,
-		cwd: pkg.directory,
-	});
-	const packed = JSON.parse(output)[0];
-	return join(tarballDirectory, packed.filename);
+	symlinkSync(join("node_modules", ".bin", "beaupi"), join(installDirectory, "beaupi"));
 }
 
 const options = parseArgs();
@@ -204,15 +195,13 @@ if (rootPackageJson.name !== "pi-monorepo") {
 }
 
 const outDir = prepareOutputDirectory(options, repoRoot);
-const tarballDirectory = join(outDir, "tarballs");
 const nodeInstallDirectory = join(outDir, "node");
 const bunInstallDirectory = join(outDir, "bun-install");
 const binaryDirectory = join(outDir, "bun");
-mkdirSync(tarballDirectory, { recursive: true });
-
-// Release artifacts always use a freshly generated, strictly validated catalog,
-// including when checks or tests are explicitly skipped.
-run("npm", ["run", "generate:models"], { cwd: repoRoot });
+if (!options.offlineModelData) {
+	// Release artifacts normally use a freshly generated, strictly validated catalog.
+	run("npm", ["run", "generate:models"], { cwd: repoRoot });
+}
 
 if (!options.skipCheck) {
 	run("npm", ["run", "check"], { cwd: repoRoot });
@@ -227,25 +216,24 @@ if (!options.skipTest) {
 	run("./test.sh", [], { cwd: repoRoot });
 }
 
-const tarballs = new Map();
-for (const pkg of packages) {
-	const tarball = packPackage(pkg, tarballDirectory);
-	tarballs.set(pkg.name, tarball);
-}
+const preparedPackages = prepareBeauPiPackages({ repoRoot, outDir: join(outDir, "npm") });
+const tarballs = new Map(preparedPackages.map((pkg) => [pkg.publishName, pkg.tarball]));
 
 let binaryPlatform;
 if (!options.skipInstall) {
-	binaryPlatform = buildBunBinaryRelease(binaryDirectory, outDir);
+	if (!options.skipBinary) {
+		binaryPlatform = buildBunBinaryRelease(binaryDirectory, outDir);
+	}
 
 	mkdirSync(nodeInstallDirectory, { recursive: true });
 	const dependencies = Object.fromEntries(
-		packages.map((pkg) => [pkg.name, fileSpecifier(nodeInstallDirectory, tarballs.get(pkg.name))]),
+		packages.map((pkg) => [pkg.publishName, fileSpecifier(nodeInstallDirectory, tarballs.get(pkg.publishName))]),
 	);
 	const installPackageJson = `${JSON.stringify({ private: true, dependencies, overrides: dependencies }, undefined, "\t")}\n`;
 	writeFileSync(join(nodeInstallDirectory, "package.json"), installPackageJson);
 
 	run("npm", ["install", "--omit=dev", "--ignore-scripts"], { cwd: nodeInstallDirectory });
-	createPiShim(nodeInstallDirectory);
+	createBeauPiShim(nodeInstallDirectory);
 
 	if (!options.skipBunInstall) {
 		if (!commandExists("bun")) {
@@ -253,11 +241,11 @@ if (!options.skipInstall) {
 		}
 		mkdirSync(bunInstallDirectory, { recursive: true });
 		const bunDependencies = Object.fromEntries(
-			packages.map((pkg) => [pkg.name, fileSpecifier(bunInstallDirectory, tarballs.get(pkg.name))]),
+			packages.map((pkg) => [pkg.publishName, fileSpecifier(bunInstallDirectory, tarballs.get(pkg.publishName))]),
 		);
 		writeFileSync(join(bunInstallDirectory, "package.json"), `${JSON.stringify({ private: true, dependencies: bunDependencies, overrides: bunDependencies }, undefined, "\t")}\n`);
 		run("bun", ["install", "--production", "--ignore-scripts"], { cwd: bunInstallDirectory });
-		createPiShim(bunInstallDirectory);
+		createBeauPiShim(bunInstallDirectory);
 	}
 }
 
@@ -269,21 +257,23 @@ for (const tarball of tarballs.values()) {
 }
 
 if (!options.skipInstall) {
-	console.log("\nLocal Bun binary release:");
-	console.log(`  ${binaryDirectory}`);
-	console.log(`  ${join(outDir, `pi-${binaryPlatform}.${String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz"}`)}`);
-	console.log("\nRun the local Bun binary release from outside the repository:");
-	console.log(`  ${join(binaryDirectory, String(binaryPlatform).startsWith("windows-") ? "pi.exe" : "pi")} --help`);
+	if (!options.skipBinary) {
+		console.log("\nLocal Bun binary release:");
+		console.log(`  ${binaryDirectory}`);
+		console.log(`  ${join(outDir, `beaupi-${binaryPlatform}.${String(binaryPlatform).startsWith("windows-") ? "zip" : "tar.gz"}`)}`);
+		console.log("\nRun the local Bun binary release from outside the repository:");
+		console.log(`  ${join(binaryDirectory, String(binaryPlatform).startsWith("windows-") ? "beaupi.exe" : "beaupi")} --help`);
+	}
 
 	console.log("\nIsolated npm install:");
 	console.log(`  ${nodeInstallDirectory}`);
 	console.log("\nRun the locally packed npm CLI from outside the repository:");
-	console.log(`  ${join(nodeInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
+	console.log(`  ${join(nodeInstallDirectory, process.platform === "win32" ? "beaupi.cmd" : "beaupi")} --help`);
 
 	if (!options.skipBunInstall) {
 		console.log("\nIsolated Bun package install:");
 		console.log(`  ${bunInstallDirectory}`);
 		console.log("\nRun the locally packed Bun package CLI from outside the repository:");
-		console.log(`  ${join(bunInstallDirectory, process.platform === "win32" ? "pi.cmd" : "pi")} --help`);
+		console.log(`  ${join(bunInstallDirectory, process.platform === "win32" ? "beaupi.cmd" : "beaupi")} --help`);
 	}
 }

@@ -24,6 +24,9 @@ import { join } from "node:path";
 import { findPackageDirectories } from "./package-workspaces.mjs";
 
 const RELEASE_TARGET = process.argv[2];
+const OFFLINE_MODEL_DATA = process.env.PI_RELEASE_OFFLINE_MODEL_DATA === "1";
+const SKIP_TESTS = process.env.PI_RELEASE_SKIP_TESTS === "1";
+const SKIP_PUSH = process.env.PI_RELEASE_SKIP_PUSH === "1";
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
@@ -201,7 +204,11 @@ console.log();
 
 // 4. Regenerate release artifacts
 console.log("Regenerating release artifacts...");
-run("npm run generate:models");
+if (OFFLINE_MODEL_DATA) {
+	console.log("  Using checked-in provider catalogs (PI_RELEASE_OFFLINE_MODEL_DATA=1)");
+} else {
+	run("npm run generate:models");
+}
 run("npm run check:model-data");
 run("npm run shrinkwrap:coding-agent");
 run("npm run install-lock:coding-agent");
@@ -217,7 +224,11 @@ run("npm run build:offline");
 console.log();
 
 console.log("Running tests...");
-run("./test.sh");
+if (SKIP_TESTS) {
+	console.log("  Skipped by PI_RELEASE_SKIP_TESTS=1");
+} else {
+	run("./test.sh");
+}
 console.log();
 
 // 6. Commit and tag
@@ -240,8 +251,16 @@ console.log();
 
 // 9. Push
 console.log("Pushing to remote...");
-run("git push origin main");
-run(`git push origin v${version}`);
+if (SKIP_PUSH) {
+	console.log("  Skipped by PI_RELEASE_SKIP_PUSH=1");
+} else {
+	run("git push origin main");
+	run(`git push origin v${version}`);
+}
 console.log();
 
-console.log(`=== Prepared release v${version}; CI publishing starts after the tag push ===`);
+console.log(
+	SKIP_PUSH
+		? `=== Prepared release v${version}; push main and the tag after bootstrap publication ===`
+		: `=== Prepared release v${version}; CI publishing starts after the tag push ===`,
+);

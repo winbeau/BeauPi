@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0–M13 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question`、advisory-only Policy Runtime、多 Agent Workflow、后台任务自动唤醒和逐请求受控 sudo 终端。
+当前进度：M0–M14 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question`、advisory-only Policy Runtime、多 Agent Workflow、后台任务自动唤醒、逐请求受控 sudo 终端和动态任务规划。M Final 正在完成 npm 与 GitHub Release 正式发行。
 
 ## 文档
 
@@ -60,7 +60,7 @@ M12 已接入现有 `MonitorRuntime`、`AgentSession`、`AgentPool`、Session cu
 
 ## 实现策略
 
-BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是在现有 `packages/coding-agent` 中直接扩展。内部 npm 包名暂时保持不变，应用品牌、CLI、配置目录和后续发行物统一使用 BeauPi。
+BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是在现有 `packages/coding-agent` 中直接扩展。源码工作区保留上游内部包名以降低同步成本，发布阶段生成 `@winbeau/beaupi-*` 包并重写内部引用；应用品牌、CLI、配置目录和发行物统一使用 BeauPi。
 
 ## 设计原则
 

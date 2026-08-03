@@ -1,27 +1,35 @@
 <p align="center">
-  <a href="https://pi.dev">
-    <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
+  <a href="https://github.com/winbeau/beaupi">
+    <img alt="BeauPi, based on Pi" src="https://pi.dev/logo-auto.svg" width="128">
   </a>
 </p>
 <p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@winbeau/beaupi"><img alt="npm" src="https://img.shields.io/npm/v/@winbeau/beaupi?style=flat-square" /></a>
 </p>
 
+# BeauPi
+
+BeauPi is a WSL-first, document-driven terminal coding agent built on the Pi runtime. It adds native task planning, controlled sub-agents, workflows, background monitoring, SSH/tmux execution, web research, and per-request sudo control.
+
+## Install
+
+Node.js package:
+
+```bash
+npm install -g --ignore-scripts @winbeau/beaupi
+beaupi
+```
+
+Standalone binary for Linux and macOS:
+
+```bash
+curl -fsSL https://github.com/winbeau/beaupi/releases/latest/download/install.sh | sh
+beaupi
+```
+
+Development and architecture documentation is under [docs/beaupi](docs/beaupi/README.md). BeauPi retains the upstream Pi runtime and MIT license; upstream project documentation is available at [pi.dev](https://pi.dev).
+
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-# Pi Agent Harness
-
-This is the home of the Pi agent harness project including our self extensible coding agent.
-
-* **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
-* **[@earendil-works/pi-agent-core](packages/agent)**: Agent runtime with tool calling and state management
-* **[@earendil-works/pi-ai](packages/ai)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
-
-To learn more about Pi:
-
-* [Visit pi.dev](https://pi.dev), the project website with demos
-* [Read the documentation](https://pi.dev/docs/latest), but you can also ask the agent to explain itself
 
 ## All Packages
 
@@ -65,8 +73,8 @@ GitHub releases include a versioned source archive covered by the release's `SHA
 
 ```bash
 VERSION="<release-version>"
-tar -xzf "pi-${VERSION}-source.tar.gz"
-cd "pi-${VERSION}"
+tar -xzf "beaupi-${VERSION}-source.tar.gz"
+cd "beaupi-${VERSION}"
 ./scripts/build-binaries.sh --offline-model-data --platform linux-x64 --out "$PWD/out"
 ```
 
