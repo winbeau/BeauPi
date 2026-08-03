@@ -50,6 +50,16 @@ export interface ReviewSettings {
 	model?: string; // default: DEFAULT_REVIEW_MODEL
 }
 
+export const DEFAULT_VISION_MODEL = "gpt-5.6-sol";
+
+export interface VisionSettings {
+	/**
+	 * Model used to describe images when the active Agent model cannot process them.
+	 * Bare model id follows the active Agent provider first; provider/model fixes the provider.
+	 */
+	model?: string; // default: DEFAULT_VISION_MODEL
+}
+
 export interface ImageSettings {
 	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
@@ -119,6 +129,7 @@ export interface Settings {
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	executionTargets?: ExecutionTargetConfig[];
 	review?: ReviewSettings;
+	vision?: VisionSettings;
 	search?: SearchSettings;
 	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
@@ -990,6 +1001,11 @@ export class SettingsManager {
 	getReviewModel(): string {
 		const configured = this.settings.review?.model?.trim();
 		return configured || DEFAULT_REVIEW_MODEL;
+	}
+
+	getVisionModel(): string {
+		const configured = this.settings.vision?.model?.trim();
+		return configured || DEFAULT_VISION_MODEL;
 	}
 
 	getSearchSettings(): SearchSettings | undefined {

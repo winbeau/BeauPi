@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `vision.model` setting mirroring `review.model`: when the active Agent model cannot process images, image attachments and `read` tool image results are described by the configured vision model (default `gpt-5.6-sol`) and the description text is passed to the main model instead. Descriptions are cached per image for the session.
 ## [1.0.2] - 2026-08-03
 
 ### Fixed

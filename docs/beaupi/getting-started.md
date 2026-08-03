@@ -83,7 +83,7 @@ BeauPi 会保留调用时的当前工作目录，因此 Agent 操作的是 `your
 日常 API 使用只需管理两个主配置文件：
 
 ```text
-~/.beaupi/agent/settings.json  # 模型选择、endpoint 覆盖、review.model 和其他非敏感设置
+~/.beaupi/agent/settings.json  # 模型选择、endpoint 覆盖、review.model/vision.model 和其他非敏感设置
 ~/.beaupi/agent/auth.json      # API key 与 OAuth 凭据，文件权限 0600
 ```
 
@@ -100,9 +100,14 @@ DeepSeek 已内置，无需定义自定义模型。两文件配置示例：
   "defaultThinkingLevel": "high",
   "review": {
     "model": "deepseek/deepseek-v4-flash"
+  },
+  "vision": {
+    "model": "openai/gpt-5.6-sol"
   }
 }
 ```
+
+`vision.model` 与 `review.model` 同构：当主模型不支持图片（如 DeepSeek 纯文本模型）时，粘贴或 `@file` 附加的图片、以及 `read` 工具读到的图片会先交给 vision 模型描述，描述文本再进入主模型上下文。
 
 `auth.json`：
 

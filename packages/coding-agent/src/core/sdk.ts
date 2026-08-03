@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -45,6 +46,7 @@ import {
 	createWriteTool,
 	withFileMutationQueue,
 } from "./tools/index.ts";
+import { VisionService } from "./vision/vision-service.ts";
 import { createWorkflowToolDefinitions, WorkflowRuntime } from "./workflow/index.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
@@ -457,41 +459,84 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 
-	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
-	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
+	// Describes images with the configured vision model (vision.model) when the active
+	// Agent model cannot process them, mirroring the review.model pattern.
+	const visionService = new VisionService({
+		modelRuntime,
+		getModelSetting: () => settingsManager.getVisionModel(),
+		getPreferredProvider: () => agent.state.model?.provider,
+	});
+
+	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth),
+	// and delegates image understanding to the vision model when the active model lacks image input.
+	const convertToLlmWithBlockImages = async (messages: AgentMessage[]): Promise<Message[]> => {
 		const converted = convertToLlm(messages);
 		// Check setting dynamically so mid-session changes take effect
-		if (!settingsManager.getBlockImages()) {
-			return converted;
-		}
-		// Filter out ImageContent from all messages, replacing with text placeholder
-		return converted.map((msg) => {
-			if (msg.role === "user" || msg.role === "toolResult") {
-				const content = msg.content;
-				if (Array.isArray(content)) {
-					const hasImages = content.some((c) => c.type === "image");
-					if (hasImages) {
-						const filteredContent = content
-							.map((c) =>
-								c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
-							)
-							.filter(
-								(c, i, arr) =>
-									// Dedupe consecutive "Image reading is disabled." texts
-									!(
-										c.type === "text" &&
-										c.text === "Image reading is disabled." &&
-										i > 0 &&
-										arr[i - 1].type === "text" &&
-										(arr[i - 1] as { type: "text"; text: string }).text === "Image reading is disabled."
-									),
-							);
-						return { ...msg, content: filteredContent };
+		if (settingsManager.getBlockImages()) {
+			// Filter out ImageContent from all messages, replacing with text placeholder
+			return converted.map((msg) => {
+				if (msg.role === "user" || msg.role === "toolResult") {
+					const content = msg.content;
+					if (Array.isArray(content)) {
+						const hasImages = content.some((c) => c.type === "image");
+						if (hasImages) {
+							const filteredContent = content
+								.map((c) =>
+									c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
+								)
+								.filter(
+									(c, i, arr) =>
+										// Dedupe consecutive "Image reading is disabled." texts
+										!(
+											c.type === "text" &&
+											c.text === "Image reading is disabled." &&
+											i > 0 &&
+											arr[i - 1].type === "text" &&
+											(arr[i - 1] as { type: "text"; text: string }).text === "Image reading is disabled."
+										),
+								);
+							return { ...msg, content: filteredContent };
+						}
 					}
 				}
+				return msg;
+			});
+		}
+		// Vision delegation: only when the active model cannot process images and a vision
+		// model is available. Descriptions are cached per image, so repeated turns are free.
+		const currentModel = agent.state.model;
+		if (currentModel?.input.includes("image") || visionService.resolve().candidates.length === 0) {
+			return converted;
+		}
+		const delegated: Message[] = [];
+		let changed = false;
+		for (const msg of converted) {
+			if ((msg.role === "user" || msg.role === "toolResult") && Array.isArray(msg.content)) {
+				const content = msg.content as (TextContent | ImageContent)[];
+				if (content.some((c) => c.type === "image")) {
+					const describedContent: (TextContent | ImageContent)[] = [];
+					for (const part of content) {
+						if (part.type !== "image") {
+							describedContent.push(part);
+							continue;
+						}
+						const description = await visionService.describeImage(part);
+						describedContent.push({
+							type: "text",
+							text:
+								description !== undefined
+									? `[Vision model image description:\n${description}]`
+									: "[Image unavailable: the active model cannot process images and the vision model failed to describe this image.]",
+						});
+					}
+					delegated.push({ ...msg, content: describedContent });
+					changed = true;
+					continue;
+				}
 			}
-			return msg;
-		});
+			delegated.push(msg);
+		}
+		return changed ? delegated : converted;
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
