@@ -97,7 +97,7 @@ We treat npm dependency changes as reviewed code changes.
 - `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
 - The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
 - Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
-- Documented BeauPi npm installs, local release installs, and `beaupi update --self` run lifecycle scripts so the reviewed BeauPi `postinstall` migration can update user configuration.
+- The one-time BeauPi `1.0.1` npm `postinstall` config migration is hard-gated to that exact version; future versions (including `beaupi update --self`) never modify user configuration, and features are added incrementally without rewriting `~/.beaupi/agent` files.
 - Development and CI dependency hydration still use `npm ci --ignore-scripts`; a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
