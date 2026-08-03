@@ -14,6 +14,11 @@ on:
         description: 'Source ref to build/publish (defaults to tag; use only for release recovery)'
         required: false
         type: string
+      skip_validation:
+        description: 'Skip checks and tests after a previously validated release (recovery only)'
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -265,10 +270,12 @@ jobs:
         run: npm run build
 
       - name: Check
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.skip_validation != 'true' }}
         run: npm run check
 
       - name: Test
-        run: npm test
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.skip_validation != 'true' }}
+        run: ./test.sh
 
       - name: Upgrade npm for trusted publishing
         run: |
