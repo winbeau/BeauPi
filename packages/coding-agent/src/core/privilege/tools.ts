@@ -8,31 +8,42 @@ import { type BashToolDetails, createBashToolDefinition } from "../tools/bash.ts
 import type { PrivilegeRuntime } from "./runtime.ts";
 import type { PrivilegeToolDetailsV1 } from "./types.ts";
 
+const privilegeCommandSchema = Type.String({
+	minLength: 1,
+	description: "Complete sudo command or newline-separated command batch to stage in the terminal",
+});
+const privilegeTimeoutSchema = Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" }));
+const terminalIdSchema = Type.String({ minLength: 1, description: "Existing interactive terminal id" });
 const localPrivilegeSchema = Type.Object(
 	{
 		execution: Type.Literal("local"),
-		command: Type.String({
-			minLength: 1,
-			description: "Complete sudo command or newline-separated command batch to stage in the terminal",
-		}),
-		timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
+		command: privilegeCommandSchema,
+		timeout: privilegeTimeoutSchema,
 	},
 	{ additionalProperties: false },
 );
 const terminalPrivilegeSchema = Type.Object(
 	{
 		execution: Type.Literal("terminal"),
-		terminalId: Type.String({ minLength: 1, description: "Existing interactive terminal id" }),
-		command: Type.String({
-			minLength: 1,
-			description: "Complete sudo command or newline-separated command batch to stage in the terminal",
-		}),
-		timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
+		terminalId: terminalIdSchema,
+		command: privilegeCommandSchema,
+		timeout: privilegeTimeoutSchema,
 	},
 	{ additionalProperties: false },
 );
-export const PRIVILEGED_EXEC_PARAMETERS = Type.Union([localPrivilegeSchema, terminalPrivilegeSchema]);
-export type PrivilegedExecInput = Static<typeof PRIVILEGED_EXEC_PARAMETERS>;
+export const PRIVILEGED_EXEC_PARAMETERS = Type.Object(
+	{
+		execution: Type.Union([Type.Literal("local"), Type.Literal("terminal")]),
+		terminalId: Type.Optional(terminalIdSchema),
+		command: privilegeCommandSchema,
+		timeout: privilegeTimeoutSchema,
+	},
+	{
+		additionalProperties: false,
+		oneOf: [localPrivilegeSchema, terminalPrivilegeSchema],
+	},
+);
+export type PrivilegedExecInput = Static<typeof localPrivilegeSchema> | Static<typeof terminalPrivilegeSchema>;
 
 const validator = Compile(PRIVILEGED_EXEC_PARAMETERS);
 
@@ -97,36 +108,37 @@ export function createPrivilegedExecToolDefinition(
 		executionMode: "sequential",
 		execute: async (toolCallId, params, signal, onUpdate) => {
 			if (!validator.Check(params)) throw new Error("privileged_exec received invalid parameters");
-			if (params.execution === "local") {
+			const args = params as PrivilegedExecInput;
+			if (args.execution === "local") {
 				return runtime.execute(
 					{
 						toolCallId,
 						sourceTool: "privileged_exec",
 						route: "explicit_tool",
-						command: params.command,
+						command: args.command,
 						target: { execution: "local" },
 						cwd,
-						timeoutMs: params.timeout ? params.timeout * 1000 : undefined,
+						timeoutMs: args.timeout ? args.timeout * 1000 : undefined,
 					},
 					signal,
 					onUpdate,
 				);
 			}
-			const terminal = remoteRuntime.getTerminalContext(params.terminalId);
+			const terminal = remoteRuntime.getTerminalContext(args.terminalId);
 			return runtime.execute(
 				{
 					toolCallId,
 					sourceTool: "privileged_exec",
 					route: "explicit_tool",
-					command: params.command,
+					command: args.command,
 					target: {
 						execution: "terminal",
 						targetId: terminal.targetId,
-						terminalId: params.terminalId,
+						terminalId: args.terminalId,
 						monitorId: terminal.monitorId,
 					},
 					cwd,
-					timeoutMs: params.timeout ? params.timeout * 1000 : undefined,
+					timeoutMs: args.timeout ? args.timeout * 1000 : undefined,
 				},
 				signal,
 				onUpdate,
@@ -137,7 +149,7 @@ export function createPrivilegedExecToolDefinition(
 				context.lastComponent instanceof PrivilegeCallComponent
 					? context.lastComponent
 					: new PrivilegeCallComponent();
-			const terminalId = "terminalId" in args ? args.terminalId : "";
+			const terminalId = args.terminalId ?? "";
 			component.setCall(
 				args.execution === "terminal" ? "Sudo Terminal Bash" : "Sudo Bash",
 				args.command,

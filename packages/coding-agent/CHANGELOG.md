@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed DeepSeek and strict OpenAI-compatible providers rejecting `privileged_exec` by exposing a root object parameter schema while preserving local/terminal branch validation.
+
 ## [1.0.1] - 2026-08-03
 
 ### Added

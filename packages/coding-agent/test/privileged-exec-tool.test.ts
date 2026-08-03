@@ -32,7 +32,8 @@ function runtime() {
 }
 
 describe("privileged_exec tool", () => {
-	it("uses a strict local-or-terminal schema without password or grant fields", () => {
+	it("uses a root object schema with strict local-or-terminal validation", () => {
+		expect(PRIVILEGED_EXEC_PARAMETERS).toMatchObject({ type: "object", oneOf: expect.any(Array) });
 		const validator = Compile(PRIVILEGED_EXEC_PARAMETERS);
 		expect(validator.Check({ execution: "local", command: "sudo id" })).toBe(true);
 		expect(validator.Check({ execution: "terminal", terminalId: "term", command: "sudo id", timeout: 2 })).toBe(true);
