@@ -11,46 +11,51 @@
 
 BeauPi is a WSL-first, document-driven terminal coding agent built on the Pi runtime. It adds native task planning, controlled sub-agents, workflows, background monitoring, SSH/tmux execution, web research, and per-request sudo control.
 
+**Latest stable release:** [BeauPi 1.0.0](https://github.com/winbeau/beaupi/releases/tag/v1.0.0)
+
 ## Install
 
-Node.js package:
+### npm (Node.js 22.19 or newer)
 
 ```bash
 npm install -g --ignore-scripts @winbeau/beaupi
-beaupi
+beaupi --version
 ```
 
-Standalone binary for Linux and macOS:
+### Standalone binary (Linux and macOS)
 
 ```bash
 curl -fsSL https://github.com/winbeau/beaupi/releases/latest/download/install.sh | sh
-beaupi
+beaupi --version
 ```
+
+The standalone installer verifies the selected archive against the release's `SHA256SUMS`, validates its layout, and installs it into a versioned directory. Windows x64/arm64 binaries, source archives, install lock files, and checksums are available on the [GitHub Releases page](https://github.com/winbeau/beaupi/releases).
 
 Development and architecture documentation is under [docs/beaupi](docs/beaupi/README.md). BeauPi retains the upstream Pi runtime and MIT license; upstream project documentation is available at [pi.dev](https://pi.dev).
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## All Packages
+## Published Packages
 
-| Package | Description |
-|---------|-------------|
-| **[@earendil-works/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@earendil-works/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
-| **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
+| Package | Source | Description |
+|---------|--------|-------------|
+| **[@winbeau/beaupi](https://www.npmjs.com/package/@winbeau/beaupi)** | [packages/coding-agent](packages/coding-agent) | BeauPi terminal coding agent CLI |
+| **[@winbeau/beaupi-ai](https://www.npmjs.com/package/@winbeau/beaupi-ai)** | [packages/ai](packages/ai) | Unified multi-provider LLM API |
+| **[@winbeau/beaupi-agent-core](https://www.npmjs.com/package/@winbeau/beaupi-agent-core)** | [packages/agent](packages/agent) | Agent runtime with tool calling and state management |
+| **[@winbeau/beaupi-tui](https://www.npmjs.com/package/@winbeau/beaupi-tui)** | [packages/tui](packages/tui) | Terminal UI library with differential rendering |
+| **[@winbeau/beaupi-storage-sqlite-node](https://www.npmjs.com/package/@winbeau/beaupi-storage-sqlite-node)** | [packages/storage/sqlite-node](packages/storage/sqlite-node) | Node.js SQLite storage adapter |
 
-For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
+For upstream Slack/chat automation and workflows, see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
 
 ## Permissions & Containerization
 
-Pi does not include a built-in permission system for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
+BeauPi does not include a general-purpose permission sandbox for restricting filesystem, process, network, or credential access. By default, it runs with the permissions of the user and process that launched it.
 
-If you need stronger boundaries, containerize or sandbox Pi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
+If you need stronger boundaries, containerize or sandbox BeauPi. See [packages/coding-agent/docs/containerization.md](packages/coding-agent/docs/containerization.md) for three patterns:
 
-- **Gondolin extension**: keep `pi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
-- **Plain Docker**: run the whole `pi` process in a local container for simple isolation.
-- **OpenShell**: run the whole `pi` process in a policy-controlled sandbox.
+- **Gondolin extension**: keep `beaupi` and provider auth on the host while routing built-in tools and `!` commands into a local Linux micro-VM.
+- **Plain Docker**: run the whole `beaupi` process in a local container for simple isolation.
+- **OpenShell**: run the whole `beaupi` process in a policy-controlled sandbox.
 
 ## Contributing
 
@@ -64,7 +69,7 @@ npm run build         # Refresh model data, then build all packages
 npm run build:offline # Rebuild using existing model data without network access
 npm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (can be run from any directory)
+./pi-test.sh         # Run BeauPi from sources (can be run from any directory)
 ```
 
 ## Building standalone binaries from release source
@@ -90,7 +95,7 @@ We treat npm dependency changes as reviewed code changes.
 - `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
 - The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
 - Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before tagging a release.
-- Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
+- Local release installs, documented npm installs, and `beaupi update --self` use `--ignore-scripts` where supported.
 - CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
