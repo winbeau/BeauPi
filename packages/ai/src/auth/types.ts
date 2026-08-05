@@ -1,6 +1,14 @@
 import type { ProviderEnv, ProviderHeaders } from "../types.ts";
 
 /**
+ * ProviderEnv key carrying a channel connection's base URL. Auth.json entries
+ * like `{ "_type": "newapi_channel_conn", "key": "sk-...", "url": "https://relay" }`
+ * are normalized to api_key credentials with this env entry; auth resolution
+ * turns it into a request-time `ModelAuth.baseUrl` override.
+ */
+export const CHANNEL_CONN_BASE_URL_ENV = "PI_CHANNEL_BASE_URL";
+
+/**
  * Request auth for a single model request. If a value cannot be expressed as
  * `apiKey`, `headers`, or `baseUrl`, it is provider config, not auth.
  */

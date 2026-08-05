@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createModels, type Provider } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.ts";
+import { AuthStorage, readStoredCredential } from "../src/core/auth-storage.ts";
 
 describe("AuthStorage", () => {
 	let tempDir: string;
@@ -53,6 +53,57 @@ describe("AuthStorage", () => {
 		};
 		const storage = AuthStorage.inMemory({ anthropic: credential });
 		expect(await storage.read("anthropic")).toEqual(credential);
+	});
+
+	test("normalizes newapi_channel_conn entries to api_key credentials", async () => {
+		writeAuthJson({
+			deepseek: {
+				_type: "newapi_channel_conn",
+				key: "sk-channel-key",
+				url: "https://tian-shu.example.test",
+			},
+		});
+		const storage = AuthStorage.create(authJsonPath);
+		expect(await storage.read("deepseek")).toEqual({
+			type: "api_key",
+			key: "sk-channel-key",
+			env: { PI_CHANNEL_BASE_URL: "https://tian-shu.example.test/v1" },
+		});
+		expect(await storage.list()).toEqual([{ providerId: "deepseek", type: "api_key" }]);
+	});
+
+	test("resolves env-template keys in newapi_channel_conn entries", async () => {
+		const original = process.env.TEST_CHANNEL_CONN_KEY;
+		process.env.TEST_CHANNEL_CONN_KEY = "resolved-channel-key";
+		try {
+			writeAuthJson({
+				deepseek: {
+					_type: "newapi_channel_conn",
+					key: "$TEST_CHANNEL_CONN_KEY",
+					url: "https://relay.example.test",
+				},
+			});
+			const storage = AuthStorage.create(authJsonPath);
+			expect(await storage.read("deepseek")).toEqual({
+				type: "api_key",
+				key: "resolved-channel-key",
+				env: { PI_CHANNEL_BASE_URL: "https://relay.example.test/v1" },
+			});
+		} finally {
+			if (original === undefined) delete process.env.TEST_CHANNEL_CONN_KEY;
+			else process.env.TEST_CHANNEL_CONN_KEY = original;
+		}
+	});
+
+	test("readStoredCredential normalizes newapi_channel_conn entries", async () => {
+		writeAuthJson({
+			deepseek: { _type: "newapi_channel_conn", key: "sk-channel-key", url: "https://relay.example.test" },
+		});
+		expect(readStoredCredential("deepseek", authJsonPath)).toEqual({
+			type: "api_key",
+			key: "sk-channel-key",
+			env: { PI_CHANNEL_BASE_URL: "https://relay.example.test/v1" },
+		});
 	});
 
 	test("credential-scoped env takes precedence and remains inspectable", async () => {

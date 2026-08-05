@@ -313,9 +313,11 @@ export class ModelConfig {
 	static async load(paths: ModelConfigPaths): Promise<ModelConfig> {
 		const providers = new Map<string, ModelsJsonProvider>();
 		const errors: string[] = [];
+		// settings.json is the highest-priority model config: it loads last so
+		// its provider fields win over models.json per-provider merges.
 		for (const source of [
-			{ path: paths.settingsPath, name: "settings.json" as const },
 			{ path: paths.modelsPath, name: "models.json" as const },
+			{ path: paths.settingsPath, name: "settings.json" as const },
 		]) {
 			const loaded = await loadModelConfigSource(source);
 			for (const [providerId, provider] of loaded.providers) {

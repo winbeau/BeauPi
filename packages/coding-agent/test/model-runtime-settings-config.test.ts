@@ -67,7 +67,7 @@ describe("ModelRuntime settings.json model configuration", () => {
 		]);
 	});
 
-	it("hot-reloads settings providers while keeping models.json as the higher-priority override", async () => {
+	it("hot-reloads settings providers as the higher-priority override over models.json", async () => {
 		const agentDir = createTempDir();
 		const settingsPath = join(agentDir, "settings.json");
 		const modelsPath = join(agentDir, "models.json");
@@ -99,15 +99,82 @@ describe("ModelRuntime settings.json model configuration", () => {
 			JSON.stringify({ providers: { openai: { baseUrl: "https://models.example.test/v1" } } }),
 		);
 		await runtime.refresh({ allowNetwork: false });
-		expect(runtime.getModels("openai")[0]?.baseUrl).toBe("https://models.example.test/v1");
+		expect(runtime.getModels("openai")[0]?.baseUrl).toBe("https://settings-one.example.test/v1");
 		expect(runtime.getModel("openai", "gpt-5.6-sol")?.contextWindow).toBe(4242);
 
 		writeFileSync(
 			settingsPath,
 			JSON.stringify({ models: { providers: { openai: { baseUrl: "https://settings-two.example.test/v1" } } } }),
 		);
-		rmSync(modelsPath);
 		await runtime.refresh({ allowNetwork: false });
 		expect(runtime.getModels("openai")[0]?.baseUrl).toBe("https://settings-two.example.test/v1");
+	});
+
+	it("treats a newapi_channel_conn auth.json entry as an authoritative api_key credential", async () => {
+		const agentDir = createTempDir();
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({
+				models: {
+					providers: {
+						deepseek: { baseUrl: "https://tian-shu.example.test" },
+					},
+				},
+			}),
+		);
+		const authPath = join(agentDir, "auth.json");
+		writeFileSync(
+			authPath,
+			JSON.stringify({
+				deepseek: {
+					_type: "newapi_channel_conn",
+					key: "sk-channel-key",
+					url: "https://tian-shu.example.test",
+				},
+			}),
+		);
+		const runtime = await ModelRuntime.create({
+			authPath,
+			modelsPath: join(agentDir, "models.json"),
+			modelsStore: new InMemoryModelsStore(),
+			allowModelNetwork: false,
+		});
+
+		expect(runtime.getError()).toBeUndefined();
+		expect(runtime.hasConfiguredAuth("deepseek")).toBe(true);
+		expect(runtime.getProviderAuthStatus("deepseek")).toEqual({ configured: true, source: "stored" });
+		expect(runtime.getModel("deepseek", "deepseek-v4-flash")?.baseUrl).toBe("https://tian-shu.example.test");
+		expect(await runtime.getAuth("deepseek")).toMatchObject({
+			auth: { apiKey: "sk-channel-key" },
+			source: "stored credential",
+		});
+	});
+
+	it("uses the auth.json channel url as the request baseUrl when settings.json does not pin one", async () => {
+		const agentDir = createTempDir();
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({}));
+		const authPath = join(agentDir, "auth.json");
+		writeFileSync(
+			authPath,
+			JSON.stringify({
+				deepseek: {
+					_type: "newapi_channel_conn",
+					key: "sk-channel-key",
+					url: "https://relay.example.test",
+				},
+			}),
+		);
+		const runtime = await ModelRuntime.create({
+			authPath,
+			modelsPath: join(agentDir, "models.json"),
+			modelsStore: new InMemoryModelsStore(),
+			allowModelNetwork: false,
+		});
+
+		expect(runtime.getModel("deepseek", "deepseek-v4-flash")?.baseUrl).toBe("https://api.deepseek.com");
+		expect(await runtime.getAuth("deepseek")).toMatchObject({
+			auth: { apiKey: "sk-channel-key", baseUrl: "https://relay.example.test/v1" },
+			source: "stored credential",
+		});
 	});
 });

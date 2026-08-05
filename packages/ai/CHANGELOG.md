@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Stored api-key credentials carrying the `PI_CHANNEL_BASE_URL` env entry now override the request-time base URL, so channel connections defined in `auth.json` own the endpoint.
+
 ## [1.0.3] - 2026-08-04
 
 ## [1.0.2] - 2026-08-03

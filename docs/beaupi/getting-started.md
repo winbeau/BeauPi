@@ -87,7 +87,7 @@ BeauPi 会保留调用时的当前工作目录，因此 Agent 操作的是 `your
 ~/.beaupi/agent/auth.json      # API key 与 OAuth 凭据，文件权限 0600
 ```
 
-`~/.beaupi/agent/models.json` 仍可作为可选高级覆盖；同一 Provider 同时出现在两个位置时，`models.json` 优先。`models-store.json` 是自动维护的模型目录缓存，不需要手工编辑。
+`settings.json` 与 `auth.json` 是最高优先级配置文件：两者同时出现时，以它们为准。`~/.beaupi/agent/models.json` 仍可作为可选高级覆盖，但同一 Provider 同时出现在两个位置时，`settings.json` 优先。`models-store.json` 是自动维护的模型目录缓存，不需要手工编辑。
 
 DeepSeek 已内置，无需定义自定义模型。两文件配置示例：
 
@@ -126,13 +126,29 @@ DeepSeek 已内置，无需定义自定义模型。两文件配置示例：
 {
   "models": {
     "providers": {
-      "openai": {
-        "baseUrl": "https://proxy.example.com/v1"
+      "deepseek": {
+        "baseUrl": "https://tian-shu.org"
       }
     }
   }
 }
 ```
+
+### 通道连接（channel connection）
+
+`auth.json` 也接受 `newapi_channel_conn` 格式的通道条目，把 key 与 url 一起托管：
+
+```json
+{
+  "deepseek": {
+    "_type": "newapi_channel_conn",
+    "key": "sk-...",
+    "url": "https://tian-shu.org"
+  }
+}
+```
+
+该条目的 `key` 作为 API key，`url` 作为请求 baseUrl（最高优先级，覆盖模型/Provider 默认值与 `settings.json` 的 `baseUrl`）。主机名形式的 url（无路径，如 `https://tian-shu.org`）会自动补上 `/v1` 再发请求；带路径的 url（如 `https://relay.example.org/v1`）原样使用。
 
 其他用户数据目录：
 
