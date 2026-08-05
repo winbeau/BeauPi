@@ -1,16 +1,15 @@
 import type { ProviderEnv } from "../types.ts";
 import { formatThrownValue } from "../utils/diagnostics.ts";
-import {
-	type ApiKeyAuth,
-	type ApiKeyCredential,
-	type AuthContext,
-	type AuthResult,
-	CHANNEL_CONN_BASE_URL_ENV,
-	type Credential,
-	type CredentialStore,
-	type OAuthAuth,
-	type OAuthCredential,
-	type ProviderAuth,
+import type {
+	ApiKeyAuth,
+	ApiKeyCredential,
+	AuthContext,
+	AuthResult,
+	Credential,
+	CredentialStore,
+	OAuthAuth,
+	OAuthCredential,
+	ProviderAuth,
 } from "./types.ts";
 
 export type ModelsErrorCode = "model_source" | "model_validation" | "provider" | "stream" | "auth" | "oauth";
@@ -152,12 +151,7 @@ async function resolveApiKey(
 	credential: ApiKeyCredential | undefined,
 ): Promise<AuthResult | undefined> {
 	try {
-		const result = await apiKey.resolve({ ctx: authContext, credential });
-		if (!result) return undefined;
-		// A stored channel connection owns the endpoint: its url is the final
-		// request-time base URL, overriding model/provider defaults.
-		const channelBaseUrl = credential?.env?.[CHANNEL_CONN_BASE_URL_ENV];
-		return channelBaseUrl ? { ...result, auth: { ...result.auth, baseUrl: channelBaseUrl } } : result;
+		return await apiKey.resolve({ ctx: authContext, credential });
 	} catch (error) {
 		throw new ModelsError("auth", `API key auth failed for provider ${providerId}`, { cause: error });
 	}

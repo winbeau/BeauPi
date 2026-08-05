@@ -127,28 +127,14 @@ DeepSeek 已内置，无需定义自定义模型。两文件配置示例：
   "models": {
     "providers": {
       "deepseek": {
-        "baseUrl": "https://tian-shu.org"
+        "baseUrl": "https://tian-shu.org/v1"
       }
     }
   }
 }
 ```
 
-### 通道连接（channel connection）
-
-`auth.json` 也接受 `newapi_channel_conn` 格式的通道条目，把 key 与 url 一起托管：
-
-```json
-{
-  "deepseek": {
-    "_type": "newapi_channel_conn",
-    "key": "sk-...",
-    "url": "https://tian-shu.org"
-  }
-}
-```
-
-该条目的 `key` 作为 API key，`url` 作为请求 baseUrl（最高优先级，覆盖模型/Provider 默认值与 `settings.json` 的 `baseUrl`）。主机名形式的 url（无路径，如 `https://tian-shu.org`）会自动补上 `/v1` 再发请求；带路径的 url（如 `https://relay.example.org/v1`）原样使用。
+第三方中转与官方 API 一样只需要 `auth.json` 里的一个 `api_key` key；中转地址统一写在 `settings.json` 的 `baseUrl`。注意中转网关通常要求路径带 `/v1`（如 `https://tian-shu.org/v1`）。
 
 其他用户数据目录：
 

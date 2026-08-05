@@ -3,8 +3,7 @@
  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
  */
 
-import type { ApiKeyCredential, Credential, CredentialInfo, CredentialStore, ProviderEnv } from "@earendil-works/pi-ai";
-import { CHANNEL_CONN_BASE_URL_ENV } from "@earendil-works/pi-ai";
+import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -13,59 +12,6 @@ import { normalizePath } from "../utils/paths.ts";
 import { resolveConfigValue } from "./resolve-config-value.ts";
 
 type AuthStorageData = Record<string, Credential>;
-
-/**
- * User-managed channel connection credential in auth.json, e.g.
- * `{ "_type": "newapi_channel_conn", "key": "sk-...", "url": "https://relay.example.org" }`.
- * `key` is the API key and `url` the channel base URL; both are authoritative
- * once set. Normalized to a canonical api_key credential on read.
- */
-export interface ChannelConnCredential {
-	_type: "newapi_channel_conn";
-	key?: string;
-	url?: string;
-	env?: ProviderEnv;
-}
-
-function isChannelConnCredential(credential: unknown): credential is ChannelConnCredential {
-	return (
-		typeof credential === "object" &&
-		credential !== null &&
-		(credential as Partial<ChannelConnCredential>)._type === "newapi_channel_conn"
-	);
-}
-
-/**
- * Host-only channel urls (e.g. `https://relay.example.org`) serve the
- * OpenAI-compatible API under `/v1`, matching the OpenAI SDK convention.
- * Urls with an explicit path are used as-is.
- */
-function normalizeChannelUrl(url: string): string {
-	try {
-		const parsed = new URL(url);
-		if (parsed.pathname.replace(/\/+$/u, "") === "") {
-			parsed.pathname = "/v1";
-		}
-		return parsed.toString();
-	} catch {
-		return url;
-	}
-}
-
-function channelConnToApiKey(credential: ChannelConnCredential): ApiKeyCredential {
-	const env = credential.url
-		? { ...credential.env, [CHANNEL_CONN_BASE_URL_ENV]: normalizeChannelUrl(credential.url) }
-		: { ...credential.env };
-	return {
-		type: "api_key",
-		...(credential.key !== undefined ? { key: resolveConfigValue(credential.key, env) } : {}),
-		...(Object.keys(env).length > 0 ? { env } : {}),
-	};
-}
-
-function normalizeCredential(credential: Credential | undefined): Credential | undefined {
-	return isChannelConnCredential(credential) ? channelConnToApiKey(credential) : credential;
-}
 
 type LockResult<T> = {
 	result: T;
@@ -270,7 +216,6 @@ export class AuthStorage implements CredentialStore {
 
 	async read(provider: string): Promise<Credential | undefined> {
 		const credential = this.data[provider];
-		if (isChannelConnCredential(credential)) return channelConnToApiKey(credential);
 		if (credential?.type !== "api_key") return credential;
 		if (credential.key === undefined) return credential;
 		return { ...credential, key: resolveConfigValue(credential.key, credential.env) };
@@ -305,10 +250,7 @@ export class AuthStorage implements CredentialStore {
 
 	/** List credential metadata without resolving configured key values. */
 	async list(): Promise<readonly CredentialInfo[]> {
-		return Object.entries(this.data).map(([providerId, credential]) => ({
-			providerId,
-			type: isChannelConnCredential(credential) ? ("api_key" as const) : credential.type,
-		}));
+		return Object.entries(this.data).map(([providerId, credential]) => ({ providerId, type: credential.type }));
 	}
 }
 
@@ -322,7 +264,7 @@ export function readStoredCredential(
 ): Credential | undefined {
 	try {
 		const data = JSON.parse(readFileSync(normalizePath(authPath), "utf-8")) as AuthStorageData;
-		return normalizeCredential(data[providerId]);
+		return data[providerId];
 	} catch {
 		return undefined;
 	}

@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- `auth.json` now accepts `newapi_channel_conn` channel-connection entries (`_type`, `key`, `url`): the key authenticates the provider and the url becomes the request-time base URL override; host-only urls automatically gain a `/v1` suffix. `settings.json` and `auth.json` are now the highest-priority model configuration: when both `settings.json` and `models.json` define a provider, `settings.json` wins.
+- `settings.json` and `auth.json` are the highest-priority model configuration: when both `settings.json` and `models.json` define a provider, `settings.json` wins. Third-party relays use the same plain `api_key` auth.json entry plus a `baseUrl` in `settings.json`.
 
 ## [1.0.3] - 2026-08-04
 
