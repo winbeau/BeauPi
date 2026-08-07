@@ -32,7 +32,7 @@ export interface AgentPoolConfig {
 	defaultProfile?: string;
 }
 
-export const MAX_AGENT_TIMEOUT_MS = 8 * 60_000;
+export const MAX_AGENT_TIMEOUT_MS = 10 * 60_000;
 
 export function calculateAgentConcurrencyLimit(cpuCount: number = availableParallelism()): number {
 	const normalizedCpuCount = Number.isFinite(cpuCount) ? Math.max(1, Math.floor(cpuCount)) : 1;

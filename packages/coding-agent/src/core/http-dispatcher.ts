@@ -1,13 +1,14 @@
 import { EventEmitter } from "node:events";
 import * as undici from "undici";
 
-export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
+export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 10 * 60_000;
 
 export const HTTP_IDLE_TIMEOUT_CHOICES = [
 	{ label: "30 sec", timeoutMs: 30_000 },
 	{ label: "1 min", timeoutMs: 60_000 },
 	{ label: "2 min", timeoutMs: 120_000 },
 	{ label: "5 min", timeoutMs: 300_000 },
+	{ label: "10 min", timeoutMs: 10 * 60_000 },
 	{ label: "disabled", timeoutMs: 0 },
 ] as const;
 

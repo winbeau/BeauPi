@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Parallel, inspectable sub-agents** — Sibling `delegate_task` calls can run concurrently up to the Agent Pool limit, and Ctrl+O expands structured Agent results. See [Agent Pool](../../docs/beaupi/architecture.md#agent-pool).
+
+### Added
+
+- Added parallel execution for sibling `delegate_task` calls up to the Agent Pool concurrency limit.
+- Added Ctrl+O expansion for Agent summaries, budgets, errors, activity, references, modified files, checks, and diagnostics.
+
+### Fixed
+
+- Fixed sub-agent requests stopping at the five-minute HTTP idle timeout by raising the default HTTP idle timeout and Agent wall-clock budget to ten minutes and aligning child provider request timeouts with their effective Agent budget.
+
 ## [1.0.4] - 2026-08-05
 
 ### Changed

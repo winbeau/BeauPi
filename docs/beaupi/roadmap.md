@@ -127,7 +127,7 @@ M3 已完成：Document Runtime、Markdown citation、内容 hash/stale、Execut
 
 验收：Reviewer 子 Agent 无需启动额外 Pi 进程即可独立检查修改；Tool、Skill 和预算边界有效；主会话只接收结构化结果。
 
-M5 实现了 `AgentProfile`、受控 ResourceLoader、共享 Runtime 的 Agent Pool、`delegate_task`、结构化结果和可去重的生命周期事件。当前每个子 Agent 的 wall-clock 硬上限为 8 分钟，全局并发上限为 `max(1, floor(availableParallelism() / 3))`；超时结果保留流式 assistant 文本或最后活动摘要。测试使用 faux provider 覆盖成功、失败、取消、超时、预算、并发和上下文隔离。
+M5 实现了 `AgentProfile`、受控 ResourceLoader、共享 Runtime 的 Agent Pool、`delegate_task`、结构化结果和可去重的生命周期事件。当前每个子 Agent 的 wall-clock 硬上限为 10 分钟，全局并发上限为 `max(1, floor(availableParallelism() / 3))`；独立 `delegate_task` 调用可并行执行，超时结果保留流式 assistant 文本或最后活动摘要，Ctrl+O 可展开结构化结果详情。测试使用 faux provider 覆盖成功、失败、取消、超时、预算、并发和上下文隔离。
 
 ## 阶段 7：Monitor 监控闭环
 

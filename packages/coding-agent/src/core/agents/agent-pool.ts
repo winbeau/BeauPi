@@ -3,6 +3,7 @@ import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "@ea
 import { type Api, contentText, type Model } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { AgentSession, AgentSessionEvent } from "../agent-session.ts";
 import type { DocumentCitation } from "../documents/types.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
@@ -243,6 +244,52 @@ function agentResultText(result: AgentTaskResult | AgentProgressEvent): string {
 	return `${code} · ${turns}${last}`;
 }
 
+function agentStatusColor(result: AgentTaskResult): "success" | "muted" | "error" {
+	if (result.status === "completed") return "success";
+	if (result.status === "cancelled") return "muted";
+	return "error";
+}
+
+function agentBudgetSummary(result: AgentTaskResult): string {
+	const turns =
+		result.budget.maxTurns === undefined
+			? `${result.budget.turnsUsed} turns`
+			: `${result.budget.turnsUsed}/${result.budget.maxTurns} turns`;
+	const timeout =
+		result.budget.timeoutMs === undefined ? "no timeout" : `${Math.round(result.budget.timeoutMs / 60_000)}m timeout`;
+	const elapsedSeconds = Math.max(0, result.budget.elapsedMs) / 1000;
+	const elapsed = elapsedSeconds < 10 ? `${elapsedSeconds.toFixed(1)}s` : `${Math.round(elapsedSeconds)}s`;
+	return `${result.status} · ${turns} · ${result.budget.tokensUsed} output tokens · ${elapsed} · ${timeout}`;
+}
+
+function agentDetailBody(result: AgentTaskResult): string {
+	const lines: string[] = [];
+	const summary = result.summary.trim();
+	if (summary) lines.push(summary);
+	if (result.error) lines.push(`Error: ${result.error.message}`);
+	if (result.lastActivity) {
+		const target = result.lastActivity.targetPath ? ` · ${result.lastActivity.targetPath}` : "";
+		lines.push(`Last activity: ${result.lastActivity.message}${target}`);
+	}
+	if (result.references.length > 0) {
+		lines.push(`References:\n${result.references.map((reference) => `- ${reference}`).join("\n")}`);
+	}
+	if (result.filesModified.length > 0) {
+		lines.push(`Files modified:\n${result.filesModified.map((file) => `- ${file}`).join("\n")}`);
+	}
+	if (result.checks.length > 0) {
+		lines.push(
+			`Checks:\n${result.checks
+				.map((check) => `- ${check.name}: ${check.status}${check.details ? ` · ${check.details}` : ""}`)
+				.join("\n")}`,
+		);
+	}
+	if (result.diagnostics.length > 0) {
+		lines.push(`Diagnostics:\n${result.diagnostics.map((diagnostic) => `- ${diagnostic}`).join("\n")}`);
+	}
+	return lines.join("\n");
+}
+
 function parseClarificationRequest(text: string | undefined): AgentClarificationRequest | undefined {
 	if (!text) return undefined;
 	const match = text.match(/<clarification_request>\s*([\s\S]*?)\s*<\/clarification_request>/);
@@ -444,7 +491,7 @@ export class AgentPool {
 				"When delegate_task times out, use its partial summary and lastActivity instead of treating the result as empty.",
 			],
 			parameters: DELEGATE_TASK_PARAMETERS,
-			executionMode: "sequential",
+			executionMode: "parallel",
 			execute: async (
 				_toolCallId,
 				params,
@@ -459,17 +506,22 @@ export class AgentPool {
 					0,
 					0,
 				),
-			renderResult: (result, _options, currentTheme) => {
+			renderResult: (result, options, currentTheme) => {
 				const details = result.details;
+				if (options.expanded && isAgentTaskResult(details)) {
+					const body = agentDetailBody(details);
+					const statusLine = currentTheme.fg(agentStatusColor(details), agentBudgetSummary(details));
+					return new Text(body ? `${statusLine}\n${currentTheme.fg("toolOutput", body)}` : statusLine, 0, 0);
+				}
 				const text = agentResultText(details);
-				const color = isAgentTaskResult(details)
-					? details.status === "completed"
-						? "success"
-						: details.status === "cancelled"
-							? "muted"
-							: "error"
-					: "muted";
-				return new Text(currentTheme.fg(color, text), 0, 0);
+				const rendered = isAgentTaskResult(details)
+					? currentTheme.fg(agentStatusColor(details), text)
+					: currentTheme.fg("muted", text);
+				return new Text(
+					`${rendered}${options.expanded ? "" : ` ${keyHint("app.tools.expand", "to expand")}`}`,
+					0,
+					0,
+				);
 			},
 		};
 	}
@@ -742,6 +794,8 @@ export class AgentPool {
 				settingsManager: SettingsManager.inMemory({
 					compaction: { enabled: false },
 					retry: { enabled: false },
+					// In-memory child settings do not inherit the Coordinator timeout.
+					httpIdleTimeoutMs: effectiveProfile.timeoutMs,
 					policy: this.dependencies.policySettings ? structuredClone(this.dependencies.policySettings) : undefined,
 				}),
 				tools: toolAllowlist,

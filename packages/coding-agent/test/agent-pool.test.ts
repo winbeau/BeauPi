@@ -19,6 +19,8 @@ import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 import { createHarness, type HarnessOptions } from "./suite/harness.ts";
 
 const cleanups: Array<() => void> = [];
@@ -81,7 +83,7 @@ function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
 }
 
 describe("in-process Agent Pool and delegate_task", () => {
-	it("limits built-in profiles only by an eight-minute wall clock", () => {
+	it("limits built-in profiles only by a ten-minute wall clock", () => {
 		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
 			id: "reviewer",
 			timeoutMs: MAX_AGENT_TIMEOUT_MS,
@@ -105,7 +107,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(pool.concurrencyLimit).toBe(calculateAgentConcurrencyLimit());
 	});
 
-	it("enforces the eight-minute cap for custom profiles and direct requests", async () => {
+	it("enforces the ten-minute cap for custom profiles and direct requests", async () => {
 		expect(() =>
 			validateAgentProfile({
 				id: "too-long",
@@ -122,6 +124,22 @@ describe("in-process Agent Pool and delegate_task", () => {
 		});
 		expect(result.status).toBe("completed");
 		expect(result.budget.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
+	});
+
+	it("passes the effective Agent timeout through to child provider requests", async () => {
+		let requestTimeoutMs: number | undefined;
+		const { harness, pool } = await createCoordinator();
+		harness.setResponses([
+			(_context, options) => {
+				requestTimeoutMs = options?.timeoutMs;
+				return fauxAssistantMessage("child summary");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Inspect timeout propagation" });
+
+		expect(result.status).toBe("completed");
+		expect(requestTimeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
 	});
 
 	it("runs a selected profile and returns only structured data", async () => {
@@ -467,6 +485,72 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(results.every((result) => result.status === "completed")).toBe(true);
 		expect(pool.maxObservedConcurrency).toBe(1);
 		expect(session.messages).toEqual([]);
+	});
+
+	it("runs sibling delegate_task calls in parallel up to the pool limit", async () => {
+		const { harness, session, pool } = await createCoordinator({ pool: { maxConcurrency: 3 } });
+		expect(pool.delegateTaskTool.executionMode).toBe("parallel");
+
+		let active = 0;
+		let maxObserved = 0;
+		const childResponse = (summary: string) => async () => {
+			active++;
+			maxObserved = Math.max(maxObserved, active);
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			active--;
+			return fauxAssistantMessage(summary);
+		};
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("delegate_task", { task: "first review" }),
+					fauxToolCall("delegate_task", { task: "second review" }),
+					fauxToolCall("delegate_task", { task: "third review" }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			childResponse("first result"),
+			childResponse("second result"),
+			childResponse("third result"),
+			fauxAssistantMessage("coordinator completed"),
+		]);
+
+		await session.prompt("run three independent reviews");
+
+		expect(maxObserved).toBe(Math.min(3, calculateAgentConcurrencyLimit()));
+		expect(pool.maxObservedConcurrency).toBe(Math.min(3, calculateAgentConcurrencyLimit()));
+		expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
+	});
+
+	it("expands Agent result details with the configured tool key", async () => {
+		initTheme("dark");
+		const { harness, pool } = await createCoordinator();
+		harness.setResponses([fauxAssistantMessage("first line\nsecond line")]);
+		const result = await pool.delegateTask({ task: "Render details" });
+		const renderResult = pool.delegateTaskTool.renderResult;
+		expect(renderResult).toBeDefined();
+		if (!renderResult) return;
+
+		const toolResult = {
+			content: [{ type: "text" as const, text: JSON.stringify(result) }],
+			details: result,
+		};
+		const collapsed = stripAnsi(
+			renderResult(toolResult, { expanded: false, isPartial: false }, theme, {} as never)
+				.render(120)
+				.join("\n"),
+		);
+		const expanded = stripAnsi(
+			renderResult(toolResult, { expanded: true, isPartial: false }, theme, {} as never)
+				.render(120)
+				.join("\n"),
+		);
+
+		expect(collapsed).toContain("first line");
+		expect(collapsed).not.toContain("second line");
+		expect(collapsed).toContain("to expand");
+		expect(expanded).toContain("second line");
+		expect(expanded).toContain("10m timeout");
 	});
 
 	it("executes delegate_task through the Coordinator AgentSession without importing child history", async () => {
