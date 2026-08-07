@@ -121,41 +121,34 @@ Attribution:
 
 **Lockstep versioning**: all packages share one version; every release updates all together. `patch` = fixes + additions, `minor` = breaking changes. No major releases.
 
-1. **Update CHANGELOGs**: ask the user whether they ran the `/cl` prompt on the latest commit on `main`. If not, they must run `/cl` first to audit and update each package's `[Unreleased]` section before releasing.
+1. **CHANGELOG**: make sure each affected package's `[Unreleased]` section lists this release's changes. The release script rewrites `[Unreleased]` into the versioned section automatically; no separate `/cl` audit is required. (`/cl` still exists as an optional manual audit prompt.)
 
-2. **Local smoke test**: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
+2. **Local smoke test (fast)**: build an unpublished release and run the packaged CLI from outside the repo (so it can't resolve workspace files):
    ```bash
-   npm run release:local -- --out /tmp/pi-local-release --force
-   cd /tmp
-
-   # Node package install smoke tests
-   /tmp/pi-local-release/node/pi --help
-   /tmp/pi-local-release/node/pi --version
-   /tmp/pi-local-release/node/pi --list-models
-   /tmp/pi-local-release/node/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/node/pi
-
-   # Bun binary smoke tests
-   /tmp/pi-local-release/bun/pi --help
-   /tmp/pi-local-release/bun/pi --version
-   /tmp/pi-local-release/bun/pi --list-models
-   /tmp/pi-local-release/bun/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/bun/pi
+   npm run release:local -- --out /tmp/pi-local-release --force --offline-model-data --skip-test --skip-bun-install
+   /tmp/pi-local-release/node/beaupi --help
+   /tmp/pi-local-release/node/beaupi --version
+   /tmp/pi-local-release/node/beaupi --list-models
+   /tmp/pi-local-release/node/beaupi -p "Say exactly: ok"
    ```
-   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/pi` and `/tmp/pi-local-release/bun/pi` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
+   `--skip-test` skips `./test.sh` because CI runs the full suite and the local environment can trip unrelated tests (for example fd-version-dependent autocomplete tests); `--offline-model-data` uses checked-in model catalogs when models.dev is unreachable. Full Node+Bun binary installs and interactive prompt testing are optional — run them only when the change touches packaging, the TUI, or provider startup. Failures in the fast smoke test are release blockers unless the user accepts the risk.
 
 3. **Run the release script**:
    ```bash
-   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:patch    # fixes + additions
-   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:minor    # breaking changes
+   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 PI_RELEASE_OFFLINE_MODEL_DATA=1 PI_RELEASE_SKIP_TESTS=1 npm run release:patch    # fixes + additions
+   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 PI_RELEASE_OFFLINE_MODEL_DATA=1 PI_RELEASE_SKIP_TESTS=1 npm run release:minor    # breaking changes
    ```
-   Use `npm_config_min_release_age=0` only for the release command. The repo's normal npm age gate can otherwise block the release lockfile refresh when the current workspace package version was published recently. Review any lockfile or shrinkwrap diffs the release creates before push.
+   The `PI_RELEASE_OFFLINE_MODEL_DATA=1` and `PI_RELEASE_SKIP_TESTS=1` switches are the validated default; drop them when models.dev is reachable and the full test suite passes locally. Use `npm_config_min_release_age=0` only for the release command. The repo's normal npm age gate can otherwise block the release lockfile refresh when the current workspace package version was published recently. Review any lockfile or shrinkwrap diffs the release creates before push.
 
    The release script bumps all package versions, updates changelogs, regenerates release artifacts, runs `npm run check`, commits `Release vX.Y.Z`, tags `vX.Y.Z`, adds fresh `## [Unreleased]` changelog sections, commits `Add [Unreleased] section for next cycle`, then pushes `main` and the tag. Do not rerun the release script after a tag was pushed.
 
 4. **CI publishes npm packages**: pushing the `vX.Y.Z` tag triggers `.github/workflows/build-binaries.yml`. The `publish-npm` job uses npm trusted publishing through GitHub Actions OIDC with environment `npm-publish`; no local `npm publish`, `npm whoami`, OTP, or WebAuthn flow is required.
 
-5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm, so rerun the tag workflow after fixing CI or transient npm issues. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
+5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm. If the failure is validation-only (for example model-catalog drift in `Check`/`Test`), rerun via the workflow's recovery input:
+   ```bash
+   gh workflow run "Build BeauPi Release" -f tag=vX.Y.Z -f skip_validation=true
+   ```
+   Otherwise fix the CI issue and rerun the tag workflow. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
 
 ## User Override
 
