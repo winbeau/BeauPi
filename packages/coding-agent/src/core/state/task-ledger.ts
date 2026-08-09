@@ -246,6 +246,9 @@ const TOOL_LABELS = Object.freeze({
 	remote_bash: "Remote Bash",
 	terminal_create: "Terminal Create",
 	terminal_bash: "Terminal Bash",
+	terminal_read: "Terminal Read",
+	terminal_write: "Terminal Write",
+	terminal_edit: "Terminal Update",
 	privileged_exec: "Sudo Bash",
 	terminal_send: "Terminal Send",
 	terminal_capture: "Terminal Capture",
@@ -267,8 +270,8 @@ const TOOL_LABELS = Object.freeze({
 
 const SHELL_OPERATORS = new Set([";", "&&", "||", "|", "&", "\n"]);
 const VERIFICATION_TOOL_NAMES = new Set(["test", "tests", "check", "verify", "lint", "typecheck", "build"]);
-const READ_TOOL_NAMES = new Set(["read", "docs_read"]);
-const MODIFY_TOOL_NAMES = new Set(["edit", "write"]);
+const READ_TOOL_NAMES = new Set(["read", "docs_read", "terminal_read"]);
+const MODIFY_TOOL_NAMES = new Set(["edit", "write", "terminal_edit", "terminal_write"]);
 const POLICY_DOCUMENT_KINDS: ReadonlySet<ExecutionContract["documents"][number]["kind"]> = new Set([
 	"agents",
 	"claude",

@@ -1,15 +1,13 @@
 import { type Component, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
-import type { MonitorRecord, MonitorStatus } from "../../../core/monitor/index.ts";
 import {
 	type CommandRecord,
 	selectTaskTodos,
-	type TaskLedgerSnapshot,
 	type TaskTodo,
 	type TaskTodoStatus,
 } from "../../../core/state/task-ledger.ts";
 import { theme } from "../theme/theme.ts";
-import { activityStateSymbol, fitSingleLine } from "./beaupi-style.ts";
+import { fitSingleLine } from "./beaupi-style.ts";
 
 function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
@@ -128,83 +126,6 @@ export function selectTimelineCommands(commands: readonly CommandRecord[], maxVi
 		.map(({ command }) => command);
 }
 
-function verificationLabel(snapshot: TaskLedgerSnapshot): string {
-	return snapshot.verification.status === "none" ? "" : `verify ${snapshot.verification.status}`;
-}
-
-function monitorActivityState(
-	status: MonitorStatus,
-): "pending" | "active" | "completed" | "failed" | "blocked" | "cancelled" {
-	if (status === "starting") return "pending";
-	if (status === "running" || status === "healthy") return "active";
-	if (status === "completed") return "completed";
-	if (status === "failed") return "failed";
-	if (status === "cancelled") return "cancelled";
-	return "blocked";
-}
-
-function monitorRank(record: MonitorRecord): number {
-	if (record.status === "failed" || record.status === "stalled" || record.status === "lost") return 0;
-	if (record.status === "starting" || record.status === "running" || record.status === "healthy") return 1;
-	return 2;
-}
-
-function selectMonitorRows(records: readonly MonitorRecord[], maxVisible: number): MonitorRecord[] {
-	return records
-		.map((record, index) => ({ record, index }))
-		.sort(
-			(left, right) =>
-				monitorRank(left.record) - monitorRank(right.record) ||
-				right.record.lastActivityAt - left.record.lastActivityAt ||
-				right.index - left.index,
-		)
-		.slice(0, Math.max(0, Math.floor(maxVisible)))
-		.map(({ record }) => record);
-}
-
-function formatMonitorDuration(milliseconds: number): string {
-	const seconds = Math.max(0, milliseconds) / 1000;
-	if (seconds < 60) return `${seconds.toFixed(1)}s`;
-	return `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)
-		.toString()
-		.padStart(2, "0")}s`;
-}
-
-function renderMonitor(record: MonitorRecord, width: number): string {
-	const prefix = `  ${activityStateSymbol(monitorActivityState(record.status))} `;
-	if (record.status === "failed" && record.agentTask?.errorCode) {
-		const turns =
-			record.agentTask.maxTurns === undefined
-				? `${record.agentTask.turnsUsed} turns`
-				: `${record.agentTask.turnsUsed}/${record.agentTask.maxTurns} turns`;
-		return fitSingleLine(
-			[
-				{ text: prefix, required: true },
-				{ text: theme.fg("dim", "Monitor"), required: true },
-				{ text: record.name, separator: " ", required: true, truncate: true },
-				{ text: theme.fg("error", record.agentTask.errorCode), separator: " · ", required: true },
-				{ text: theme.fg("dim", turns), separator: " · ", priority: 2 },
-				{
-					text: record.agentTask.lastToolName ? theme.fg("dim", `last: ${record.agentTask.lastToolName}`) : "",
-					separator: " · ",
-					priority: 1,
-				},
-			],
-			width,
-		);
-	}
-	return fitSingleLine(
-		[
-			{ text: prefix, required: true },
-			{ text: theme.fg("dim", "Monitor"), required: true },
-			{ text: record.name, separator: " ", required: true, truncate: true },
-			{ text: theme.fg("dim", record.status), separator: " · ", priority: 1 },
-			{ text: theme.fg("dim", formatMonitorDuration(record.durationMs)), separator: " · ", priority: 2 },
-		],
-		width,
-	);
-}
-
 export class TaskLedgerWidget implements Component {
 	private session: AgentSession;
 	private readonly tui: TUI;
@@ -224,116 +145,31 @@ export class TaskLedgerWidget implements Component {
 		const availableWidth = safeWidth(width);
 		if (availableWidth === 0) return [];
 		const snapshot = this.session.taskLedger.getSnapshot();
-		const monitorRuntime = this.session.monitorRuntime;
-		const backgroundMonitorIds = new Set(snapshot.background?.tasks.map((task) => task.monitorId) ?? []);
-		const monitorRecords = (monitorRuntime?.list({ includeTerminal: true }) ?? []).filter(
-			(record) => !backgroundMonitorIds.has(record.id),
-		);
-		if (snapshot.todos.length === 0 && monitorRecords.length === 0) return [];
-		const rows = terminalRows(this.tui);
-		const todoLimit = taskTodoLimit(rows);
-		const selection = selectTaskTodos(snapshot.todos, todoLimit);
-		const monitorSummary = monitorRuntime?.getSummary();
-		const runningWorkflows = snapshot.workflows.filter((workflow) => workflow.status === "running").length;
-		const attentionWorkflows = snapshot.workflows.filter(
-			(workflow) => workflow.status === "failed" || workflow.status === "lost",
-		).length;
-		const backgroundSummary = snapshot.background?.summary;
 		const dynamicTasks = snapshot.dynamicTasks;
-		const dynamicCompleted = dynamicTasks?.tasks.filter((task) => task.status === "completed").length ?? 0;
-		const dynamicAttention =
-			dynamicTasks?.tasks.filter((task) => task.status === "blocked" || task.status === "failed").length ?? 0;
+		if (!dynamicTasks) return [];
+
+		const dynamicTodos = snapshot.todos.filter((todo) => todo.source === "dynamic-task");
+		const selection = selectTaskTodos(dynamicTodos, taskTodoLimit(terminalRows(this.tui)));
+		const dynamicCompleted = dynamicTasks.tasks.filter((task) => task.status === "completed").length;
+		const dynamicAttention = dynamicTasks.tasks.filter(
+			(task) => task.status === "blocked" || task.status === "failed",
+		).length;
 		const header = fitSingleLine(
 			[
 				{ text: theme.bold("Tasks"), required: true },
+				{ text: theme.fg("accent", `plan r${dynamicTasks.revision}`), separator: " · ", required: true },
 				{
-					text: dynamicTasks ? theme.fg("accent", `plan r${dynamicTasks.revision}`) : "",
+					text: theme.fg(
+						dynamicAttention > 0 ? "warning" : "dim",
+						`${dynamicCompleted}/${dynamicTasks.tasks.length} completed`,
+					),
 					separator: " · ",
-					required: dynamicTasks !== undefined,
-				},
-				{
-					text: dynamicTasks
-						? theme.fg(
-								dynamicAttention > 0 ? "warning" : "dim",
-								`${dynamicCompleted}/${dynamicTasks.tasks.length} completed`,
-							)
-						: "",
-					separator: " · ",
-					priority: 4,
+					priority: 1,
 				},
 				{
 					text: dynamicAttention > 0 ? theme.fg("warning", `${dynamicAttention} attention`) : "",
 					separator: " · ",
-					priority: 4,
-				},
-				{
-					text: theme.fg("accent", snapshot.phase),
-					separator: " · ",
-					required: dynamicTasks === undefined,
-					priority: 3,
-				},
-				{
-					text:
-						snapshot.filesModified.length > 0
-							? theme.fg(
-									"dim",
-									`${snapshot.filesModified.length} file${snapshot.filesModified.length === 1 ? "" : "s"}`,
-								)
-							: "",
-					separator: " · ",
-					priority: 1,
-				},
-				{ text: theme.fg("dim", verificationLabel(snapshot)), separator: " · ", priority: 0 },
-				{
-					text:
-						runningWorkflows > 0 || attentionWorkflows > 0
-							? theme.fg(
-									attentionWorkflows > 0 ? "warning" : "accent",
-									`workflows ${runningWorkflows} running${attentionWorkflows > 0 ? ` · ${attentionWorkflows} attention` : ""}`,
-								)
-							: "",
-					separator: " · ",
-					priority: 2,
-				},
-				{
-					text:
-						backgroundSummary && backgroundSummary.total > 0
-							? theme.fg(
-									backgroundSummary.failed + backgroundSummary.stalled + backgroundSummary.lost > 0
-										? "warning"
-										: "accent",
-									`background ${backgroundSummary.running} running${backgroundSummary.wakeQueued > 0 ? ` · wake ${backgroundSummary.wakeQueued}` : ""}`,
-								)
-							: "",
-					separator: " · ",
-					priority: 2,
-				},
-				{
-					text:
-						monitorSummary && monitorSummary.total > 0
-							? theme.fg(
-									monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
-										? "warning"
-										: "accent",
-									`monitors ${monitorSummary.running + monitorSummary.healthy} running${
-										monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
-											? ` · ${monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost} attention`
-											: ""
-									}`,
-								)
-							: "",
-					separator: " · ",
-					priority: 1,
-				},
-				{
-					text: snapshot.documentContract
-						? theme.fg(
-								snapshot.documentContract.stale ? "warning" : "dim",
-								snapshot.documentContract.stale ? "docs stale" : "contract active",
-							)
-						: "",
-					separator: " · ",
-					priority: -1,
+					priority: 0,
 				},
 			],
 			availableWidth,
@@ -345,10 +181,6 @@ export class TaskLedgerWidget implements Component {
 		const lines = [header, ...todoLines];
 		const hiddenSummary = hiddenTodoSummary(selection.hidden, availableWidth);
 		if (hiddenSummary) lines.push(hiddenSummary);
-		for (const record of selectMonitorRows(monitorRecords, Math.max(2, Math.min(4, todoLimit)))) {
-			lines.push(renderMonitor(record, availableWidth));
-		}
-
 		return lines;
 	}
 }

@@ -17,7 +17,7 @@ import { getTextOutput, renderToolPath, replaceTabs, str } from "./render-utils.
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
-const readSchema = Type.Object({
+export const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
 	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
@@ -62,6 +62,10 @@ export interface ReadToolOptions {
 	autoResizeImages?: boolean;
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
+	/** Renderer title. Default: Read */
+	displayName?: string;
+	/** Optional renderer context shown in brackets before the path. */
+	displayContext?: string;
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -73,9 +77,16 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
-function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme, cwd: string): string {
+function formatReadCall(
+	args: ReadRenderArgs | undefined,
+	theme: Theme,
+	cwd: string,
+	displayName: string,
+	displayContext: string | undefined,
+): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("Read"))}(${pathDisplay}${formatReadLineRange(args, theme)})`;
+	const context = displayContext ? ` ${theme.fg("toolOutput", `[${displayContext}]`)}` : "";
+	return `${theme.fg("toolTitle", theme.bold(displayName))}${context}(${pathDisplay}${formatReadLineRange(args, theme)})`;
 }
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
@@ -143,11 +154,15 @@ function formatCompactReadCall(
 	classification: CompactReadClassification,
 	args: ReadRenderArgs | undefined,
 	theme: Theme,
+	displayName: string,
+	displayContext: string | undefined,
 ): string {
 	const kind = classification.kind === "skill" ? "Skill" : classification.kind === "docs" ? "Docs" : "Resource";
 	const labelColor = classification.kind === "skill" ? "customMessageText" : "accent";
+	const context = displayContext ? ` ${theme.fg("toolOutput", `[${displayContext}]`)}` : "";
 	return (
-		theme.fg("toolTitle", theme.bold(`Read ${kind}`)) +
+		theme.fg("toolTitle", theme.bold(`${displayName} ${kind}`)) +
+		context +
 		`(${theme.fg(labelColor, classification.label)}${formatReadLineRange(args, theme)})` +
 		theme.fg("dim", ` · ${keyText("app.tools.expand")} to expand`)
 	);
@@ -159,7 +174,7 @@ function formatReadResult(
 	options: ToolRenderResultOptions,
 	theme: Theme,
 	showImages: boolean,
-	_cwd: string,
+	cwd: string,
 	isError: boolean,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
@@ -168,9 +183,10 @@ function formatReadResult(
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
 	const hasImage = result.content.some((item) => item.type === "image");
+	const isCompactRead = !options.expanded && getCompactReadClassification(args, cwd) !== undefined;
 	let text = "";
 
-	if (!options.expanded && !isError) {
+	if (!options.expanded && !isError && (hasImage || isCompactRead)) {
 		text = theme.fg("muted", hasImage ? "Image loaded" : `${lines.length} line${lines.length === 1 ? "" : "s"}`);
 	} else {
 		const maxLines = options.expanded ? lines.length : 10;
@@ -203,6 +219,8 @@ export function createReadToolDefinition(
 ): ToolDefinition<typeof readSchema, ReadToolDetails | undefined> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const ops = options?.operations ?? defaultReadOperations;
+	const displayName = options?.displayName ?? "Read";
+	const displayContext = options?.displayContext;
 	return {
 		name: "read",
 		label: "read",
@@ -328,8 +346,8 @@ export function createReadToolDefinition(
 			const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
 			text.setText(
 				classification
-					? formatCompactReadCall(classification, args, theme)
-					: formatReadCall(args, theme, context.cwd),
+					? formatCompactReadCall(classification, args, theme, displayName, displayContext)
+					: formatReadCall(args, theme, context.cwd, displayName, displayContext),
 			);
 			return text;
 		},

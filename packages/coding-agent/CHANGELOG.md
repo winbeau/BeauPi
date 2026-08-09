@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `terminal_read`, `terminal_write`, and `terminal_edit` for file operations in an existing tmux SSH terminal while preserving its current directory and the local file tools' execution and rendering behavior.
+
+### Changed
+
+- Ordinary text results from Read now show the first 10 lines by default and retain full Ctrl+O expansion; image, Skill, Docs, and Resource reads remain compact.
+- Bash timeout and error results now collapse to the last 10 lines by default; Tasks shows only Dynamic Task Todos, while Monitor status rows move to a four-line bounded Footer section.
+
 ## [1.0.5] - 2026-08-07
 
 ### New Features

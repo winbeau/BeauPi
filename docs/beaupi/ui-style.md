@@ -101,7 +101,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 - queued 状态显示灰色空心圆点；运行、成功和失败使用 accent、绿色和红色实心小圆点
 - 普通 Tool 不显示 Policy classifier 或权限等待状态；Policy 只在 Footer 给出 advisory。M13 `privileged_exec` 和自动路由的 sudo 使用独立逐请求权限交互，不属于 Policy confirmation
 - 单行成功结果直接显示
-- 多行输出默认显示最后 3–10 行
+- 多行输出默认显示最后 3–10 行；Bash 超时、非零退出和其他异常结果固定预览最后 10 行，Ctrl+O 展开完整错误输出
 - 连续 Read/Search/List/Bash 默认聚合为一条摘要，Ctrl+O 后逐项展开
 - 聚合执行中显示当前文件、搜索词或命令提示，并至少保持 700ms，避免闪烁
 - 长 Bash 超过 2 秒后显示 elapsed 和累计输出行数
@@ -130,6 +130,9 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 | `workflow_run` | `Workflow` |
 | `background_start` | `Background` |
 | `terminal_bash` | `Terminal Bash` |
+| `terminal_read` | `Terminal Read` |
+| `terminal_write` | `Terminal Write` |
+| `terminal_edit` | `Terminal Update` |
 | `privileged_exec` | `Sudo Bash` / `Sudo Terminal Bash` |
 
 底层 Tool 名称保持不变，只修改 renderer。
@@ -269,7 +272,7 @@ Tasks
 - Dynamic Task header显示 `plan r<revision>`、完成数和 blocked/failed attention；Footer使用 `tasks <completed>/<total>` 紧凑摘要
 - Dynamic Task标题保持简短但可辨识，通常保留 1–2 个组件、协议或子系统关键名词；约 15 个汉字是软目标，不做硬性截断
 - active Dynamic Task可在下一行显示有界 activity；保留内部 `dynamic-task` provenance，但 Tasks UI不显示 `· dynamic-task` 来源标签
-- 存在 Dynamic Task计划时只隐藏重复的通用 discover/execute/verify，Document、Workflow、Background、Monitor、interaction、privilege 和 failure行继续共存
+- Tasks Widget 只展示 `source: "dynamic-task"` 的动态 Todo；Document、Workflow、Background、Monitor、interaction、privilege、failure 和通用 Task Ledger Todo 不进入该栏
 
 ## 子 Agent
 
@@ -332,9 +335,9 @@ M11 已接入真实 `WorkflowSnapshotComponent`：组件只消费版本化 DAG �
 
 ## Footer
 
-## 三行布局
+## 基础三行布局
 
-完整宽度时：
+没有 Monitor 状态行时，完整宽度为三行：
 
 ```text
 38.8 tok/s · out 4,272 · in 8,976 · cache 537,088/0 · total 550,336 · 110.1s
@@ -383,6 +386,8 @@ M11 已接入真实 `WorkflowSnapshotComponent`：组件只消费版本化 DAG �
 - 当前执行或最近 Policy fact 的 advisory（仅在存在时显示，也是 Policy 唯一的 UI 展示位置）
 
 重复执行 advisory 使用 warning 色且不表示阻断；同时存在多个 advisory 时显示最后一条和附加计数。待确认 sudo request、远程目标仅在非默认状态时显示。
+
+Monitor 状态作为独立行插入工作区行与 Session 累计状态之间，不再进入 Tasks Widget。最多占 4 行：Monitor 数量不超过 4 时全部显示；超过 4 时显示优先级最高的 3 条，再用一行 `… N more monitors` 汇总。failed/stalled/lost 优先于 running/healthy，后台任务已经投影到 Background 状态时不重复显示其 Monitor。
 
 ### 第三行：Session 累计状态
 
@@ -573,7 +578,7 @@ Background Tasks · 2 running · wake 1
 6. TPS 不再弹通知，整合到 Footer。
 7. Footer 显示当前上下文 token、窗口上限和占用百分比。
 8. Compact 使用实际流式输出驱动渐近进度条。
-9. Footer 完整模式最多三行，并支持窄终端降级。
+9. Footer 基础状态区最多三行；Monitor 状态区最多四行，超过四条时显示三条加隐藏数量汇总，并支持窄终端降级。
 10. 所有组件在暗色、亮色和 80/120/160 列终端下可读。
 11. Write Tool 折叠提示中的新增行数和总行数在写入过程中动态更新，样式调整不得移除该行为。
 12. 使用 tmux 截图进行视觉回归测试。

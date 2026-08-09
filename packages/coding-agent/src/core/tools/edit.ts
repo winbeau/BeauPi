@@ -42,7 +42,7 @@ const replaceEditSchema = Type.Object(
 	{},
 );
 
-const editSchema = Type.Object(
+export const editSchema = Type.Object(
 	{
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 		edits: Type.Array(replaceEditSchema, {
@@ -92,6 +92,12 @@ const defaultEditOperations: EditOperations = {
 export interface EditToolOptions {
 	/** Custom operations for file editing. Default: local filesystem */
 	operations?: EditOperations;
+	/** Whether to build the pre-execution diff preview. Default: true. */
+	previewDiff?: boolean;
+	/** Renderer title. Default: Update */
+	displayName?: string;
+	/** Optional renderer context shown in brackets before the path. */
+	displayContext?: string;
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -204,9 +210,12 @@ function formatEditCall(
 	theme: Theme,
 	cwd: string,
 	state: BeauPiToolState,
+	displayName: string,
+	displayContext: string | undefined,
 ): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return toolTitle("Update", pathDisplay, state, theme, Number.MAX_SAFE_INTEGER);
+	const title = displayContext ? `${displayName} [${displayContext}]` : displayName;
+	return toolTitle(title, pathDisplay, state, theme, Number.MAX_SAFE_INTEGER);
 }
 
 type EditRenderedResult = { type: "error"; text: string } | { type: "diff"; diff: string };
@@ -237,9 +246,11 @@ function buildEditCallComponent(
 	theme: Theme,
 	cwd: string,
 	state: BeauPiToolState,
+	displayName: string,
+	displayContext: string | undefined,
 ): EditCallRenderComponent {
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd, state), 0, 0));
+	component.addChild(new Text(formatEditCall(args, theme, cwd, state, displayName, displayContext), 0, 0));
 	if (!component.preview) return component;
 	component.addChild(
 		"error" in component.preview
@@ -285,6 +296,8 @@ export function createEditToolDefinition(
 	options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails | undefined, EditRenderState> {
 	const ops = options?.operations ?? defaultEditOperations;
+	const displayName = options?.displayName ?? "Update";
+	const displayContext = options?.displayContext;
 	return {
 		name: "edit",
 		label: "edit",
@@ -375,7 +388,13 @@ export function createEditToolDefinition(
 				component.settledError = false;
 			}
 
-			if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
+			if (
+				context.argsComplete &&
+				previewInput &&
+				!component.preview &&
+				!component.previewPending &&
+				options?.previewDiff !== false
+			) {
 				component.previewPending = true;
 				const requestKey = argsKey;
 				void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
@@ -386,7 +405,15 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd, getEditToolState(component, context));
+			return buildEditCallComponent(
+				component,
+				args,
+				theme,
+				context.cwd,
+				getEditToolState(component, context),
+				displayName,
+				displayContext,
+			);
 		},
 		renderResult(result, _options, theme, context) {
 			const callComponent = context.state.callComponent;
@@ -411,6 +438,8 @@ export function createEditToolDefinition(
 					theme,
 					context.cwd,
 					getEditToolState(callComponent, context),
+					displayName,
+					displayContext,
 				);
 			}
 

@@ -45,8 +45,11 @@ export {
 	terminalCaptureSchema,
 	terminalCloseSchema,
 	terminalCreateSchema,
+	terminalEditSchema,
+	terminalReadSchema,
 	terminalSendSchema,
 	terminalStatusSchema,
+	terminalWriteSchema,
 } from "./tools.ts";
 export {
 	EXECUTION_TARGET_VERSION,

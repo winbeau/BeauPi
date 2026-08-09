@@ -352,6 +352,38 @@ describe("ToolExecutionComponent parity", () => {
 		);
 	});
 
+	test("collapses Bash timeout and error output to the last ten lines until expanded", () => {
+		const tool = createBashToolDefinition(process.cwd(), { exposeSessionEnvironment: false });
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-error-collapse",
+			{ command: "long-running-command", timeout: 5 },
+			{},
+			tool,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const errorOutput = [
+			"first-hidden",
+			"second-hidden",
+			...Array.from({ length: 9 }, (_, index) => `visible-${index + 1}`),
+			"Command timed out after 5 seconds",
+		].join("\n");
+		component.updateResult({ content: [{ type: "text", text: errorOutput }], isError: true }, false);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("2 earlier lines hidden");
+		expect(collapsed).not.toContain("first-hidden");
+		expect(collapsed).not.toContain("second-hidden");
+		expect(collapsed).toContain("visible-1");
+		expect(collapsed).toContain("Command timed out after 5 seconds");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("first-hidden");
+		expect(expanded).toContain("second-hidden");
+	});
+
 	test("bash renderer does not duplicate final full output truncation details", async () => {
 		const operations: BashOperations = {
 			exec: async (_command, _cwd, { onData }) => {
@@ -703,7 +735,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain(theme.fg("toolOutput", error));
 	});
 
-	test("collapses ordinary read results until expanded", () => {
+	test("shows up to ten ordinary read result lines and expands the remainder", () => {
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-ordinary-read-collapsed",
@@ -713,19 +745,32 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		const tenLines = Array.from({ length: 10 }, (_, index) => `line-${String(index + 1).padStart(2, "0")}`).join(
+			"\n",
+		);
 		component.updateResult(
-			{ content: [{ type: "text", text: "hidden content" }], details: undefined, isError: false },
+			{ content: [{ type: "text", text: tenLines }], details: undefined, isError: false },
 			false,
 		);
 
-		const collapsed = stripAnsi(component.render(120).join("\n"));
+		let collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("Read");
 		expect(collapsed).toContain("notes.txt");
-		expect(collapsed).not.toContain("hidden content");
+		expect(collapsed).toContain("line-10");
+		expect(collapsed).not.toContain("more lines");
+
+		component.updateResult(
+			{ content: [{ type: "text", text: `${tenLines}\nline-11` }], details: undefined, isError: false },
+			false,
+		);
+		collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("line-10");
+		expect(collapsed).not.toContain("line-11");
+		expect(collapsed).toContain("1 more lines");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
-		expect(expanded).toContain("hidden content");
+		expect(expanded).toContain("line-11");
 	});
 
 	for (const scenario of [

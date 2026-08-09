@@ -46,7 +46,8 @@ goal: Implement M14 dynamic tasks
 - blocked/failed数量使用 warning/error attention。
 - Todo本体沿用 pending/active/completed/failed/blocked、owner、activity和blockedBy布局。
 - Dynamic Task保留内部 `source: "dynamic-task"` provenance，但 Tasks Widget不显示 `· dynamic-task` 来源标签。
-- Document、Workflow、Background、Monitor行继续共存。
+- Tasks Widget 只显示 `source: "dynamic-task"` 的动态 Todo；Document、Workflow、Background、Monitor 和其他 Task Ledger Todo 不再进入该栏。
+- Monitor 状态迁移到 Footer 的有界列表；最多 4 行，超过 4 条时显示 3 条加隐藏数量汇总。
 - 不新增独立 Dynamic Task Widget。
 
 ## Footer
@@ -56,7 +57,8 @@ goal: Implement M14 dynamic tasks
 - 正常：`tasks 2/5`。
 - attention：`tasks 2/5 · 1 blocked` 或 `1 failed`。
 - 无动态计划时保持现有 phase/files/verification显示。
-- 完整 Footer仍最多三行；40列最小模式优先保留 cwd/model/context，计划摘要可降级隐藏。
+- Footer 保留原有最多三行的基础状态区；Monitor 状态可额外占最多 4 行，超过 4 条时折叠为 3 条加汇总行。
+- 40列最小模式优先保留 cwd/model/context，计划摘要和 Monitor 次要字段可降级隐藏。
 
 ## Tool renderer
 

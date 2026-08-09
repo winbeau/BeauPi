@@ -21,7 +21,7 @@ import { type BeauPiToolState, continuationGutter, resultGutter, toolTitle } fro
 import { keyText } from "./keybinding-hints.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
-const PREVIEW_LINES = 20;
+const PREVIEW_LINES = 10;
 
 function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;

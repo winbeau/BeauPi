@@ -17,6 +17,9 @@
 - `remote_exec`
 - `terminal_create`
 - `terminal_bash`
+- `terminal_read`
+- `terminal_write`
+- `terminal_edit`
 - `terminal_send`
 - `terminal_capture`
 - `terminal_status`
@@ -26,7 +29,9 @@
 
 `terminal_bash` 是普通命令的首选接口：命令在该远端 shell 当前目录和导出环境中执行，一次调用等待完成并返回结构化退出状态。已知工作目录时 Agent 直接使用简短的 `cd <workdir> && <command>`，不先重复 `pwd`，也不追加无意义的 echo、sleep、status 或 capture。`terminal_send`/`terminal_capture` 只用于真正的交互式输入、终端诊断和增量观察。
 
-每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。短成功输出直接进入主对话；失败、稳定诊断或输出超过 100 行时，由 `settings.json` 的共享 `review.model` 指定的小模型筛选关键错误、警告和下一步。`terminal_bash` 与 Sudo Bash 复用同一审阅管线，其他轻量 Review Runtime 复用同一模型配置。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
+`terminal_read`、`terminal_write` 和 `terminal_edit` 绑定已有 `terminalId`，相对路径从该远端 shell 的当前目录解析，并复用本地 Read、Write、Update 的参数、截断、精确替换、Diff 和折叠展示逻辑。它们直接通过同一 tmux SSH shell 完成文件操作，不退化为 one-shot SSH，也不要求 Agent 手工拼接 `cat`、Base64 或重定向命令；内部文件传输不触发 Terminal Output Reviewer。
+
+每个 terminal 的完整脱敏输出追加写入 `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`。短成功输出直接进入主对话；失败、稳定诊断或输出超过 100 行时，由 `settings.json` 的共享 `review.model` 指定的小模型筛选关键错误、警告和下一步。本地 Bash 的超时、非零退出和其他异常结果默认只显示最后 10 行，Ctrl+O 展开完整错误输出。`terminal_bash` 与 Sudo Bash 复用同一审阅管线，其他轻量 Review Runtime 复用同一模型配置。Tool Result 不复制完整日志，最后一个非空行由代码强制写成 `@<绝对日志路径>`。命令非零退出、超时和断线保留 `terminalId`、`monitorId`、`logPath`、diagnostic、review usage 和正确的 `isError`。
 
 Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；AutoDL 等平台直接提供的 `root` 登录账户属于合法目标身份。远程运行时只对能够确定为直接执行的 `sudo`、`su`、`doas`、`pkexec` 记录 Policy advisory；不因不透明脚本片段或文本命中推断提权，也不由 Policy 阻断执行。
 
@@ -80,7 +85,8 @@ M14 为可执行用户任务提供 branch-local 动态计划闭环：
 - Edit/Write、修改型 Bash、verification、Workflow、Background 和 Monitor 只用稳定结构化事实更新明确匹配的 Task；无匹配时不激活或完成任意 Task，也不阻断原 Tool
 - Task Reviewer 与 Terminal Reviewer 共用 `review.model` 和 provider fallback，但没有 Tool、文件权限、主 Agent transcript 或完整日志；它只能修改 status、activity、evidence 和 blockedBy
 - Reviewer patch必须匹配当前 revision 和新增 facts hash；completed/reactivation必须引用本轮新 evidence，失败、超时、格式错误、abort 或冲突均不修改计划
-- Dynamic Tasks 投影到现有 Task Ledger、Tasks Widget 和 Footer；存在计划时仅隐藏重复的通用 discover/execute/verify Todo，其他状态源继续共存
+- Dynamic Tasks 投影到现有 Task Ledger、Tasks Widget 和 Footer；Tasks Widget 只显示 `source: "dynamic-task"` 的动态 Todo，其他 Task Ledger 状态不进入该栏
+- Monitor 状态以独立行投影到 Footer，最多显示 4 行；超过 4 条时显示优先级最高的 3 条和一行隐藏数量汇总
 - 普通进度和 facts-only revision重基不增加主对话消息；只有 blocked、真实结构 revision conflict 或需要 replan 时进入现有 next-turn context
 
 ### 交互式询问选择

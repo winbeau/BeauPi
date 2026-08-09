@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
+import { detectSupportedImageMimeType } from "../../utils/mime.ts";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import type { MonitorAdapterSnapshot } from "../monitor/types.ts";
 import { hasPotentialShellPrivilege } from "../policy/index.ts";
@@ -1008,7 +1009,14 @@ export class RemoteExecutionRuntime {
 	async terminalBash(
 		terminalId: string,
 		command: string,
-		options: { timeoutMs?: number; signal?: AbortSignal; onData?: (data: Buffer) => void } = {},
+		options: {
+			timeoutMs?: number;
+			signal?: AbortSignal;
+			onData?: (data: Buffer) => void;
+			reviewOutput?: boolean;
+			logCommand?: string;
+			logStdout?: boolean;
+		} = {},
 	): Promise<TerminalBashResult> {
 		if (!command.trim() || command.includes("\0")) {
 			throw new RemoteExecutionError({
@@ -1095,16 +1103,17 @@ export class RemoteExecutionRuntime {
 		stdout = redactOutput(stdout);
 		stderr = redactOutput(stderr);
 		const output = `${stdout}${stderr}`;
+		const displayCommand = options.logCommand ?? command;
 		await this.recordTerminalCommandOutput(terminal, connection, {
-			command,
-			output,
+			command: displayCommand,
+			output: `${options.logStdout === false ? "" : stdout}${stderr}`,
 			exitCode,
 			diagnostic,
 			startedAt,
 			completedAt,
 		});
 		const reviewInput: TerminalReviewInput = {
-			command: redactCommand(command),
+			command: redactCommand(displayCommand),
 			output,
 			exitCode,
 			diagnosticCode: diagnostic?.code,
@@ -1112,12 +1121,15 @@ export class RemoteExecutionRuntime {
 			durationMs: Math.max(0, completedAt - startedAt),
 			logPath: terminal.logPath,
 		};
-		const reviewed = await reviewTerminalOutput(reviewInput, this.outputReviewer, options.signal);
+		const reviewed =
+			options.reviewOutput === false
+				? { report: output, review: { status: "skipped" as const, inputTruncated: false } }
+				: await reviewTerminalOutput(reviewInput, this.outputReviewer, options.signal);
 		return {
 			ok: diagnostic === undefined && exitCode === 0,
 			terminalId,
 			monitorId: terminal.monitorId,
-			command: redactCommand(command),
+			command: redactCommand(displayCommand),
 			stdout,
 			stderr,
 			exitCode,
@@ -1296,6 +1308,83 @@ export class RemoteExecutionRuntime {
 		};
 	}
 
+	createTerminalReadOperations(terminalId: string): ReadOperations {
+		let cachedRead: { path: string; buffer: Buffer } | undefined;
+		const readFile = async (path: string): Promise<Buffer> => {
+			if (cachedRead?.path === path) {
+				const { buffer } = cachedRead;
+				cachedRead = undefined;
+				return buffer;
+			}
+			const terminalPath = this.terminalPath(path);
+			const result = await this.terminalBash(terminalId, `base64 < ${shellQuote(terminalPath)} | tr -d '\\n'`, {
+				reviewOutput: false,
+				logCommand: `Terminal Read ${shellQuote(terminalPath)}`,
+				logStdout: false,
+			});
+			if (!result.ok) throw new Error(result.diagnostic?.message ?? `Terminal file read failed: ${path}`);
+			return Buffer.from(result.stdout, "base64");
+		};
+		return {
+			readFile,
+			access: async (path) => {
+				const terminalPath = this.terminalPath(path);
+				const result = await this.terminalBash(terminalId, `test -r -- ${shellQuote(terminalPath)}`, {
+					reviewOutput: false,
+				});
+				if (!result.ok) throw new Error(`Terminal file is not readable: ${path}`);
+			},
+			detectImageMimeType: async (path) => {
+				const buffer = await readFile(path);
+				cachedRead = { path, buffer };
+				return detectSupportedImageMimeType(buffer);
+			},
+		};
+	}
+
+	createTerminalWriteOperations(terminalId: string): WriteOperations {
+		return {
+			mkdir: async (path) => {
+				const terminalPath = this.terminalPath(path);
+				const result = await this.terminalBash(terminalId, `mkdir -p -- ${shellQuote(terminalPath)}`, {
+					reviewOutput: false,
+				});
+				if (!result.ok) throw new Error(`Terminal directory creation failed: ${path}`);
+			},
+			writeFile: async (path, content) => {
+				const terminalPath = this.terminalPath(path);
+				const encoded = Buffer.from(content, "utf8").toString("base64");
+				const result = await this.terminalBash(
+					terminalId,
+					`printf %s ${shellQuote(encoded)} | base64 -d > ${shellQuote(terminalPath)}`,
+					{
+						reviewOutput: false,
+						logCommand: `Terminal Write ${shellQuote(terminalPath)}`,
+						logStdout: false,
+					},
+				);
+				if (!result.ok) throw new Error(`Terminal file write failed: ${path}`);
+			},
+		};
+	}
+
+	createTerminalEditOperations(terminalId: string): EditOperations {
+		const read = this.createTerminalReadOperations(terminalId);
+		const write = this.createTerminalWriteOperations(terminalId);
+		return {
+			readFile: read.readFile,
+			access: async (path) => {
+				await read.access(path);
+				const terminalPath = this.terminalPath(path);
+				const result = await this.terminalBash(terminalId, `test -w -- ${shellQuote(terminalPath)}`, {
+					reviewOutput: false,
+				});
+				if (!result.ok) throw new Error(`Terminal file is not writable: ${path}`);
+			},
+			writeFile: write.writeFile,
+		};
+	}
+
 	createBashOperations(): BashOperations {
 		return {
 			exec: async (command, _cwd, options) => {
@@ -1349,6 +1438,10 @@ export class RemoteExecutionRuntime {
 
 	private remotePath(localPath: string): string {
 		this.assertTarget();
+		return this.terminalPath(localPath);
+	}
+
+	private terminalPath(localPath: string): string {
 		const relativePath = relative(this.cwd, localPath);
 		if (!relativePath) return ".";
 		if (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath)) {

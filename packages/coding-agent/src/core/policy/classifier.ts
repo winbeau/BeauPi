@@ -78,6 +78,9 @@ const POLICY_MANAGED_TOOLS = new Set([
 	"remote_edit",
 	"terminal_create",
 	"terminal_bash",
+	"terminal_read",
+	"terminal_write",
+	"terminal_edit",
 	"terminal_send",
 	"terminal_capture",
 	"terminal_status",
@@ -1256,18 +1259,31 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 		};
 	}
 	if (
-		["read", "grep", "find", "ls", "write", "edit", "remote_read", "remote_write", "remote_edit"].includes(
-			input.toolName,
-		)
+		[
+			"read",
+			"grep",
+			"find",
+			"ls",
+			"write",
+			"edit",
+			"remote_read",
+			"remote_write",
+			"remote_edit",
+			"terminal_read",
+			"terminal_write",
+			"terminal_edit",
+		].includes(input.toolName)
 	) {
 		const path = stringArg(args, "path") ?? stringArg(args, "file_path") ?? "";
 		const remote = input.toolName.startsWith("remote_");
+		const terminal = input.toolName.startsWith("terminal_");
+		const remotePath = remote || terminal;
 		const writes = input.toolName.endsWith("write") || input.toolName.endsWith("edit");
-		const normalizedPath = remote ? posix.normalize(path || ".") : resolve(input.cwd, path || ".");
+		const normalizedPath = remotePath ? posix.normalize(path || ".") : resolve(input.cwd, path || ".");
 		const isSensitive = path ? sensitivePath(path, input.cwd, input.config) : false;
 		const outsideWorkspace =
 			writes && path
-				? remote
+				? remotePath
 					? posix.isAbsolute(path) ||
 						path === "~" ||
 						path.startsWith("~/") ||
@@ -1280,25 +1296,28 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 				: false;
 		const classes: PolicyOperationKind[] = [writes ? "workspace_write" : "read_only_check"];
 		if (isSensitive || outsideWorkspace) classes.push("sensitive_path");
-		const target = remote ? `remote:${stringArg(args, "targetId") ?? "selected"}` : "local";
-		const scope = remote ? "Remote" : "Local";
+		const target = terminal
+			? `terminal:${stringArg(args, "terminalId") ?? "unknown"}`
+			: remote
+				? `remote:${stringArg(args, "targetId") ?? "selected"}`
+				: "local";
+		const scope = terminal ? "Terminal" : remote ? "Remote" : "Local";
 		const summary = outsideWorkspace
-			? remote
-				? "Remote write outside configured cwd"
-				: "Local write outside workspace"
+			? terminal
+				? "Terminal write outside working directory"
+				: remote
+					? "Remote write outside configured cwd"
+					: "Local write outside workspace"
 			: isSensitive
 				? `${scope} ${writes ? "write to" : "read from"} sensitive path`
 				: `${scope} ${writes ? "workspace modification" : "read-only check"}`;
+		const fileRead = ["read", "remote_read", "terminal_read"].includes(input.toolName);
 		const operationArguments = writes
 			? hash(stableJson(args ?? {}))
-			: input.toolName === "read" || input.toolName === "remote_read"
+			: fileRead
 				? stableJson({ offset: args?.offset, limit: args?.limit })
 				: hash(stableJson(args ?? {}));
-		const operationType = writes
-			? "write"
-			: input.toolName === "read" || input.toolName === "remote_read"
-				? "file_read"
-				: input.toolName;
+		const operationType = writes ? "write" : fileRead ? "file_read" : input.toolName;
 		return {
 			descriptor: operation(input, {
 				kind: isSensitive || outsideWorkspace ? "sensitive_path" : writes ? "workspace_write" : "read_only_check",
@@ -1307,7 +1326,7 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 				target,
 				signatureParts: [operationType, normalizedPath, operationArguments],
 				equivalenceParts: [operationType, normalizedPath, operationArguments],
-				fallbackFamily: remote ? "remote" : "local",
+				fallbackFamily: terminal ? "terminal" : remote ? "remote" : "local",
 				sensitive: isSensitive || outsideWorkspace,
 				readOnly: !writes,
 				workspaceMutation: writes,

@@ -11,7 +11,7 @@ import { resolveToCwd } from "./path-utils.ts";
 import { normalizeDisplayText, renderToolPath, replaceTabs, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
-const writeSchema = Type.Object({
+export const writeSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
 	content: Type.String({ description: "Content to write to the file" }),
 });
@@ -37,6 +37,10 @@ const defaultWriteOperations: WriteOperations = {
 export interface WriteToolOptions {
 	/** Custom operations for file writing. Default: local filesystem */
 	operations?: WriteOperations;
+	/** Renderer title. Default: Write */
+	displayName?: string;
+	/** Optional renderer context shown in brackets before the path. */
+	displayContext?: string;
 }
 
 export interface WriteToolDetails {
@@ -145,11 +149,14 @@ function formatWriteCall(
 	theme: Theme,
 	cache: WriteHighlightCache | undefined,
 	cwd: string,
+	displayName: string,
+	displayContext: string | undefined,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const fileContent = str(args?.content);
 	const pathDisplay = renderToolPath(rawPath, theme, cwd);
-	let text = `${theme.fg("toolTitle", theme.bold("Write"))}(${pathDisplay})`;
+	const context = displayContext ? ` ${theme.fg("toolOutput", `[${displayContext}]`)}` : "";
+	let text = `${theme.fg("toolTitle", theme.bold(displayName))}${context}(${pathDisplay})`;
 
 	if (fileContent === null) {
 		text += `\n${theme.fg("error", "[invalid content arg - expected string]")}`;
@@ -194,6 +201,8 @@ export function createWriteToolDefinition(
 	options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
 	const ops = options?.operations ?? defaultWriteOperations;
+	const displayName = options?.displayName ?? "Write";
+	const displayContext = options?.displayContext;
 	return {
 		name: "write",
 		label: "write",
@@ -255,6 +264,8 @@ export function createWriteToolDefinition(
 					theme,
 					component.cache,
 					context.cwd,
+					displayName,
+					displayContext,
 				),
 			);
 			return component;

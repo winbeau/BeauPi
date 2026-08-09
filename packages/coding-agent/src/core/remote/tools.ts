@@ -8,9 +8,9 @@ import type { ToolDefinition } from "../extensions/types.ts";
 import { hasPotentialShellPrivilege, inspectShellPrivilege } from "../policy/index.ts";
 import type { PrivilegeRuntime, PrivilegeToolDetailsV1 } from "../privilege/index.ts";
 import { type BashToolDetails, createBashToolDefinition } from "../tools/bash.ts";
-import { createEditToolDefinition } from "../tools/edit.ts";
-import { createReadToolDefinition } from "../tools/read.ts";
-import { createWriteToolDefinition } from "../tools/write.ts";
+import { createEditToolDefinition, type EditToolDetails, editSchema } from "../tools/edit.ts";
+import { createReadToolDefinition, type ReadToolDetails, readSchema } from "../tools/read.ts";
+import { createWriteToolDefinition, type WriteToolDetails, writeSchema } from "../tools/write.ts";
 import type { RemoteExecutionRuntime } from "./runtime.ts";
 import type { ExecutionTargetConfig, RemoteDiagnostic } from "./types.ts";
 
@@ -35,6 +35,18 @@ const terminalBashSchema = Type.Object({
 	command: Type.String({ minLength: 1, description: "Bash command to execute in the terminal's current directory" }),
 	timeout: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Timeout in seconds" })),
 });
+const terminalReadSchema = Type.Object({
+	terminalId: Type.String({ minLength: 1, description: "Existing tmux terminal id" }),
+	...readSchema.properties,
+});
+const terminalWriteSchema = Type.Object({
+	terminalId: Type.String({ minLength: 1, description: "Existing tmux terminal id" }),
+	...writeSchema.properties,
+});
+const terminalEditSchema = Type.Object({
+	terminalId: Type.String({ minLength: 1, description: "Existing tmux terminal id" }),
+	...editSchema.properties,
+});
 const terminalSendSchema = Type.Object({ terminalId: Type.String({ minLength: 1 }), input: Type.String() });
 const terminalCaptureSchema = Type.Object({
 	terminalId: Type.String({ minLength: 1 }),
@@ -47,6 +59,9 @@ type TargetSelectInput = Static<typeof targetSelectSchema>;
 type RemoteExecInput = Static<typeof remoteExecSchema>;
 type TerminalCreateInput = Static<typeof terminalCreateSchema>;
 type TerminalBashInput = Static<typeof terminalBashSchema>;
+type TerminalReadInput = Static<typeof terminalReadSchema>;
+type TerminalWriteInput = Static<typeof terminalWriteSchema>;
+type TerminalEditInput = Static<typeof terminalEditSchema>;
 type TerminalSendInput = Static<typeof terminalSendSchema>;
 type TerminalCaptureInput = Static<typeof terminalCaptureSchema>;
 type TerminalStatusInput = Static<typeof terminalStatusSchema>;
@@ -113,6 +128,9 @@ const validators = {
 	remoteExec: Compile(remoteExecSchema),
 	terminalCreate: Compile(terminalCreateSchema),
 	terminalBash: Compile(terminalBashSchema),
+	terminalRead: Compile(terminalReadSchema),
+	terminalWrite: Compile(terminalWriteSchema),
+	terminalEdit: Compile(terminalEditSchema),
 	terminalSend: Compile(terminalSendSchema),
 	terminalCapture: Compile(terminalCaptureSchema),
 	terminalStatus: Compile(terminalStatusSchema),
@@ -573,6 +591,138 @@ function createTerminalBashTool(
 	};
 }
 
+function createTerminalReadTool(
+	runtime: RemoteExecutionRuntime,
+): ToolDefinition<typeof terminalReadSchema, ReadToolDetails | undefined> {
+	const base = createReadToolDefinition(runtime.cwd);
+	return {
+		...base,
+		name: "terminal_read",
+		label: "terminal_read",
+		description:
+			"Read a file through an existing local tmux SSH terminal. Relative paths resolve from that remote shell's current directory, and text, image, truncation, and rendering behavior matches read.",
+		promptSnippet: "Read a file in an existing local tmux SSH terminal",
+		promptGuidelines: [
+			"Use terminal_read for file contents that must resolve from an existing terminal's current directory and exported environment.",
+			"Use read for local files and remote_read for one-shot SSH paths rooted at the configured target cwd.",
+		],
+		parameters: terminalReadSchema,
+		prepareArguments: undefined,
+		executionMode: "sequential",
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			validate<TerminalReadInput>("terminal_read", validators.terminalRead, params);
+			const { terminalId, ...input } = params;
+			return createReadToolDefinition(runtime.cwd, {
+				operations: runtime.createTerminalReadOperations(terminalId),
+			}).execute(toolCallId, input, signal, onUpdate, ctx);
+		},
+		renderCall(args, currentTheme, context) {
+			return createReadToolDefinition(runtime.cwd, {
+				displayName: "Terminal Read",
+				displayContext: args.terminalId,
+			}).renderCall!(args, currentTheme, context as never);
+		},
+		renderResult(result, options, currentTheme, context) {
+			const terminalId = (context.args as TerminalReadInput).terminalId;
+			return createReadToolDefinition(runtime.cwd, {
+				displayName: "Terminal Read",
+				displayContext: terminalId,
+			}).renderResult!(result, options, currentTheme, context as never);
+		},
+	};
+}
+
+function createTerminalWriteTool(
+	runtime: RemoteExecutionRuntime,
+): ToolDefinition<typeof terminalWriteSchema, WriteToolDetails> {
+	const base = createWriteToolDefinition(runtime.cwd);
+	return {
+		...base,
+		name: "terminal_write",
+		label: "terminal_write",
+		description:
+			"Write a text file through an existing local tmux SSH terminal. Relative paths resolve from that remote shell's current directory, parent directories are created, and rendering matches write.",
+		promptSnippet: "Create or overwrite a file in an existing local tmux SSH terminal",
+		promptGuidelines: [
+			"Use terminal_write for complete file writes that must resolve from an existing terminal's current directory and exported environment.",
+			"Use terminal_edit instead for precise replacements in an existing remote file.",
+		],
+		parameters: terminalWriteSchema,
+		prepareArguments: undefined,
+		executionMode: "sequential",
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			validate<TerminalWriteInput>("terminal_write", validators.terminalWrite, params);
+			const { terminalId, ...input } = params;
+			return createWriteToolDefinition(runtime.cwd, {
+				operations: runtime.createTerminalWriteOperations(terminalId),
+			}).execute(toolCallId, input, signal, onUpdate, ctx);
+		},
+		renderCall(args, currentTheme, context) {
+			return createWriteToolDefinition(runtime.cwd, {
+				displayName: "Terminal Write",
+				displayContext: args.terminalId,
+			}).renderCall!(args, currentTheme, context as never);
+		},
+		renderResult(result, options, currentTheme, context) {
+			const terminalId = (context.args as TerminalWriteInput).terminalId;
+			return createWriteToolDefinition(runtime.cwd, {
+				displayName: "Terminal Write",
+				displayContext: terminalId,
+			}).renderResult!(result, options, currentTheme, context as never);
+		},
+	};
+}
+
+function createTerminalEditTool(
+	runtime: RemoteExecutionRuntime,
+): ToolDefinition<typeof terminalEditSchema, EditToolDetails | undefined> {
+	const base = createEditToolDefinition(runtime.cwd);
+	return {
+		...base,
+		name: "terminal_edit",
+		label: "terminal_edit",
+		description:
+			"Edit one text file through an existing local tmux SSH terminal using the same exact, unique, non-overlapping replacements as edit. Relative paths resolve from that remote shell's current directory.",
+		promptSnippet: "Apply precise edits to a file in an existing local tmux SSH terminal",
+		promptGuidelines: [
+			"Use terminal_edit for precise remote file changes in an existing terminal; every edits[].oldText must match exactly and uniquely.",
+			"Keep separate replacements in one call and merge nearby or overlapping changes.",
+		],
+		parameters: terminalEditSchema,
+		prepareArguments(input) {
+			const terminalId =
+				typeof input === "object" && input !== null && "terminalId" in input
+					? (input as { terminalId?: unknown }).terminalId
+					: undefined;
+			return { ...base.prepareArguments?.(input), terminalId } as TerminalEditInput;
+		},
+		executionMode: "sequential",
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			validate<TerminalEditInput>("terminal_edit", validators.terminalEdit, params);
+			const { terminalId, ...input } = params;
+			return createEditToolDefinition(runtime.cwd, {
+				operations: runtime.createTerminalEditOperations(terminalId),
+				previewDiff: false,
+			}).execute(toolCallId, input, signal, onUpdate, ctx);
+		},
+		renderCall(args, currentTheme, context) {
+			return createEditToolDefinition(runtime.cwd, {
+				displayName: "Terminal Update",
+				displayContext: args.terminalId,
+				previewDiff: false,
+			}).renderCall!(args, currentTheme, context as never);
+		},
+		renderResult(result, options, currentTheme, context) {
+			const terminalId = (context.args as TerminalEditInput).terminalId;
+			return createEditToolDefinition(runtime.cwd, {
+				displayName: "Terminal Update",
+				displayContext: terminalId,
+				previewDiff: false,
+			}).renderResult!(result, options, currentTheme, context as never);
+		},
+	};
+}
+
 function createTerminalSendTool(
 	runtime: RemoteExecutionRuntime,
 ): ToolDefinition<typeof terminalSendSchema, RemoteToolDetails> {
@@ -770,6 +920,9 @@ export function createRemoteToolDefinitions(
 		createRemoteExecTool(runtime),
 		createTerminalCreateTool(runtime),
 		createTerminalBashTool(runtime, privilegeRuntime),
+		createTerminalReadTool(runtime),
+		createTerminalWriteTool(runtime),
+		createTerminalEditTool(runtime),
 		createTerminalSendTool(runtime),
 		createTerminalCaptureTool(runtime),
 		createTerminalStatusTool(runtime),
@@ -785,6 +938,9 @@ export {
 	remoteExecSchema,
 	targetSelectSchema,
 	terminalBashSchema,
+	terminalReadSchema,
+	terminalWriteSchema,
+	terminalEditSchema,
 	terminalCaptureSchema,
 	terminalCloseSchema,
 	terminalCreateSchema,

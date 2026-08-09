@@ -101,6 +101,7 @@ function createSession(options: {
 			getAdvisories: () => options.policyAdvisories ?? [],
 		},
 		monitorRuntime: {
+			list: () => options.monitors ?? [],
 			getSummary: () => ({
 				total: options.monitors?.length ?? 0,
 				starting: 0,
@@ -134,6 +135,31 @@ function createSession(options: {
 	};
 
 	return session as unknown as AgentSession;
+}
+
+function createMonitor(
+	id: string,
+	status: MonitorRecord["status"],
+	lastActivityAt: number,
+	durationMs = 10,
+): MonitorRecord {
+	return {
+		version: 1,
+		id,
+		sessionId: "session",
+		target: { kind: "process", pid: lastActivityAt },
+		kind: "process",
+		name: id,
+		taskSummary: id,
+		createdAt: 1,
+		startedAt: 1,
+		durationMs,
+		lastActivityAt,
+		status,
+		logCursor: 0,
+		activityLog: [],
+		diagnostics: [],
+	};
 }
 
 function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
@@ -327,33 +353,58 @@ describe("FooterComponent width handling", () => {
 		}
 	});
 
-	it("shows Monitor running and attention counts without overflowing", () => {
-		const monitors: MonitorRecord[] = [
-			{
-				version: 1,
-				id: "mon-footer",
-				sessionId: "session",
-				target: { kind: "process", pid: 42 },
-				kind: "process",
-				name: "build",
-				taskSummary: "Build",
-				createdAt: 1,
-				startedAt: 1,
-				durationMs: 10,
-				lastActivityAt: 1,
-				status: "stalled",
-				logCursor: 0,
-				activityLog: [],
-				diagnostics: [],
-			},
-		];
+	it("renders Monitor status rows in the Footer without overflowing", () => {
+		const monitors = [createMonitor("tmux:jupyter-plot-h100", "stalled", 1, 10_398_000)];
 		const session = createSession({ sessionName: "", monitors });
 		const footer = new FooterComponent(session, createFooterData(1));
 		for (const width of [80, 120, 160]) {
 			const lines = footer.render(width).map(stripAnsi);
-			expect(lines[0]).toContain("mon 0 run · 1 attention");
+			expect(lines.join("\n")).toContain("Monitor tmux:jupyter-plot-h100 · stalled · 173m18s");
+			expect(lines[0]).not.toContain("mon 0 run");
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("folds five Footer Monitor rows into three records plus a summary line", () => {
+		const monitors = [
+			createMonitor("tmux:completed", "completed", 1),
+			createMonitor("tmux:healthy", "healthy", 2),
+			createMonitor("tmux:running", "running", 3),
+			createMonitor("tmux:stalled", "stalled", 4),
+			createMonitor("Sudo Bash", "failed", 5),
+		];
+		const footer = new FooterComponent(createSession({ sessionName: "", monitors }), createFooterData(1));
+		for (const width of [80, 120, 160]) {
+			const lines = footer.render(width).map(stripAnsi);
+			const monitorLines = lines.filter((line) => line.includes("Monitor "));
+			expect(monitorLines).toHaveLength(3);
+			expect(lines.join("\n")).toContain("Monitor Sudo Bash · failed");
+			expect(lines.join("\n")).toContain("Monitor tmux:stalled · stalled");
+			expect(lines.join("\n")).toContain("2 more monitors");
+			expect(lines.join("\n")).not.toContain("tmux:completed");
+			for (const line of footer.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("renders sub-agent budget failures with turn usage and last Tool in the Footer", () => {
+		const monitor: MonitorRecord = {
+			...createMonitor("Agent(reviewer)", "failed", 51_700, 51_699),
+			target: { kind: "sub-agent", taskId: "review-task", profile: "reviewer" },
+			kind: "sub-agent",
+			exitReason: "budget_exhausted",
+			agentTask: {
+				errorCode: "budget_exhausted",
+				turnsUsed: 8,
+				maxTurns: 8,
+				tokensUsed: 1200,
+				maxTokens: 4096,
+				lastToolName: "docs_read",
+			},
+		};
+		const footer = new FooterComponent(createSession({ sessionName: "", monitors: [monitor] }), createFooterData(1));
+		expect(stripAnsi(footer.render(120).join("\n"))).toContain(
+			"Monitor Agent(reviewer) · budget_exhausted · 8/8 turns · last: docs_read",
+		);
 	});
 
 	it("shows a selected SSH target without overflowing at responsive widths", () => {

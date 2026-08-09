@@ -4,11 +4,12 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
+import type { MonitorRecord, MonitorStatus } from "../../../core/monitor/index.ts";
 import { RecentRunStatsTracker, type RecentRunStatus } from "../../../core/recent-run-stats.ts";
 import { DYNAMIC_TASK_REVIEW_ENTRY_TYPE, getDynamicTaskReviewEntry } from "../../../core/tasks/index.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
-import { fitSingleLine, type ResponsivePart } from "./beaupi-style.ts";
+import { activityStateSymbol, fitSingleLine, type ResponsivePart } from "./beaupi-style.ts";
 
 function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
@@ -32,6 +33,104 @@ export function formatTokens(count: number): string {
 function formatDuration(milliseconds: number): string {
 	const seconds = Math.max(0, milliseconds) / 1000;
 	return seconds >= 100 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+function monitorActivityState(
+	status: MonitorStatus,
+): "pending" | "active" | "completed" | "failed" | "blocked" | "cancelled" {
+	if (status === "starting") return "pending";
+	if (status === "running" || status === "healthy") return "active";
+	if (status === "completed") return "completed";
+	if (status === "failed") return "failed";
+	if (status === "cancelled") return "cancelled";
+	return "blocked";
+}
+
+function monitorRank(record: MonitorRecord): number {
+	if (record.status === "failed" || record.status === "stalled" || record.status === "lost") return 0;
+	if (record.status === "starting" || record.status === "running" || record.status === "healthy") return 1;
+	return 2;
+}
+
+function selectFooterMonitorRows(records: readonly MonitorRecord[]): { visible: MonitorRecord[]; hidden: number } {
+	const sorted = records
+		.map((record, index) => ({ record, index }))
+		.sort(
+			(left, right) =>
+				monitorRank(left.record) - monitorRank(right.record) ||
+				right.record.lastActivityAt - left.record.lastActivityAt ||
+				right.index - left.index,
+		)
+		.map(({ record }) => record);
+	const visibleLimit = sorted.length > 4 ? 3 : 4;
+	return { visible: sorted.slice(0, visibleLimit), hidden: Math.max(0, sorted.length - visibleLimit) };
+}
+
+function formatMonitorDuration(milliseconds: number): string {
+	const seconds = Math.max(0, milliseconds) / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	return `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)
+		.toString()
+		.padStart(2, "0")}s`;
+}
+
+function renderMonitor(record: MonitorRecord, width: number): string {
+	const prefix = `  ${activityStateSymbol(monitorActivityState(record.status))} `;
+	if (record.status === "failed" && record.agentTask?.errorCode) {
+		const turns =
+			record.agentTask.maxTurns === undefined
+				? `${record.agentTask.turnsUsed} turns`
+				: `${record.agentTask.turnsUsed}/${record.agentTask.maxTurns} turns`;
+		return fitSingleLine(
+			[
+				{ text: prefix, required: true },
+				{ text: theme.fg("dim", "Monitor"), required: true },
+				{ text: record.name, separator: " ", required: true, truncate: true },
+				{ text: theme.fg("error", record.agentTask.errorCode), separator: " · ", required: true },
+				{ text: theme.fg("dim", turns), separator: " · ", priority: 2 },
+				{
+					text: record.agentTask.lastToolName ? theme.fg("dim", `last: ${record.agentTask.lastToolName}`) : "",
+					separator: " · ",
+					priority: 1,
+				},
+			],
+			width,
+		);
+	}
+	return fitSingleLine(
+		[
+			{ text: prefix, required: true },
+			{ text: theme.fg("dim", "Monitor"), required: true },
+			{ text: record.name, separator: " ", required: true, truncate: true },
+			{ text: theme.fg("dim", record.status), separator: " · ", priority: 1 },
+			{ text: theme.fg("dim", formatMonitorDuration(record.durationMs)), separator: " · ", priority: 2 },
+		],
+		width,
+	);
+}
+
+function renderFooterMonitorLines(records: readonly MonitorRecord[], width: number): string[] {
+	const availableWidth = safeWidth(width);
+	if (availableWidth === 0 || records.length === 0) return [];
+	const selection = selectFooterMonitorRows(records);
+	const lines = selection.visible.map((record) => renderMonitor(record, availableWidth));
+	if (selection.hidden > 0) {
+		lines.push(
+			fitSingleLine(
+				[
+					{ text: theme.fg("dim", "  …"), required: true },
+					{
+						text: theme.fg("dim", `${selection.hidden} more monitor${selection.hidden === 1 ? "" : "s"}`),
+						separator: " ",
+						required: true,
+						truncate: true,
+					},
+				],
+				availableWidth,
+			),
+		);
+	}
+	return lines;
 }
 
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
@@ -208,7 +307,10 @@ export class FooterComponent implements Component {
 		const dynamicTaskSummary = dynamicTasks
 			? `tasks ${dynamicCompleted}/${dynamicTasks.tasks.length}${dynamicBlocked > 0 ? ` · ${dynamicBlocked} blocked` : dynamicFailed > 0 ? ` · ${dynamicFailed} failed` : ""}`
 			: "";
-		const monitorSummary = this.session.monitorRuntime?.getSummary();
+		const backgroundMonitorIds = new Set(taskLedger.background?.tasks.map((task) => task.monitorId) ?? []);
+		const monitorRecords = (this.session.monitorRuntime?.list({ includeTerminal: true }) ?? []).filter(
+			(record) => !backgroundMonitorIds.has(record.id),
+		);
 		const backgroundSummary = taskLedger.background?.summary;
 		const workflows = taskLedger.workflows ?? [];
 		const runningWorkflows = workflows.filter((workflow) => workflow.status === "running").length;
@@ -275,23 +377,6 @@ export class FooterComponent implements Component {
 					separator: " · ",
 					priority: 4,
 				},
-				{
-					text:
-						monitorSummary && monitorSummary.total > 0
-							? theme.fg(
-									monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
-										? "warning"
-										: "accent",
-									`mon ${monitorSummary.running + monitorSummary.healthy} run${
-										monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost > 0
-											? ` · ${monitorSummary.failed + monitorSummary.stalled + monitorSummary.lost} attention`
-											: ""
-									}`,
-								)
-							: "",
-					separator: " · ",
-					priority: 3,
-				},
 				{ text: modifiedFiles ? theme.fg("dim", modifiedFiles) : "", separator: " · ", priority: 2 },
 				{ text: sessionName ? theme.fg("dim", sessionName) : "", separator: " · ", priority: 2 },
 				{ text: selectedTarget ? theme.fg("dim", `ssh:${selectedTarget.id}`) : "", separator: " · ", priority: 2 },
@@ -312,6 +397,7 @@ export class FooterComponent implements Component {
 			availableWidth,
 		);
 		lines.push(workspaceLine);
+		lines.push(...renderFooterMonitorLines(monitorRecords, availableWidth));
 
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
@@ -367,6 +453,6 @@ export class FooterComponent implements Component {
 			},
 		];
 		lines.push(fitLeftRight(leftParts, rightSide, availableWidth));
-		return lines.slice(0, 3);
+		return lines;
 	}
 }

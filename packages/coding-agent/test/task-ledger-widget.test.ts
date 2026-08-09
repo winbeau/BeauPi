@@ -1,7 +1,6 @@
 import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
-import type { MonitorRecord } from "../src/core/monitor/index.ts";
 import type { TaskLedgerSnapshot, TaskTodo } from "../src/core/state/task-ledger.ts";
 import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 import {
@@ -36,23 +35,37 @@ function createSnapshot(overrides: Partial<TaskLedgerSnapshot> = {}): TaskLedger
 	};
 }
 
-function createWidget(snapshot: TaskLedgerSnapshot, rows = 45, monitors: MonitorRecord[] = []): TaskLedgerWidget {
+function createDynamicSnapshot(todos: TaskTodo[], overrides: Partial<TaskLedgerSnapshot> = {}): TaskLedgerSnapshot {
+	const dynamicTodos = todos.map((todo) => ({ ...todo, source: "dynamic-task" }));
+	const dynamicTasks: DynamicTaskPlanV1 = {
+		version: 1,
+		planId: "plan-widget",
+		revision: 1,
+		goal: "Render dynamic tasks",
+		createdAt: 1,
+		updatedAt: Math.max(1, ...todos.map((todo) => todo.updatedAt)),
+		factSequence: 0,
+		facts: [],
+		tasks: dynamicTodos.map((todo) => ({
+			id: todo.id,
+			title: todo.label,
+			status: todo.status,
+			dependsOn: [],
+			matchHints: [],
+			activity: todo.activity,
+			evidence: [],
+			blockedBy: todo.blockedBy ?? [],
+			createdAt: 1,
+			updatedAt: todo.updatedAt,
+			completedAt: todo.completedAt,
+		})),
+	};
+	return createSnapshot({ ...overrides, dynamicTasks, todos: dynamicTodos });
+}
+
+function createWidget(snapshot: TaskLedgerSnapshot, rows = 45): TaskLedgerWidget {
 	const session = {
 		taskLedger: { getSnapshot: () => snapshot },
-		monitorRuntime: {
-			list: () => monitors,
-			getSummary: () => ({
-				total: monitors.length,
-				starting: monitors.filter((record) => record.status === "starting").length,
-				running: monitors.filter((record) => record.status === "running").length,
-				healthy: monitors.filter((record) => record.status === "healthy").length,
-				stalled: monitors.filter((record) => record.status === "stalled").length,
-				completed: monitors.filter((record) => record.status === "completed").length,
-				failed: monitors.filter((record) => record.status === "failed").length,
-				cancelled: monitors.filter((record) => record.status === "cancelled").length,
-				lost: monitors.filter((record) => record.status === "lost").length,
-			}),
-		},
 	} as unknown as AgentSession;
 	const tui = { terminal: { rows } } as unknown as TUI;
 	return new TaskLedgerWidget(session, tui);
@@ -99,11 +112,11 @@ describe("TaskLedgerWidget", () => {
 				blockedBy: ["#1", "#2"],
 			},
 		];
-		const widget = createWidget(createSnapshot({ todos }), 80);
+		const widget = createWidget(createDynamicSnapshot(todos), 80);
 		const styledWide = widget.render(120).join("\n");
 		const wide = stripAnsi(styledWide);
-		expect(wide).toContain("Tasks · execute · 2 files · verify pending");
-		expect(wide).toContain("□ Pending item (@main) · tool");
+		expect(wide).toContain("Tasks · plan r1 · 1/5 completed · 2 attention");
+		expect(wide).toContain("□ Pending item (@main)");
 		expect(wide).toContain("□ Active item (@main)");
 		expect(wide).toContain("■ Completed item (@main)");
 		expect(wide).toContain("□ Failed item (@main)");
@@ -124,7 +137,7 @@ describe("TaskLedgerWidget", () => {
 			updatedAt: index,
 			completedAt: index >= 6 ? 1 : undefined,
 		}));
-		const widget = createWidget(createSnapshot({ todos }), 24);
+		const widget = createWidget(createDynamicSnapshot(todos), 24);
 		const lines = widget.render(80).map(stripAnsi);
 		expect(taskTodoLimit(24)).toBe(3);
 		expect(lines.filter((line) => /^[ ]{2}[□■]/.test(line))).toHaveLength(3);
@@ -178,9 +191,8 @@ describe("TaskLedgerWidget", () => {
 			},
 		];
 		const widget = createWidget(
-			createSnapshot({
+			createDynamicSnapshot([{ id: "task", label: "Run checks", status: "pending", sequence: 0, updatedAt: 1 }], {
 				commands,
-				todos: [{ id: "task", label: "Run checks", status: "pending", sequence: 0, updatedAt: 1 }],
 			}),
 		);
 		const rendered = renderPlain(widget, 100);
@@ -192,64 +204,23 @@ describe("TaskLedgerWidget", () => {
 		expect(selectTimelineCommands(commands, 2).map((command) => command.id)).toEqual(["two", "three"]);
 	});
 
-	it("renders Monitor tasks and keeps them within 80, 120, and 160 columns", () => {
-		const monitors: MonitorRecord[] = [
-			{
-				version: 1,
-				id: "mon-1",
-				sessionId: "session",
-				target: { kind: "process", pid: 42 },
-				kind: "process",
-				name: "very-long-build-monitor-name-🙂",
-				taskSummary: "Build",
-				createdAt: 1,
-				startedAt: 1,
-				durationMs: 1234,
-				lastActivityAt: 1,
-				status: "stalled",
-				logCursor: 0,
-				activityLog: [],
-				diagnostics: [],
-			},
-		];
-		const widget = createWidget(createSnapshot(), 45, monitors);
-		for (const width of [80, 120, 160]) {
-			const rendered = widget.render(width).map(stripAnsi).join("\\n");
-			expect(rendered).toContain("Monitor");
-			for (const line of widget.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-		}
-	});
-
-	it("renders sub-agent budget failures with turn usage and last Tool", () => {
-		const monitor: MonitorRecord = {
-			version: 1,
-			id: "mon-reviewer",
-			sessionId: "session",
-			target: { kind: "sub-agent", taskId: "review-task", profile: "reviewer" },
-			kind: "sub-agent",
-			name: "Agent(reviewer)",
-			taskSummary: "Review changes",
-			createdAt: 1,
-			startedAt: 1,
-			completedAt: 51_700,
-			durationMs: 51_699,
-			lastActivityAt: 51_700,
-			status: "failed",
-			exitReason: "budget_exhausted",
-			logCursor: 0,
-			activityLog: [],
-			agentTask: {
-				errorCode: "budget_exhausted",
-				turnsUsed: 8,
-				maxTurns: 8,
-				tokensUsed: 1200,
-				maxTokens: 4096,
-				lastToolName: "docs_read",
-			},
-			diagnostics: [],
-		};
-		const rendered = renderPlain(createWidget(createSnapshot(), 45, [monitor]), 120);
-		expect(rendered).toContain("Monitor Agent(reviewer) · budget_exhausted · 8/8 turns · last: docs_read");
+	it("hides generic, workflow, document, and monitor-derived Todos when no Dynamic Task plan exists", () => {
+		const widget = createWidget(
+			createSnapshot({
+				todos: [
+					{ id: "generic", label: "Generic Todo", status: "active", sequence: 0, updatedAt: 1 },
+					{
+						id: "workflow",
+						label: "Workflow Todo",
+						status: "pending",
+						sequence: 1,
+						updatedAt: 1,
+						source: "workflow",
+					},
+				],
+			}),
+		);
+		expect(widget.render(120)).toEqual([]);
 	});
 
 	it("renders Dynamic Task revision, progress, attention, and active activity from structured state", () => {
@@ -312,15 +283,21 @@ describe("TaskLedgerWidget", () => {
 			blockedBy: task.blockedBy,
 			source: "dynamic-task",
 		}));
+		const nonDynamicTodos: TaskTodo[] = [
+			{ id: "workflow", label: "Workflow row", status: "active", sequence: 10, updatedAt: 7, source: "workflow" },
+			{ id: "monitor", label: "Monitor row", status: "failed", sequence: 11, updatedAt: 7, source: "monitor" },
+		];
 		for (const themeName of ["beaupi-dark", "beaupi-light"]) {
 			initTheme(themeName, false);
-			const widget = createWidget(createSnapshot({ dynamicTasks: plan, todos }), 80);
+			const widget = createWidget(createSnapshot({ dynamicTasks: plan, todos: [...todos, ...nonDynamicTodos] }), 80);
 			const wide = renderPlain(widget, 120);
 			expect(wide).toContain("plan r7");
 			expect(wide).toContain("1/3 completed");
 			expect(wide).toContain("1 attention");
 			expect(wide).toContain("Updating a very long structured projection activity");
 			expect(wide).not.toContain("dynamic-task");
+			expect(wide).not.toContain("Workflow row");
+			expect(wide).not.toContain("Monitor row");
 			for (const width of [40, 80, 120, 160]) {
 				for (const line of widget.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
@@ -338,7 +315,7 @@ describe("TaskLedgerWidget", () => {
 				owner: "primary-agent-with-a-long-name",
 			},
 		];
-		const widget = createWidget(createSnapshot({ todos }));
+		const widget = createWidget(createDynamicSnapshot(todos));
 		for (const width of [40, 80, 120, 160]) {
 			for (const line of widget.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}

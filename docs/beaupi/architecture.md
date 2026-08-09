@@ -258,7 +258,7 @@ M2 已实现该最小状态层；M3 在同一 snapshot 上增加当前 Contract�
 - 只记录当前 Session 可确定的 Tool、Shell、文件和验证事实。
 - workspace revision 只随账本确认的文件修改推进，用于短时间重复 `git status` 检测。
 - M11 Workflow Runtime 将实时结构化快照投影到同一 Ledger；Workflow Tool Result 和 Monitor records 负责分支恢复，Tasks Widget 与 Footer 只消费 Ledger/Monitor snapshot，不读取或驱动调度器。
-- M14 `DynamicTaskRuntime` 是 branch-local 动态计划、revision/CAS、facts/evidence 和受限 Reviewer patch 的唯一状态源；Task Ledger 只消费其结构化快照。存在动态计划时只替换通用 discover/execute/verify Todo，Document、Workflow、Background、Monitor、interaction、privilege 和 failure 投影继续共存。
+- M14 `DynamicTaskRuntime` 是 branch-local 动态计划、revision/CAS、facts/evidence 和受限 Reviewer patch 的唯一状态源；Task Ledger 只消费其结构化快照。Tasks Widget 只投影 `source: "dynamic-task"` 的动态 Todo；Monitor records 由 Footer 单独消费并按最多 4 行折叠，其他 Ledger 状态不进入 Tasks 栏。
 
 M14 的主 Agent 通过 Coordinator-only `tasks_update` 完整编写 Task 结构。Edit/Write、修改型 Bash、sudo、verification、Workflow、Background 和 Monitor 生命周期只提交稳定 ID 的确定性事实；无明确 title/matchHints/runtime ID 匹配时事实留在全局池，不修改任意 Task。facts-only revision漂移通过 expected snapshot与当前 snapshot三方重基，保留异步 status/activity/evidence/blockedBy；只有 goal、Task ID/顺序、title、dependsOn 或 matchHints 已被另一结构更新改变时才返回 CAS conflict。`beaupi.dynamic-task.snapshot` 和 `beaupi.dynamic-task.review` custom entry 负责 Compact、resume 和 branch 恢复，reload 复验当前 branch，dispose 后拒绝新写入。
 
@@ -277,6 +277,8 @@ terminal_create
 ```
 
 本地 tmux 负责 session/pane 生命周期、`send-keys`、Ctrl-C、capture 和临时 pane transcript；OpenSSH 继续负责受信任 alias、Agent、known_hosts、ControlMaster 和登录身份。随机 begin/end marker 只属于 transport 协议，不要求 Agent 编写。pane transcript 用于无固定历史行上限地收集当前命令输出，命令完成后只把脱敏内容追加到每 terminal 的 `工作日志.log`；原始 transcript 在 terminal 关闭或 Runtime dispose 时删除。
+
+`terminal_read`、`terminal_write` 和 `terminal_edit` 在已有 pane 上构造 terminal-bound Read/Write/Edit operations。相对路径保留远端 shell 当前 cwd 语义，工具层继续复用本地 schema、截断、精确替换、Diff 和 renderer；内部文件命令跳过输出审阅，避免读取长文件时产生无用模型调用；工作日志只记录语义化文件操作，不复制文件内容或 Base64 载荷。
 
 `TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 与 `PrivilegeRuntime` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
 

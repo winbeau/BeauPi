@@ -814,6 +814,8 @@ export class AgentSession {
 						"remote_bash",
 						"remote_exec",
 						"terminal_bash",
+						"terminal_edit",
+						"terminal_write",
 					].includes(toolCall.name);
 					await this.dynamicTaskRuntime.noteToolStarted({
 						toolCallId: toolCall.id,

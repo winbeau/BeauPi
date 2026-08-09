@@ -56,6 +56,27 @@ describe("BashExecutionComponent width handling (#2569)", () => {
 		}
 	});
 
+	it("collapses completed error output to the last ten lines until expanded", () => {
+		const { stub } = createTuiStub(120);
+		const component = new BashExecutionComponent("long-running-command", stub);
+		component.appendOutput(
+			["first-hidden", "second-hidden", ...Array.from({ length: 10 }, (_, index) => `visible-${index + 1}`)].join(
+				"\n",
+			),
+		);
+		component.setComplete(1, false);
+
+		const collapsed = component.render(120).join("\n");
+		expect(collapsed).toContain("2 more lines");
+		expect(collapsed).not.toContain("first-hidden");
+		expect(collapsed).not.toContain("second-hidden");
+		expect(collapsed).toContain("visible-1");
+		expect(collapsed).toContain("visible-10");
+
+		component.setExpanded(true);
+		expect(component.render(120).join("\n")).toContain("first-hidden");
+	});
+
 	it("re-computes lines when width changes between renders", () => {
 		const { stub } = createTuiStub(200);
 		const component = new BashExecutionComponent("echo hello", stub);

@@ -222,6 +222,7 @@ export interface BashToolOptions {
 const BASH_CALL_ANIMATION_INTERVAL_MS = 120;
 const BASH_CALL_ELLIPSIS_FRAMES = [".  ", ".. ", "...", ".. "] as const;
 const BASH_UPDATE_THROTTLE_MS = 100;
+const BASH_ERROR_PREVIEW_LINES = 10;
 
 type BashRenderState = {
 	startedAt: number | undefined;
@@ -362,8 +363,19 @@ function rebuildBashResultRenderComponent(
 			.map((line) => theme.fg("toolOutput", line))
 			.join("\n");
 
-		if (options.expanded || isError) {
+		if (options.expanded) {
 			component.addChild(new Text(styledOutput, 0, 0));
+		} else if (isError) {
+			const outputLines = output.split("\n");
+			const visibleLines = outputLines.slice(-BASH_ERROR_PREVIEW_LINES);
+			const hiddenLines = outputLines.length - visibleLines.length;
+			if (hiddenLines > 0) {
+				const hint =
+					theme.fg("muted", `… ${hiddenLines} earlier line${hiddenLines === 1 ? "" : "s"} hidden (`) +
+					`${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+				component.addChild(singleLineComponent(hint));
+			}
+			component.addChild(new Text(visibleLines.map((line) => theme.fg("toolOutput", line)).join("\n"), 0, 0));
 		} else {
 			const outputLineCount = truncation?.truncated ? truncation.totalLines : output.split("\n").length;
 			const lineLabel = outputLineCount === 1 ? "line" : "lines";

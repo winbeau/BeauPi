@@ -1,15 +1,17 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { ExtensionContext, ToolRenderContext } from "../src/core/extensions/types.ts";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
+import { classifyPolicyOperation, resolvePolicyConfig } from "../src/core/policy/index.ts";
 import {
 	createRemoteToolDefinitions,
 	ExecutionTargetRegistry,
 	FakeSshTmuxAdapter,
 	RemoteExecutionRuntime,
+	type TerminalOutputReviewer,
 } from "../src/core/remote/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -24,7 +26,7 @@ afterEach(() => {
 	}
 });
 
-async function createSetup() {
+async function createSetup(outputReviewer?: TerminalOutputReviewer) {
 	const cwd = join(tmpdir(), `beaupi-remote-tools-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(cwd, { recursive: true });
 	cleanup.push(cwd);
@@ -47,6 +49,7 @@ async function createSetup() {
 		targets,
 		adapter,
 		monitorRuntime: monitor,
+		outputReviewer,
 	});
 	const definitions = Object.fromEntries(
 		createRemoteToolDefinitions(runtime).map((definition) => [definition.name, definition]),
@@ -128,6 +131,190 @@ describe("M7 remote tools", () => {
 		});
 		const close = await execute(setup.definitions.terminal_close, { terminalId: "tool-terminal" });
 		expect(close.details).toMatchObject({ operation: "terminal_close", ok: true, status: "completed" });
+	});
+
+	it("runs read, write, and edit through an existing terminal with local-tool rendering parity", async () => {
+		const setup = await createSetup();
+		await execute(setup.definitions.target_select, { targetId: "fake" });
+		const terminal = await execute(setup.definitions.terminal_create, { terminalId: "files" });
+		const filePath = "src/example.txt";
+		const readOutput = Array.from({ length: 11 }, (_, index) => `line-${String(index + 1).padStart(2, "0")}`).join(
+			"\n",
+		);
+		const readEncoded = Buffer.from(`${readOutput}\n`, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("files", "test -r -- 'src/example.txt'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/example.txt' | tr -d '\\n'", {
+			stdout: readEncoded,
+			exitCode: 0,
+		});
+
+		const readArgs = { terminalId: "files", path: filePath };
+		const readResult = await execute(setup.definitions.terminal_read, readArgs);
+		expect(readResult.content[0]).toMatchObject({ type: "text", text: `${readOutput}\n` });
+		expect(setup.adapter.terminalCommandCalls).toContainEqual({
+			terminalId: "files",
+			command: "base64 < 'src/example.txt' | tr -d '\\n'",
+		});
+		expect(setup.adapter.commandCalls).not.toContain("cd '/workspace' && base64 < 'src/example.txt' | tr -d '\\n'");
+		const limitedRead = await execute(setup.definitions.terminal_read, {
+			terminalId: "files",
+			path: filePath,
+			offset: 2,
+			limit: 2,
+		});
+		expect(limitedRead.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("line-02\nline-03"),
+		});
+		expect(limitedRead.content[0]).toMatchObject({ text: expect.stringContaining("Use offset=4 to continue") });
+
+		const readContext = {
+			args: readArgs,
+			toolCallId: "terminal-read-render",
+			invalidate: () => {},
+			lastComponent: undefined,
+			state: {},
+			cwd: setup.cwd,
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+			expanded: false,
+			showImages: true,
+			isError: false,
+		} satisfies ToolRenderContext<Record<string, never>, typeof readArgs>;
+		const readCall = setup.definitions.terminal_read.renderCall?.(readArgs as never, theme, readContext);
+		expect(stripAnsi(readCall?.render(160).join("\n") ?? "")).toContain("Terminal Read [files](src/example.txt)");
+		const readRendered = setup.definitions.terminal_read.renderResult?.(
+			readResult as never,
+			{ expanded: false, isPartial: false },
+			theme,
+			readContext,
+		);
+		const readPreview = stripAnsi(readRendered?.render(120).join("\n") ?? "");
+		expect(readPreview).toContain("line-10");
+		expect(readPreview).not.toContain("line-11");
+		expect(readPreview).toContain("1 more lines");
+
+		const imagePath = "src/pixel.png";
+		const imageEncoded =
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+		setup.adapter.setTerminalCommandResult("files", "test -r -- 'src/pixel.png'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/pixel.png' | tr -d '\\n'", {
+			stdout: imageEncoded,
+			exitCode: 0,
+		});
+		const imageResult = await execute(setup.definitions.terminal_read, { terminalId: "files", path: imagePath });
+		expect(imageResult.content).toContainEqual(expect.objectContaining({ type: "image", mimeType: "image/png" }));
+
+		const writeContent = "created\n";
+		const writeEncoded = Buffer.from(writeContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("files", "mkdir -p -- 'src'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", `printf %s '${writeEncoded}' | base64 -d > 'src/example.txt'`, {
+			exitCode: 0,
+		});
+		const writeArgs = { terminalId: "files", path: filePath, content: writeContent };
+		const writeResult = await execute(setup.definitions.terminal_write, writeArgs);
+		expect(writeResult.details).toMatchObject({ bytesWritten: Buffer.byteLength(writeContent, "utf8") });
+		const writeCall = setup.definitions.terminal_write.renderCall?.(writeArgs as never, theme, {
+			...readContext,
+			args: writeArgs,
+		} as never);
+		expect(stripAnsi(writeCall?.render(160).join("\n") ?? "")).toContain("Terminal Write [files](src/example.txt)");
+
+		setup.adapter.setTerminalCommandResult("files", "test -w -- 'src/example.txt'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/example.txt' | tr -d '\\n'", {
+			stdout: Buffer.from("before\n", "utf8").toString("base64"),
+			exitCode: 0,
+		});
+		const editedContent = "after\n";
+		const editEncoded = Buffer.from(editedContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("files", `printf %s '${editEncoded}' | base64 -d > 'src/example.txt'`, {
+			exitCode: 0,
+		});
+		const editArgs = {
+			terminalId: "files",
+			path: filePath,
+			edits: [{ oldText: "before", newText: "after" }],
+		};
+		const editResult = await execute(setup.definitions.terminal_edit, editArgs);
+		expect(editResult.details).toMatchObject({ diff: expect.stringContaining("+1 after") });
+		const editContext = {
+			...readContext,
+			args: editArgs,
+			toolCallId: "terminal-edit-render",
+			state: {},
+		} as never;
+		const editCall = setup.definitions.terminal_edit.renderCall?.(editArgs as never, theme, editContext);
+		setup.definitions.terminal_edit.renderResult?.(
+			editResult as never,
+			{ expanded: false, isPartial: false },
+			theme,
+			editContext,
+		);
+		const editRendered = stripAnsi(editCall?.render(160).join("\n") ?? "");
+		expect(editRendered).toContain("Terminal Update [files](src/example.txt)");
+		expect(editRendered).toContain("after");
+
+		const logPath = (terminal.details as { logPath: string }).logPath;
+		const workLog = readFileSync(logPath, "utf8");
+		expect(workLog).toContain("command=Terminal Read 'src/example.txt'");
+		expect(workLog).toContain("command=Terminal Write 'src/example.txt'");
+		expect(workLog).not.toContain(readEncoded);
+		expect(workLog).not.toContain(imageEncoded);
+		expect(workLog).not.toContain(writeEncoded);
+		expect(workLog).not.toContain(editEncoded);
+
+		const policy = classifyPolicyOperation({
+			toolName: "terminal_write",
+			args: writeArgs,
+			cwd: setup.cwd,
+			availableTools: Object.keys(setup.definitions),
+			config: resolvePolicyConfig(undefined),
+		});
+		expect(policy?.descriptor).toMatchObject({
+			target: "terminal:files",
+			access: "write",
+			workspaceMutation: true,
+			fallbackFamily: "terminal",
+		});
+	});
+
+	it("preserves read failure semantics without invoking the output reviewer", async () => {
+		let reviewCalls = 0;
+		const setup = await createSetup({
+			async review() {
+				reviewCalls += 1;
+				return { text: "reviewed", status: "completed", inputTruncated: false };
+			},
+		});
+		await execute(setup.definitions.target_select, { targetId: "fake" });
+		const terminal = await execute(setup.definitions.terminal_create, { terminalId: "missing-file" });
+		setup.adapter.setTerminalCommandResult("missing-file", "test -r -- 'missing.txt'", { exitCode: 1 });
+
+		await expect(
+			execute(setup.definitions.terminal_read, { terminalId: "missing-file", path: "missing.txt" }),
+		).rejects.toThrow("Terminal file is not readable");
+
+		const failedWriteContent = "secret payload";
+		const failedWriteEncoded = Buffer.from(failedWriteContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("missing-file", "mkdir -p -- '.'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult(
+			"missing-file",
+			`printf %s '${failedWriteEncoded}' | base64 -d > 'broken.txt'`,
+			{ stderr: "disk full\n", exitCode: 1 },
+		);
+		await expect(
+			execute(setup.definitions.terminal_write, {
+				terminalId: "missing-file",
+				path: "broken.txt",
+				content: failedWriteContent,
+			}),
+		).rejects.toThrow("Terminal file write failed");
+
+		const workLog = readFileSync((terminal.details as { logPath: string }).logPath, "utf8");
+		expect(workLog).toContain("disk full");
+		expect(workLog).not.toContain(failedWriteEncoded);
+		expect(reviewCalls).toBe(0);
 	});
 
 	it("uses the standard Tool title style without rendering a Full log hint", async () => {
