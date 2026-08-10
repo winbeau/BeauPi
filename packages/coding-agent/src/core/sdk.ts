@@ -16,6 +16,7 @@ import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
+import type { PlaywrightRuntime } from "./playwright/index.ts";
 import { createPolicyConfigProvider, type PolicyInteractionHandler, PolicyRuntime } from "./policy/index.ts";
 import {
 	createPrivilegedExecToolDefinition,
@@ -98,6 +99,8 @@ export interface CreateAgentSessionOptions {
 	policyHandler?: PolicyInteractionHandler;
 	/** Inject a session-scoped Policy Runtime, primarily for deterministic tests and custom hosts. */
 	policyRuntime?: PolicyRuntime;
+	/** Inject a session-scoped Playwright Runtime, primarily for deterministic tests and custom hosts. */
+	playwrightRuntime?: PlaywrightRuntime;
 	/** Legacy compatibility input. Advisory-only Policy has no interactive mode distinction. */
 	policyInteractionMode?: "coordinator" | "controlled";
 	/** In-process handler for the controlled privilege terminal. Without one, sudo returns interaction_required. */
@@ -162,6 +165,7 @@ export type {
 	SlashCommandSource,
 	ToolDefinition,
 } from "./extensions/index.ts";
+export * from "./playwright/index.ts";
 export type { PromptTemplate } from "./prompt-templates.ts";
 export type { Skill } from "./skills.ts";
 export type { Tool } from "./tools/index.ts";
@@ -428,6 +432,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"docs_read",
 		"docs_resolve_task",
 		"ask_user_question",
+		"playwright",
 		"tasks_update",
 		"privileged_exec",
 		"web_search",
@@ -658,6 +663,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		documentRuntime,
 		questionRuntime,
 		policyRuntime,
+		playwrightRuntime: options.playwrightRuntime,
 		privilegeRuntime,
 		remoteRuntime,
 		dynamicTasksEnabled:

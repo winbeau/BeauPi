@@ -20,6 +20,7 @@ export type PolicyOperationKind =
 	| "terminal_command"
 	| "network_search"
 	| "network_fetch"
+	| "browser_state"
 	| "shell_network_fallback"
 	| "read_only_check"
 	| "workspace_write"

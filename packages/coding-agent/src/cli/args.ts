@@ -397,6 +397,7 @@ ${chalk.bold("Built-in Tool Names:")}
   docs_read        - Read a local document by heading or line range
   docs_resolve_task - Resolve local documents into an execution contract
   ask_user_question - Ask bounded single- or multi-select questions
+  playwright       - Control a session-scoped Chromium browser
   grep             - Search file contents (read-only, off by default)
   find             - Find files by glob pattern (read-only, off by default)
   ls               - List directory contents (read-only, off by default)

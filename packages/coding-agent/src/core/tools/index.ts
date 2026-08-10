@@ -1,3 +1,12 @@
+export type {
+	PlaywrightInput,
+	PlaywrightRuntimeOptions,
+	PlaywrightRuntimeToolDetailsV1,
+	PlaywrightSettings,
+	PlaywrightTarget,
+	PlaywrightToolDetails,
+} from "../playwright/index.ts";
+export { createPlaywrightToolDefinition, PlaywrightRuntime } from "../playwright/index.ts";
 export {
 	ASK_USER_QUESTION_PARAMETERS,
 	ASK_USER_QUESTION_TOOL_NAME,
@@ -108,6 +117,7 @@ export {
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { DocumentRuntime } from "../documents/document-runtime.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { createPlaywrightToolDefinition, PlaywrightRuntime } from "../playwright/index.ts";
 import { createAskUserQuestionToolDefinition, type QuestionRuntime } from "../question.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import {
@@ -136,7 +146,8 @@ export type ToolName =
 	| "docs_search"
 	| "docs_read"
 	| "docs_resolve_task"
-	| "ask_user_question";
+	| "ask_user_question"
+	| "playwright";
 export const allToolNames: Set<string> = new Set([
 	"read",
 	"bash",
@@ -149,6 +160,7 @@ export const allToolNames: Set<string> = new Set([
 	"docs_read",
 	"docs_resolve_task",
 	"ask_user_question",
+	"playwright",
 	"privileged_exec",
 	"web_search",
 	"web_fetch",
@@ -171,6 +183,11 @@ export interface ToolsOptions {
 	ls?: LsToolOptions;
 	documentRuntime?: DocumentRuntime;
 	questionRuntime?: QuestionRuntime;
+	playwrightRuntime?: PlaywrightRuntime;
+}
+
+function createPlaywrightDefinition(cwd: string, options?: ToolsOptions): ToolDef {
+	return createPlaywrightToolDefinition(options?.playwrightRuntime ?? new PlaywrightRuntime({ cwd }));
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -197,6 +214,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createDocsResolveTaskToolDefinition(options?.documentRuntime);
 		case "ask_user_question":
 			return createAskUserQuestionToolDefinition(options?.questionRuntime);
+		case "playwright":
+			return createPlaywrightDefinition(cwd, options);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -222,6 +241,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 		case "docs_read":
 		case "docs_resolve_task":
 		case "ask_user_question":
+		case "playwright":
 			return wrapToolDefinition(createToolDefinition(toolName, cwd, options));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
@@ -266,6 +286,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		docs_read: createDocsReadToolDefinition(options?.documentRuntime),
 		docs_resolve_task: createDocsResolveTaskToolDefinition(options?.documentRuntime),
 		ask_user_question: createAskUserQuestionToolDefinition(options?.questionRuntime),
+		playwright: createPlaywrightDefinition(cwd, options),
 	};
 }
 
@@ -301,5 +322,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		docs_read: wrapToolDefinition(createDocsReadToolDefinition(options?.documentRuntime)),
 		docs_resolve_task: wrapToolDefinition(createDocsResolveTaskToolDefinition(options?.documentRuntime)),
 		ask_user_question: wrapToolDefinition(createAskUserQuestionToolDefinition(options?.questionRuntime)),
+		playwright: wrapToolDefinition(createPlaywrightDefinition(cwd, options)),
 	};
 }

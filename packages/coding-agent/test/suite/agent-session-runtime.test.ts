@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -210,6 +210,43 @@ describe("AgentSessionRuntime characterization", () => {
 			"toolResult",
 			"assistant",
 		]);
+	});
+
+	it("cleans up Playwright across replacement flows and branch navigation", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("first");
+		await runtime.session.prompt("second");
+
+		const originalSessionFile = runtime.session.sessionFile;
+		if (!originalSessionFile) throw new Error("missing original session file");
+		const originalPlaywright = runtime.session.playwrightRuntime;
+		const originalReset = vi.spyOn(originalPlaywright, "reset");
+		const firstUserMessage = runtime.session.getUserMessagesForForking()[0];
+		if (!firstUserMessage) throw new Error("missing first user message");
+
+		await runtime.session.navigateTree(firstUserMessage.entryId);
+		expect(originalReset).toHaveBeenCalledOnce();
+
+		const newResult = await runtime.newSession();
+		expect(newResult.cancelled).toBe(false);
+		expect(originalPlaywright).not.toBe(runtime.session.playwrightRuntime);
+		await runtime.session.bindExtensions({});
+
+		const newSessionPlaywright = runtime.session.playwrightRuntime;
+		const newSessionDispose = vi.spyOn(newSessionPlaywright, "dispose");
+		const resumeResult = await runtime.switchSession(originalSessionFile);
+		expect(resumeResult.cancelled).toBe(false);
+		expect(newSessionDispose).toHaveBeenCalledOnce();
+		await runtime.session.bindExtensions({});
+
+		const resumedPlaywright = runtime.session.playwrightRuntime;
+		const resumedDispose = vi.spyOn(resumedPlaywright, "dispose");
+		const resumedUserMessage = runtime.session.getUserMessagesForForking()[0];
+		if (!resumedUserMessage) throw new Error("missing resumed user message");
+
+		const forkResult = await runtime.fork(resumedUserMessage.entryId);
+		expect(forkResult.cancelled).toBe(false);
+		expect(resumedDispose).toHaveBeenCalledOnce();
 	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {

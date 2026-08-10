@@ -492,8 +492,8 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`, `privileged_exec`
-- Default built-ins include coding, document, and `ask_user_question`; runtime-specific search, remote, monitor, and AgentPool tools are added when configured
+- Built-in tool names include `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`, `playwright`, and `privileged_exec`
+- Default built-ins include coding, document, `ask_user_question`, and `playwright`; runtime-specific search, remote, monitor, and AgentPool tools are added when configured
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
@@ -543,6 +543,25 @@ const { session } = await createAgentSession({
 ```
 
 > See [examples/sdk/05-tools.ts](../examples/sdk/05-tools.ts)
+
+#### Playwright browser
+
+`playwright` is a built-in sequential Tool backed by one lazy `PlaywrightRuntime` per `AgentSession`. The browser context and pages persist across Tool calls but do not survive session replacement, branch navigation, reload, or disposal.
+
+```typescript
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+
+const { session } = await createAgentSession({
+  sessionManager: SessionManager.inMemory(),
+  tools: ["read", "playwright"],
+});
+```
+
+Screenshot calls return ordinary `ImageContent`. Image-capable models receive it directly; text-only models use the existing `vision.model` service, and `images.blockImages` remains authoritative at the provider boundary. The Tool does not invoke a vision model itself.
+
+Normal SDK applications should use the session-owned Runtime. Deterministic tests or trusted hosts may inject `playwrightRuntime`. Call `await session.disposeRuntimeResources()` before synchronous `session.dispose()` when the host owns shutdown directly; `AgentSessionRuntime.dispose()` already awaits browser cleanup.
+
+See [Playwright Browser Tool](playwright.md) for actions, browser installation, settings, network boundaries, and screenshot limits.
 
 #### Interactive questions
 

@@ -227,6 +227,36 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 | `terminal.clearOnShrink` | boolean | `false` | Clear empty rows when content shrinks (can cause flicker) |
 | `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
+| `vision.model` | string | `"gpt-5.6-sol"` | Model used to describe images when the active Agent model cannot process image input |
+
+### Playwright
+
+The built-in `playwright` tool controls one session-scoped Chromium browser. Browser state is reset on session replacement, branch navigation, and settings reload. BeauPi includes the Playwright library but does not silently download a browser executable.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `playwright.executablePath` | string | - | Installed Chromium or Chrome executable; mutually exclusive with `channel` |
+| `playwright.channel` | `"chrome" \| "msedge"` | - | Installed browser channel; mutually exclusive with `executablePath` |
+| `playwright.headless` | boolean | `true` | Launch Chromium without a visible desktop window |
+| `playwright.actionTimeoutMs` | number | `15000` | Default locator, action, snapshot, screenshot, and evaluate timeout; clamped to 100–120000 ms |
+| `playwright.navigationTimeoutMs` | number | `30000` | Default navigation timeout; clamped to 100–120000 ms |
+| `playwright.allowPrivateNetwork` | boolean | `false` | Allow trusted private-LAN and carrier-grade NAT targets; localhost and loopback remain allowed by default |
+
+```json
+{
+  "playwright": {
+    "channel": "chrome",
+    "headless": true,
+    "actionTimeoutMs": 15000,
+    "navigationTimeoutMs": 30000,
+    "allowPrivateNetwork": false
+  }
+}
+```
+
+Project-scoped Playwright settings load only for trusted projects. An explicit browser executable runs native code with the current user's permissions. The tool blocks URL credentials, unsafe protocols, cloud metadata hostnames, link-local/reserved addresses, and private LAN targets by default. Use `web_search` and `web_fetch` when citations and their stricter fetch boundary are required.
+
+If no browser is available, install Google Chrome or explicitly run `npx playwright install chromium`; no npm lifecycle downloads Chromium automatically.
 
 ### Shell
 

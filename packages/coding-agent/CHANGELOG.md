@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the session-scoped built-in `playwright` Chromium Tool with structured navigation, ARIA snapshots, locator actions, page events, JavaScript evaluation, PNG screenshots, browser policy checks, and the existing multimodal/VisionService image pipeline.
+
+### Fixed
+
+- Fixed DeepSeek and strict OpenAI-compatible providers rejecting the built-in `playwright` function schema by declaring a root object while preserving strict action-union validation.
+
 ## [1.1.0] - 2026-08-09
 
 ### Added

@@ -28,6 +28,7 @@
 
 - [M12 后台任务与自动唤醒](./12-background-task-auto-wake.md)
 - [M13 受控 sudo 终端](./13-controlled-privilege-terminal.md)
+- [M16 原生 Playwright 工具](./16-native-playwright.md)
 
 ## 计划状态
 

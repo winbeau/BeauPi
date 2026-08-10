@@ -230,6 +230,7 @@ const TOOL_LABELS = Object.freeze({
 	ls: "List",
 	web_search: "Web Search",
 	web_fetch: "Fetch",
+	playwright: "Playwright",
 	delegate_task: "Agent",
 	ask_user_question: "Question",
 	workflow_run: "Workflow",
@@ -380,7 +381,12 @@ function summarizeValue(value: unknown): string | undefined {
 function summarizeToolArgs(toolName: string, args: unknown): string | undefined {
 	const record = asRecord(args);
 	if (!record) return undefined;
-	const keys = toolName === "bash" ? ["command"] : ["path", "file_path", "pattern", "query", "command", "task"];
+	const keys =
+		toolName === "bash"
+			? ["command"]
+			: toolName === "playwright"
+				? ["url", "savePath", "action"]
+				: ["path", "file_path", "pattern", "query", "command", "task"];
 	for (const key of keys) {
 		const summary = summarizeValue(record[key]);
 		if (summary) return summary;
@@ -396,7 +402,7 @@ function getCommandFromArgs(toolName: string, args: unknown): string | undefined
 
 function getPathFromArgs(args: unknown): string | undefined {
 	const record = asRecord(args);
-	const value = record?.path ?? record?.file_path;
+	const value = record?.path ?? record?.file_path ?? (record?.action === "screenshot" ? record.savePath : undefined);
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -1047,7 +1053,13 @@ export class TaskLedger {
 		if (existing) return existing;
 		const command = getCommandFromArgs(options.toolName, options.args);
 		const signature = command ? createCommandSignature(command) : undefined;
-		const verification = command ? isVerificationCommand(command) : VERIFICATION_TOOL_NAMES.has(options.toolName);
+		const playwrightAction = options.toolName === "playwright" ? asRecord(options.args)?.action : undefined;
+		const verification = command
+			? isVerificationCommand(command)
+			: VERIFICATION_TOOL_NAMES.has(options.toolName) ||
+				playwrightAction === "snapshot" ||
+				playwrightAction === "screenshot" ||
+				playwrightAction === "events";
 		const commit = command ? isCommitCommand(command) : false;
 		const record: MutableCommandRecord = {
 			id: options.id,
@@ -1206,7 +1218,9 @@ export class TaskLedger {
 		if (supplied.length > 0) return supplied;
 		const detailsPath = asRecord(details)?.path;
 		const path = typeof detailsPath === "string" ? detailsPath : getPathFromArgs(args);
-		return MODIFY_TOOL_NAMES.has(toolName) && path ? [normalizeFilePath(path, this.cwd)] : [];
+		return (MODIFY_TOOL_NAMES.has(toolName) || toolName === "playwright") && path
+			? [normalizeFilePath(path, this.cwd)]
+			: [];
 	}
 
 	private ingestDocumentRuntimeDetails(eventId: string, details: DocumentRuntimeToolDetails): void {

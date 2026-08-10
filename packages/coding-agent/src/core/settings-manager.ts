@@ -8,6 +8,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import type { ModelsSettings } from "./model-config.ts";
+import type { PlaywrightSettings } from "./playwright/types.ts";
 import type { PolicySettings } from "./policy/types.ts";
 import type { ExecutionTargetConfig } from "./remote/types.ts";
 import type { SearchSettings } from "./search/types.ts";
@@ -131,6 +132,7 @@ export interface Settings {
 	review?: ReviewSettings;
 	vision?: VisionSettings;
 	search?: SearchSettings;
+	playwright?: PlaywrightSettings;
 	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
@@ -1010,6 +1012,10 @@ export class SettingsManager {
 
 	getSearchSettings(): SearchSettings | undefined {
 		return this.settings.search ? structuredClone(this.settings.search) : undefined;
+	}
+
+	getPlaywrightSettings(): PlaywrightSettings | undefined {
+		return this.settings.playwright ? structuredClone(this.settings.playwright) : undefined;
 	}
 
 	getPolicySettings(): PolicySettings | undefined {

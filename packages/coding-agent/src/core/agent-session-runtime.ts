@@ -174,6 +174,7 @@ export class AgentSessionRuntime {
 			targetSessionFile,
 		});
 		this.beforeSessionInvalidate?.();
+		await this.session.disposeRuntimeResources();
 		this.session.dispose();
 	}
 
@@ -401,6 +402,7 @@ export class AgentSessionRuntime {
 			reason: "quit",
 		});
 		this.beforeSessionInvalidate?.();
+		await this.session.disposeRuntimeResources();
 		this.session.dispose();
 	}
 }

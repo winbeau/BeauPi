@@ -223,6 +223,7 @@ export type {
 	StagedPackageSource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export * from "./core/playwright/index.ts";
 export * from "./core/policy/index.ts";
 export * from "./core/privilege/index.ts";
 export * from "./core/remote/index.ts";
@@ -412,6 +413,7 @@ export {
 	createGrepToolDefinition,
 	createLocalBashOperations,
 	createLsToolDefinition,
+	createPlaywrightToolDefinition,
 	createReadToolDefinition,
 	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
@@ -440,6 +442,13 @@ export {
 	type LsToolInput,
 	type LsToolOptions,
 	type PendingQuestionInteraction,
+	type PlaywrightInput,
+	PlaywrightRuntime,
+	type PlaywrightRuntimeOptions,
+	type PlaywrightRuntimeToolDetailsV1,
+	type PlaywrightSettings,
+	type PlaywrightTarget,
+	type PlaywrightToolDetails,
 	QUESTION_ANSWER_SCHEMA,
 	QUESTION_LIMITS,
 	QUESTION_OPTION_SCHEMA,

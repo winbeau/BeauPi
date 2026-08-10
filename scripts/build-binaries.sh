@@ -146,9 +146,9 @@ for platform in "${PLATFORMS[@]}"; do
     # explicit build entrypoints. The runtime can still use new URL(...), but the
     # worker must be present in the compiled executable.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi.exe"
+        bun build --compile --target=bun-$platform --external playwright --external playwright-core ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi"
+        bun build --compile --target=bun-$platform --external playwright --external playwright-core ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/beaupi"
     fi
 done
 
@@ -169,6 +169,9 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
+    mkdir -p "$OUTPUT_DIR/$platform/node_modules"
+    cp -r ../../node_modules/playwright "$OUTPUT_DIR/$platform/node_modules/"
+    cp -r ../../node_modules/playwright-core "$OUTPUT_DIR/$platform/node_modules/"
 
     case "$platform" in
         darwin-arm64)

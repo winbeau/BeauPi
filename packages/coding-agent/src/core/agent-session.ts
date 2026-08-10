@@ -115,6 +115,12 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { MonitorRuntime } from "./monitor/monitor-runtime.ts";
 import {
+	attachPlaywrightRuntimeToolDetails,
+	createPlaywrightToolDefinition,
+	getPlaywrightRuntimeToolDetails,
+	PlaywrightRuntime,
+} from "./playwright/index.ts";
+import {
 	attachPolicyToolDetails,
 	classifyPolicyOperation,
 	hasPotentialShellPrivilege,
@@ -294,6 +300,8 @@ export interface AgentSessionConfig {
 	policyRuntime?: PolicyRuntime;
 	/** Session-scoped controlled privilege Runtime. */
 	privilegeRuntime?: PrivilegeRuntime;
+	/** Session-scoped Chromium Runtime. */
+	playwrightRuntime?: PlaywrightRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
 	monitorRuntime?: MonitorRuntime;
 	/** Optional session-scoped M12 Background Task Manager. Created here when omitted. */
@@ -394,6 +402,7 @@ export class AgentSession {
 	readonly questionRuntime: QuestionRuntime;
 	readonly policyRuntime: PolicyRuntime;
 	readonly privilegeRuntime: PrivilegeRuntime;
+	readonly playwrightRuntime: PlaywrightRuntime;
 	readonly dynamicTaskRuntime?: DynamicTaskRuntime;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
@@ -415,6 +424,7 @@ export class AgentSession {
 	private _pendingPromptPreflights = new Set<Promise<void>>();
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
+	private _playwrightRuntimeDisposePromise?: Promise<void>;
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: string[] = [];
@@ -663,6 +673,13 @@ export class AgentSession {
 				outputReviewer: terminalOutputReviewer,
 			});
 		this.privilegeRuntime.setOutputReviewerIfUnset(terminalOutputReviewer);
+		this.playwrightRuntime =
+			config.playwrightRuntime ??
+			new PlaywrightRuntime({
+				cwd: config.cwd,
+				getSettings: () => this.settingsManager.getPlaywrightSettings(),
+				getAutoResizeImages: () => this.settingsManager.getImageAutoResize(),
+			});
 		this._unsubscribePrivilegeRuntime = this.privilegeRuntime.subscribe((pending) => {
 			this.taskLedger.setPendingPrivilegeInteraction(pending);
 		});
@@ -802,9 +819,16 @@ export class AgentSession {
 						typeof args === "object" && args !== null && "command" in args
 							? (args as { command?: unknown }).command
 							: undefined;
+					const playwrightAction =
+						toolCall.name === "playwright" && typeof args === "object" && args !== null && "action" in args
+							? (args as { action?: unknown }).action
+							: undefined;
 					const verification =
 						(typeof command === "string" && isVerificationCommand(command)) ||
-						["test", "tests", "check", "verify", "lint", "typecheck", "build"].includes(toolCall.name);
+						["test", "tests", "check", "verify", "lint", "typecheck", "build"].includes(toolCall.name) ||
+						playwrightAction === "snapshot" ||
+						playwrightAction === "screenshot" ||
+						playwrightAction === "events";
 					const mutationTool = [
 						"edit",
 						"write",
@@ -821,7 +845,9 @@ export class AgentSession {
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
 						args,
-						workspaceMutation: mutationTool && analysis?.descriptor.workspaceMutation === true,
+						workspaceMutation:
+							(mutationTool || toolCall.name === "playwright") &&
+							analysis?.descriptor.workspaceMutation === true,
 						verification,
 					});
 				} catch {
@@ -858,7 +884,9 @@ export class AgentSession {
 			const workflowDetails = getWorkflowToolDetails(result.details);
 			const backgroundDetails = getBackgroundToolDetails(result.details);
 			const dynamicTaskDetails = getDynamicTaskToolDetails(result.details);
+			const playwrightDetails = getPlaywrightRuntimeToolDetails(result.details);
 			const runtimeError =
+				playwrightDetails?.ok === false ||
 				searchDetails?.ok === false ||
 				remoteDetails?.ok === false ||
 				privilegeDetails?.ok === false ||
@@ -909,6 +937,7 @@ export class AgentSession {
 				? attachDocumentRuntimeToolDetails(hookResult.details, documentDetails)
 				: hookResult.details;
 			if (searchDetails) details = attachSearchRuntimeToolDetails(details, searchDetails);
+			if (playwrightDetails) details = attachPlaywrightRuntimeToolDetails(details, playwrightDetails);
 			if (workflowDetails) details = attachWorkflowToolDetails(details, workflowDetails);
 			if (backgroundDetails) details = attachBackgroundToolDetails(details, backgroundDetails);
 			if (privilegeDetails) details = attachPrivilegeToolDetails(details, privilegeDetails);
@@ -1303,6 +1332,13 @@ export class AgentSession {
 	 * Remove all listeners and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
+	disposeRuntimeResources(): Promise<void> {
+		if (!this._playwrightRuntimeDisposePromise) {
+			this._playwrightRuntimeDisposePromise = this.playwrightRuntime.dispose();
+		}
+		return this._playwrightRuntimeDisposePromise;
+	}
+
 	dispose(): void {
 		try {
 			this.abortRetry();
@@ -1315,6 +1351,7 @@ export class AgentSession {
 			this.agent.abort();
 			void this.privilegeRuntime.dispose().finally(() => this.remoteRuntime.dispose());
 			void this.workflowRuntime?.dispose();
+			void this.disposeRuntimeResources();
 			this.backgroundRuntime.dispose();
 			this.monitorRuntime.dispose();
 			this._agentPool?.dispose();
@@ -3177,6 +3214,7 @@ export class AgentSession {
 					documentRuntime: this.documentRuntime,
 					questionRuntime: this.questionRuntime,
 				});
+		baseToolDefinitions.playwright = createPlaywrightToolDefinition(this.playwrightRuntime) as ToolDefinition;
 		if (this.dynamicTaskRuntime) {
 			baseToolDefinitions.tasks_update = createTasksUpdateToolDefinition(this.dynamicTaskRuntime) as ToolDefinition;
 		}
@@ -3222,6 +3260,7 @@ export class AgentSession {
 					"docs_read",
 					"docs_resolve_task",
 					"ask_user_question",
+					"playwright",
 					...(this.dynamicTaskRuntime ? ["tasks_update"] : []),
 				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
@@ -3237,6 +3276,7 @@ export class AgentSession {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
+		await this.playwrightRuntime.reset();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
@@ -3817,6 +3857,7 @@ export class AgentSession {
 			this.dynamicTaskRuntime?.rebuild(this.sessionManager.getBranch());
 			this.taskLedger.setBackgroundSnapshot(this.backgroundRuntime.getSnapshot());
 			if (this.workflowRuntime) this.taskLedger.setWorkflowSnapshots(this.workflowRuntime.list());
+			await this.playwrightRuntime.reset();
 			this.documentRuntime.restoreContract(this.taskLedger.getSnapshot().documentContract?.contract);
 			const documentContract = await this.documentRuntime.validateCurrentContract();
 			this.taskLedger.setDocumentRuntimeContract(documentContract);

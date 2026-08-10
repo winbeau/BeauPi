@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, isAbsolute, posix, relative, resolve, sep } from "node:path";
+import { getPlaywrightRuntimeToolDetails } from "../playwright/details.ts";
 import { getSearchRuntimeToolDetails } from "../search/types.ts";
 import type {
 	PolicyFailure,
@@ -87,6 +88,7 @@ const POLICY_MANAGED_TOOLS = new Set([
 	"terminal_close",
 	"web_search",
 	"web_fetch",
+	"playwright",
 ]);
 
 const PRIVILEGED_COMMANDS = new Set(["sudo", "su", "doas", "pkexec"]);
@@ -1258,6 +1260,54 @@ export function classifyPolicyOperation(input: PolicyOperationInput): PolicyOper
 			terminalCommandFallback: false,
 		};
 	}
+	if (input.toolName === "playwright") {
+		const action = stringArg(args, "action") ?? "unknown";
+		const pageId = stringArg(args, "pageId") ?? "active";
+		const savePath = action === "screenshot" ? stringArg(args, "savePath") : undefined;
+		const writes = savePath !== undefined;
+		const isSensitive = savePath ? sensitivePath(savePath, input.cwd, input.config) : false;
+		const outsideWorkspace = savePath
+			? !isInsideCwd(isAbsolute(savePath) ? savePath : resolve(input.cwd, savePath), input.cwd)
+			: false;
+		const sensitive = isSensitive || outsideWorkspace;
+		const pageOperation = action === "pages" ? stringArg(args, "operation") : undefined;
+		const readOnly =
+			action === "snapshot" || action === "screenshot" || action === "events" || pageOperation === "list";
+		const navigates = action === "navigate";
+		const classes: PolicyOperationKind[] = [
+			writes ? "workspace_write" : readOnly ? "read_only_check" : navigates ? "network_fetch" : "browser_state",
+		];
+		if (sensitive) classes.push("sensitive_path");
+		return {
+			descriptor: operation(input, {
+				kind: sensitive
+					? "sensitive_path"
+					: writes
+						? "workspace_write"
+						: readOnly
+							? "read_only_check"
+							: navigates
+								? "network_fetch"
+								: "browser_state",
+				classes,
+				access: writes ? "write" : readOnly ? "read" : navigates ? "network" : "write",
+				target: `browser:${pageId}`,
+				signatureParts: [action, hash(stableJson(args ?? {}))],
+				fallbackFamily: navigates ? "network" : undefined,
+				sensitive,
+				readOnly,
+				workspaceMutation: writes,
+				summary: writes
+					? sensitive
+						? "Save browser screenshot to sensitive or out-of-workspace path"
+						: "Save browser screenshot"
+					: `Browser ${action}`,
+			}),
+			requiresConfirmation: sensitive,
+			networkFallback: false,
+			terminalCommandFallback: false,
+		};
+	}
 	if (
 		[
 			"read",
@@ -1570,6 +1620,23 @@ export function classifyPolicyFailure(input: {
 	if (input.signal?.aborted) return { category: "user_cancelled", retryable: false };
 	const existingPolicy = asRecord(asRecord(input.details)?.policy);
 	if (existingPolicy && existingPolicy.executed === false) return undefined;
+	const playwright = getPlaywrightRuntimeToolDetails(input.details);
+	if (playwright?.ok === false) {
+		const code = playwright.diagnostic?.code;
+		const category: PolicyFailureCategory =
+			code === "cancelled"
+				? "user_cancelled"
+				: code === "timeout"
+					? "timeout"
+					: code === "browser_unavailable"
+						? "missing_dependency"
+						: code === "navigation"
+							? "network"
+							: code === "browser_disconnected"
+								? "session_lost"
+								: "configuration";
+		return { category, retryable: category === "network" || category === "timeout" };
+	}
 	const search = getSearchRuntimeToolDetails(input.details);
 	if (search?.ok === false) {
 		const code = search.diagnostics.find((item) => item.severity === "error")?.code;

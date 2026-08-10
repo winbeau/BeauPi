@@ -85,7 +85,7 @@ beaupi
 /login  # Then select provider
 ```
 
-Then talk to BeauPi. It includes the upstream tools plus BeauPi's document, task, sub-agent, workflow, monitoring, remote, search, background, and controlled-privilege tools. Add capabilities through [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [pi packages](#pi-packages).
+Then talk to BeauPi. It includes the upstream tools plus BeauPi's document, task, sub-agent, workflow, monitoring, remote, search, background, controlled-privilege, and session-scoped [Playwright browser](docs/playwright.md) tools. Add capabilities through [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [pi packages](#pi-packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -580,7 +580,7 @@ cat README.md | pi -p "Summarize this text"
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools by default but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools by default |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
+Default built-in tools include `read`, `bash`, `edit`, `write`, document tools, `ask_user_question`, and `playwright`. Read-only `grep`, `find`, and `ls` remain available by explicit selection. See [Playwright Browser Tool](docs/playwright.md) for the browser executable, security boundary, and screenshot vision behavior.
 
 ### Resource Options
 
