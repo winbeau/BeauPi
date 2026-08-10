@@ -144,11 +144,11 @@ Attribution:
 
 4. **CI publishes npm packages**: pushing the `vX.Y.Z` tag triggers `.github/workflows/build-binaries.yml`. The `publish-npm` job uses npm trusted publishing through GitHub Actions OIDC with environment `npm-publish`; no local `npm publish`, `npm whoami`, OTP, or WebAuthn flow is required.
 
-5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm. If the failure is validation-only (for example model-catalog drift in `Check`/`Test`), rerun via the workflow's recovery input:
+5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm. If the failure is validation-only, rerun via the workflow's recovery input:
    ```bash
    gh workflow run "Build BeauPi Release" -f tag=vX.Y.Z -f skip_validation=true
    ```
-   Otherwise fix the CI issue and rerun the tag workflow. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
+   Known recurring validation-only failure: `publish-npm` fails at the `Check` step with `packages/ai/test/*.test.ts` type errors such as `Argument of type '"gemini-2.0-flash"' is not assignable to parameter of type 'ModelId<...>'`, `Argument of type '"claude-opus-4-1-20250805"' ...`, or `Property 'maxTokensField' does not exist on type 'OpenAICompletionsCompat | OpenAIResponsesCompat'`. This is model-catalog/type drift between the checked-in catalogs and upstream model metadata, unrelated to the release changes; the `build` and `stage-github-release` jobs pass and the `Publish npm packages` step never runs. Local `npm run check` passes, so use the recovery input directly instead of diagnosing. Other failures: fix the CI issue and rerun the tag workflow. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
 
 ## User Override
 
