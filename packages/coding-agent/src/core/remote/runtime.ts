@@ -1272,7 +1272,7 @@ export class RemoteExecutionRuntime {
 				return Buffer.from(result.stdout, "utf8");
 			},
 			access: async (path) => {
-				const result = await this.remoteExec(`test -r -- ${shellQuote(this.remotePath(path))}`);
+				const result = await this.remoteExec(`test -r ${shellQuote(this.remotePath(path))}`);
 				if (result.exitCode !== 0) throw new Error(`Remote file is not readable: ${path}`);
 			},
 		};
@@ -1301,7 +1301,7 @@ export class RemoteExecutionRuntime {
 			readFile: read.readFile,
 			access: async (path) => {
 				await read.access(path);
-				const result = await this.remoteExec(`test -w -- ${shellQuote(this.remotePath(path))}`);
+				const result = await this.remoteExec(`test -w ${shellQuote(this.remotePath(path))}`);
 				if (result.exitCode !== 0) throw new Error(`Remote file is not writable: ${path}`);
 			},
 			writeFile: write.writeFile,
@@ -1329,7 +1329,7 @@ export class RemoteExecutionRuntime {
 			readFile,
 			access: async (path) => {
 				const terminalPath = this.terminalPath(path);
-				const result = await this.terminalBash(terminalId, `test -r -- ${shellQuote(terminalPath)}`, {
+				const result = await this.terminalBash(terminalId, `test -r ${shellQuote(terminalPath)}`, {
 					reviewOutput: false,
 				});
 				if (!result.ok) throw new Error(`Terminal file is not readable: ${path}`);
@@ -1376,7 +1376,7 @@ export class RemoteExecutionRuntime {
 			access: async (path) => {
 				await read.access(path);
 				const terminalPath = this.terminalPath(path);
-				const result = await this.terminalBash(terminalId, `test -w -- ${shellQuote(terminalPath)}`, {
+				const result = await this.terminalBash(terminalId, `test -w ${shellQuote(terminalPath)}`, {
 					reviewOutput: false,
 				});
 				if (!result.ok) throw new Error(`Terminal file is not writable: ${path}`);
@@ -1438,16 +1438,16 @@ export class RemoteExecutionRuntime {
 
 	private remotePath(localPath: string): string {
 		this.assertTarget();
-		return this.terminalPath(localPath);
-	}
-
-	private terminalPath(localPath: string): string {
 		const relativePath = relative(this.cwd, localPath);
 		if (!relativePath) return ".";
 		if (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath)) {
 			return relativePath.split(sep).join("/");
 		}
 		return localPath.split(sep).join("/");
+	}
+
+	private terminalPath(remotePath: string): string {
+		return remotePath.split(sep).join("/");
 	}
 
 	private async recordTerminalCommandOutput(

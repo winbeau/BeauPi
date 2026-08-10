@@ -172,7 +172,7 @@ describe("M7 execution targets", () => {
 		const relativeWorkspace = createSetup({ remoteCwd: "projects/pi" });
 		relativeWorkspace.runtime.selectTarget("fake");
 		await relativeWorkspace.runtime.createReadOperations().access(join(relativeWorkspace.cwd, "src/index.ts"));
-		expect(relativeWorkspace.adapter.commandCalls).toContain("cd 'projects/pi' && test -r -- 'src/index.ts'");
+		expect(relativeWorkspace.adapter.commandCalls).toContain("cd 'projects/pi' && test -r 'src/index.ts'");
 
 		const home = createSetup({ remoteCwd: false });
 		home.runtime.selectTarget("fake");

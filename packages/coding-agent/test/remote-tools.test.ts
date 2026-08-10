@@ -142,7 +142,7 @@ describe("M7 remote tools", () => {
 			"\n",
 		);
 		const readEncoded = Buffer.from(`${readOutput}\n`, "utf8").toString("base64");
-		setup.adapter.setTerminalCommandResult("files", "test -r -- 'src/example.txt'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "test -r 'src/example.txt'", { exitCode: 0 });
 		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/example.txt' | tr -d '\\n'", {
 			stdout: readEncoded,
 			exitCode: 0,
@@ -151,6 +151,7 @@ describe("M7 remote tools", () => {
 		const readArgs = { terminalId: "files", path: filePath };
 		const readResult = await execute(setup.definitions.terminal_read, readArgs);
 		expect(readResult.content[0]).toMatchObject({ type: "text", text: `${readOutput}\n` });
+		expect(readResult.details).toMatchObject({ path: filePath });
 		expect(setup.adapter.terminalCommandCalls).toContainEqual({
 			terminalId: "files",
 			command: "base64 < 'src/example.txt' | tr -d '\\n'",
@@ -198,7 +199,7 @@ describe("M7 remote tools", () => {
 		const imagePath = "src/pixel.png";
 		const imageEncoded =
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-		setup.adapter.setTerminalCommandResult("files", "test -r -- 'src/pixel.png'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "test -r 'src/pixel.png'", { exitCode: 0 });
 		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/pixel.png' | tr -d '\\n'", {
 			stdout: imageEncoded,
 			exitCode: 0,
@@ -214,14 +215,17 @@ describe("M7 remote tools", () => {
 		});
 		const writeArgs = { terminalId: "files", path: filePath, content: writeContent };
 		const writeResult = await execute(setup.definitions.terminal_write, writeArgs);
-		expect(writeResult.details).toMatchObject({ bytesWritten: Buffer.byteLength(writeContent, "utf8") });
+		expect(writeResult.details).toMatchObject({
+			path: filePath,
+			bytesWritten: Buffer.byteLength(writeContent, "utf8"),
+		});
 		const writeCall = setup.definitions.terminal_write.renderCall?.(writeArgs as never, theme, {
 			...readContext,
 			args: writeArgs,
 		} as never);
 		expect(stripAnsi(writeCall?.render(160).join("\n") ?? "")).toContain("Terminal Write [files](src/example.txt)");
 
-		setup.adapter.setTerminalCommandResult("files", "test -w -- 'src/example.txt'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("files", "test -w 'src/example.txt'", { exitCode: 0 });
 		setup.adapter.setTerminalCommandResult("files", "base64 < 'src/example.txt' | tr -d '\\n'", {
 			stdout: Buffer.from("before\n", "utf8").toString("base64"),
 			exitCode: 0,
@@ -237,7 +241,7 @@ describe("M7 remote tools", () => {
 			edits: [{ oldText: "before", newText: "after" }],
 		};
 		const editResult = await execute(setup.definitions.terminal_edit, editArgs);
-		expect(editResult.details).toMatchObject({ diff: expect.stringContaining("+1 after") });
+		expect(editResult.details).toMatchObject({ path: filePath, diff: expect.stringContaining("+1 after") });
 		const editContext = {
 			...readContext,
 			args: editArgs,
@@ -279,6 +283,60 @@ describe("M7 remote tools", () => {
 		});
 	});
 
+	it("keeps absolute Terminal file paths remote instead of canonicalizing them locally", async () => {
+		const setup = await createSetup();
+		await execute(setup.definitions.target_select, { targetId: "fake" });
+		await execute(setup.definitions.terminal_create, { terminalId: "absolute-files" });
+		const filePath = "/root/wenbiao_zhao/lingbot-va-attn-generate.py";
+		const initialContent = "before\n";
+		const initialEncoded = Buffer.from(initialContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("absolute-files", `test -r '${filePath}'`, { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("absolute-files", `base64 < '${filePath}' | tr -d '\\n'`, {
+			stdout: initialEncoded,
+			exitCode: 0,
+		});
+		const readResult = await execute(setup.definitions.terminal_read, {
+			terminalId: "absolute-files",
+			path: filePath,
+		});
+		expect(readResult.content[0]).toMatchObject({ type: "text", text: initialContent });
+		expect(readResult.details).toMatchObject({ path: filePath });
+
+		const writtenContent = "written\n";
+		const writtenEncoded = Buffer.from(writtenContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult("absolute-files", "mkdir -p -- '/root/wenbiao_zhao'", { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult(
+			"absolute-files",
+			`printf %s '${writtenEncoded}' | base64 -d > '${filePath}'`,
+			{ exitCode: 0 },
+		);
+		const writeResult = await execute(setup.definitions.terminal_write, {
+			terminalId: "absolute-files",
+			path: filePath,
+			content: writtenContent,
+		});
+		expect(writeResult.details).toMatchObject({ path: filePath });
+
+		setup.adapter.setTerminalCommandResult("absolute-files", `test -w '${filePath}'`, { exitCode: 0 });
+		setup.adapter.setTerminalCommandResult("absolute-files", `base64 < '${filePath}' | tr -d '\\n'`, {
+			stdout: Buffer.from(writtenContent, "utf8").toString("base64"),
+			exitCode: 0,
+		});
+		const editedContent = "edited\n";
+		const editedEncoded = Buffer.from(editedContent, "utf8").toString("base64");
+		setup.adapter.setTerminalCommandResult(
+			"absolute-files",
+			`printf %s '${editedEncoded}' | base64 -d > '${filePath}'`,
+			{ exitCode: 0 },
+		);
+		const editResult = await execute(setup.definitions.terminal_edit, {
+			terminalId: "absolute-files",
+			path: filePath,
+			edits: [{ oldText: "written", newText: "edited" }],
+		});
+		expect(editResult.details).toMatchObject({ path: filePath, diff: expect.stringContaining("+1 edited") });
+	});
+
 	it("preserves read failure semantics without invoking the output reviewer", async () => {
 		let reviewCalls = 0;
 		const setup = await createSetup({
@@ -289,7 +347,7 @@ describe("M7 remote tools", () => {
 		});
 		await execute(setup.definitions.target_select, { targetId: "fake" });
 		const terminal = await execute(setup.definitions.terminal_create, { terminalId: "missing-file" });
-		setup.adapter.setTerminalCommandResult("missing-file", "test -r -- 'missing.txt'", { exitCode: 1 });
+		setup.adapter.setTerminalCommandResult("missing-file", "test -r 'missing.txt'", { exitCode: 1 });
 
 		await expect(
 			execute(setup.definitions.terminal_read, { terminalId: "missing-file", path: "missing.txt" }),
@@ -513,6 +571,6 @@ describe("M7 remote tools", () => {
 		const path = join(setup.cwd, "hello.txt");
 		await expect(read.readFile(path)).resolves.toEqual(Buffer.from("hello\n"));
 		await expect(read.access(path)).resolves.toBeUndefined();
-		expect(setup.adapter.commandCalls).toContain("cd '/workspace' && test -r -- 'hello.txt'");
+		expect(setup.adapter.commandCalls).toContain("cd '/workspace' && test -r 'hello.txt'");
 	});
 });

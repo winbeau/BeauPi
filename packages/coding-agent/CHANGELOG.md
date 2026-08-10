@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `terminal_read`, `terminal_write`, and `terminal_edit` resolving remote paths through the local filesystem instead of the existing SSH shell.
+
 ## [1.1.1] - 2026-08-10
 
 ### Added

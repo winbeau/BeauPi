@@ -614,6 +614,7 @@ function createTerminalReadTool(
 			const { terminalId, ...input } = params;
 			return createReadToolDefinition(runtime.cwd, {
 				operations: runtime.createTerminalReadOperations(terminalId),
+				resolvePath: (path) => path,
 			}).execute(toolCallId, input, signal, onUpdate, ctx);
 		},
 		renderCall(args, currentTheme, context) {
@@ -655,6 +656,8 @@ function createTerminalWriteTool(
 			const { terminalId, ...input } = params;
 			return createWriteToolDefinition(runtime.cwd, {
 				operations: runtime.createTerminalWriteOperations(terminalId),
+				resolvePath: (path) => path,
+				mutationQueueKey: (path) => `terminal:${terminalId}:${path}`,
 			}).execute(toolCallId, input, signal, onUpdate, ctx);
 		},
 		renderCall(args, currentTheme, context) {
@@ -702,6 +705,8 @@ function createTerminalEditTool(
 			const { terminalId, ...input } = params;
 			return createEditToolDefinition(runtime.cwd, {
 				operations: runtime.createTerminalEditOperations(terminalId),
+				resolvePath: (path) => path,
+				mutationQueueKey: (path) => `terminal:${terminalId}:${path}`,
 				previewDiff: false,
 			}).execute(toolCallId, input, signal, onUpdate, ctx);
 		},

@@ -37,6 +37,10 @@ const defaultWriteOperations: WriteOperations = {
 export interface WriteToolOptions {
 	/** Custom operations for file writing. Default: local filesystem */
 	operations?: WriteOperations;
+	/** Resolve a tool path before invoking operations. Defaults to the local cwd resolver. */
+	resolvePath?: (path: string, cwd: string) => string;
+	/** Override the mutation queue key when the path is not local to this process. */
+	mutationQueueKey?: (resolvedPath: string) => string;
 	/** Renderer title. Default: Write */
 	displayName?: string;
 	/** Optional renderer context shown in brackets before the path. */
@@ -218,31 +222,36 @@ export function createWriteToolDefinition(
 			_onUpdate?,
 			_ctx?,
 		) {
-			const absolutePath = resolveToCwd(path, cwd);
+			const absolutePath = options?.resolvePath?.(path, cwd) ?? resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
-			return withFileMutationQueue(absolutePath, async () => {
-				// Do not reject from an abort event listener here: that would release the
-				// mutation queue while an in-flight filesystem operation may still finish.
-				// Checking signal.aborted after each await observes the same aborts while
-				// keeping the queue locked until the current operation has settled.
-				const throwIfAborted = (): void => {
-					if (signal?.aborted) throw new Error("Operation aborted");
-				};
+			const mutationQueueKey = options?.mutationQueueKey?.(absolutePath);
+			return withFileMutationQueue(
+				absolutePath,
+				async () => {
+					// Do not reject from an abort event listener here: that would release the
+					// mutation queue while an in-flight filesystem operation may still finish.
+					// Checking signal.aborted after each await observes the same aborts while
+					// keeping the queue locked until the current operation has settled.
+					const throwIfAborted = (): void => {
+						if (signal?.aborted) throw new Error("Operation aborted");
+					};
 
-				throwIfAborted();
-				// Create parent directories if needed.
-				await ops.mkdir(dir);
-				throwIfAborted();
+					throwIfAborted();
+					// Create parent directories if needed.
+					await ops.mkdir(dir);
+					throwIfAborted();
 
-				// Write the file contents.
-				await ops.writeFile(absolutePath, content);
-				throwIfAborted();
+					// Write the file contents.
+					await ops.writeFile(absolutePath, content);
+					throwIfAborted();
 
-				return {
-					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
-					details: { path: absolutePath, bytesWritten: Buffer.byteLength(content, "utf-8") },
-				};
-			});
+					return {
+						content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+						details: { path: absolutePath, bytesWritten: Buffer.byteLength(content, "utf-8") },
+					};
+				},
+				mutationQueueKey ? { key: mutationQueueKey } : undefined,
+			);
 		},
 		renderCall(args, theme, context) {
 			const renderArgs = args as { path?: string; file_path?: string; content?: string } | undefined;
