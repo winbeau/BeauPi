@@ -621,11 +621,9 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 			const input: DelegateTaskInput = {
 				task: nodePrompt(definition, snapshots),
 				profile: definition.profile,
-				budget: {
-					...definition.budget,
-					timeoutMs: definition.timeoutMs,
-				},
+				budget: definition.budget,
 				cancelStrategy: definition.cancelStrategy,
+				hardTimeoutMs: definition.timeoutMs,
 				cwd: lease?.path ?? this.cwd,
 				allowFileModifications: definition.writePolicy !== "none",
 			};

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed built-in sub-agents to use a ten-minute no-progress window plus a thirty-minute final execution limit; `delegate_task` `budget.timeoutMs` now narrows the renewable no-progress window instead of the final wall-clock limit.
+
+### Fixed
+
+- Fixed Agent Pool queue time consuming child execution budgets, queued sub-agents being unavailable to Monitor cancellation, a slot-handoff cancellation race that could strand later waiters, and active assistant/Tool streams appearing stalled in Monitor.
+
 ## [1.1.2] - 2026-08-10
 
 ### Fixed

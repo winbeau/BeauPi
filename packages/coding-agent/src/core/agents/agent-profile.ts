@@ -17,8 +17,10 @@ export interface AgentProfile {
 	maxTokens?: number;
 	/** Maximum number of model turns, including turns that execute tools. */
 	maxTurns?: number;
-	/** Maximum wall-clock time for the task. */
+	/** Final wall-clock limit once the task acquires a pool slot. */
 	timeoutMs?: number;
+	/** Maximum time without observable model, turn, or Tool activity. */
+	idleTimeoutMs?: number;
 	/** How a cancellation signal should stop the sub-agent. */
 	cancelStrategy?: AgentCancellationStrategy;
 	/** Whether edit/write tools may be exposed. */
@@ -32,7 +34,8 @@ export interface AgentPoolConfig {
 	defaultProfile?: string;
 }
 
-export const MAX_AGENT_TIMEOUT_MS = 10 * 60_000;
+export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 10 * 60_000;
+export const MAX_AGENT_TIMEOUT_MS = 30 * 60_000;
 
 export function calculateAgentConcurrencyLimit(cpuCount: number = availableParallelism()): number {
 	const normalizedCpuCount = Number.isFinite(cpuCount) ? Math.max(1, Math.floor(cpuCount)) : 1;
@@ -50,6 +53,7 @@ export const DEFAULT_AGENT_PROFILE: AgentProfile = Object.freeze({
 	toolAllowlist: ["read", "grep", "find", "ls", "docs_search", "docs_read", "docs_resolve_task"],
 	skillAllowlist: { allow: [] },
 	timeoutMs: MAX_AGENT_TIMEOUT_MS,
+	idleTimeoutMs: DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });
@@ -63,6 +67,7 @@ export const DEFAULT_RESEARCHER_PROFILE: AgentProfile = Object.freeze({
 	toolAllowlist: ["read", "docs_search", "docs_read", "docs_resolve_task", "web_search", "web_fetch"],
 	skillAllowlist: { allow: [] },
 	timeoutMs: MAX_AGENT_TIMEOUT_MS,
+	idleTimeoutMs: DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: false,
 });
@@ -86,6 +91,7 @@ export const DEFAULT_IMPLEMENTER_PROFILE: AgentProfile = Object.freeze({
 	],
 	skillAllowlist: { allow: [] },
 	timeoutMs: MAX_AGENT_TIMEOUT_MS,
+	idleTimeoutMs: DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	cancelStrategy: "abort",
 	allowFileModifications: true,
 });
@@ -110,8 +116,14 @@ export function validateAgentProfile(profile: AgentProfile): void {
 	assertPositiveInteger(profile.maxTokens, `Agent profile ${JSON.stringify(profile.id)} maxTokens`);
 	assertPositiveInteger(profile.maxTurns, `Agent profile ${JSON.stringify(profile.id)} maxTurns`);
 	assertPositiveInteger(profile.timeoutMs, `Agent profile ${JSON.stringify(profile.id)} timeoutMs`);
+	assertPositiveInteger(profile.idleTimeoutMs, `Agent profile ${JSON.stringify(profile.id)} idleTimeoutMs`);
 	if (profile.timeoutMs !== undefined && profile.timeoutMs > MAX_AGENT_TIMEOUT_MS) {
 		throw new Error(`Agent profile ${JSON.stringify(profile.id)} timeoutMs cannot exceed ${MAX_AGENT_TIMEOUT_MS}`);
+	}
+	if (profile.idleTimeoutMs !== undefined && profile.idleTimeoutMs > MAX_AGENT_TIMEOUT_MS) {
+		throw new Error(
+			`Agent profile ${JSON.stringify(profile.id)} idleTimeoutMs cannot exceed ${MAX_AGENT_TIMEOUT_MS}`,
+		);
 	}
 	if (
 		profile.cancelStrategy !== undefined &&

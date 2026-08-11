@@ -187,8 +187,8 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - 优先使用 Pi SDK 创建进程内独立 `AgentSession`
 - 共享 ModelRuntime、认证、缓存和并发控制
 - 子 Agent 上下文、工具、预算和 System Prompt 相互隔离
-- 所有内置 Profile 的 wall-clock 上限为 10 分钟；自定义 Profile 和单次 request 只能缩短该上限，仍可显式配置额外 token 或 turn 预算
-- Agent Pool 同时运行的子 Agent 上限为 `max(1, floor(availableParallelism() / 3))`；显式配置只能进一步降低；同一批独立 `delegate_task` 调用允许并行执行
+- 所有内置 Profile 在获得并发槽位后使用 10 分钟无进展窗口和 30 分钟最终 wall-clock 硬上限；排队不消耗执行预算；单次 request 的 `budget.timeoutMs` 只缩短无进展窗口，持续的 assistant/turn/Tool 活动可续期到 Profile 硬上限，仍可显式配置额外 token 或 turn 预算
+- Agent Pool 同时运行的子 Agent 上限为 `max(1, floor(availableParallelism() / 3))`；显式配置只能进一步降低；同一批独立 `delegate_task` 调用允许并行执行；排队任务可取消，取消槽位交接中的 waiter 不得阻塞后续任务
 - 超时结果优先保留最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不能返回空 summary
 - 明确范围的子任务不得自动解析完整 Document Contract；只有显式文档驱动审查才调用 `docs_resolve_task`
 - Monitor 保存有界 turn/Tool/目标路径/结果活动事实，并直接显示预算错误、turn 使用和最后 Tool；Agent Tool Result 支持通过 Ctrl+O 查看结构化详情

@@ -340,8 +340,8 @@ Reviewer 子 Agent 可以独立检查一组修改，TUI 展示实时状态，主
 - BeauPi CLI 通过 `agentPool: {}` 启用 Coordinator 的 `delegate_task`；受控子 Agent 始终排除 `delegate_task`，即使 Coordinator 的全局 Tool registry 中存在该 Tool。
 - `delegate_task` 的 Tool 参数使用 TypeBox 校验。Coordinator 只接收包含状态、summary、citations/references、filesModified、checks、diagnostics、error、usage 和 budget 的结构化结果，不接收子 Agent transcript。
 - Agent Pool 使用共享 Runtime 的并发槽位，全局同时运行上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低；子 Agent 的 Provider、Tool 和 bash 操作都服从同一 AbortSignal，正常、失败、取消、超时、Provider/Tool 错误均转换为结构化状态。
-- 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态、预算、最后活动和错误字段发出；progress 包含 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
-- 所有内置 Profile 的 wall-clock 上限为 600 秒，自定义 Profile 和单次 request 只能缩短、不能延长；默认不设置 output token 或 turn 上限。独立 `delegate_task` 调用允许并行执行；超时优先返回最后已完成或流式生成的 assistant 文本，没有文本时返回最后活动摘要；Ctrl+O 可展开 Agent 结构化结果。子任务关闭自动 Document Contract preflight，明确范围的简单任务不先扫描项目文档，仍可在显式文档审查时调用 `docs_resolve_task`。
+- 生命周期事件以稳定 task ID、profile、任务摘要、时间、状态、预算、最后活动和错误字段发出；progress 包含 turn、Tool、目标路径与 started/succeeded/failed 结果，并对持续 assistant/Tool 流发出节流活动心跳，单次 terminal 事件可直接供 M6 Monitor Runtime 消费。
+- 所有内置 Profile 在获得并发槽位后使用 10 分钟无进展窗口和 30 分钟最终 wall-clock 硬上限；排队不消耗执行预算，单次 request 的较短 `budget.timeoutMs` 只收紧无进展窗口，assistant 流、turn 和 Tool start/update/end 活动会续期但不能越过硬上限；默认不设置 output token 或 turn 上限。独立 `delegate_task` 调用允许并行执行，排队任务可由 Monitor 取消，槽位交接中的取消不会阻塞后续 waiter；超时优先返回最后已完成或流式生成的 assistant 文本，没有文本时返回最后活动摘要；Ctrl+O 可展开 Agent 结构化结果。子任务关闭自动 Document Contract preflight，明确范围的简单任务不先扫描项目文档，仍可在显式文档审查时调用 `docs_resolve_task`。
 - 自定义 Profile 仍可通过 Agent loop 的 turn-end stop hook 配置 turn/token 预算，并在下一次 Provider 请求前结束，不通过 abort 产生额外的合成 turn。
 - faux provider 定向测试覆盖成功委派、Profile 选择、Tool/Skill/文件边界、token/轮数预算、超时部分输出和最后活动 fallback、取消、Provider/Tool 失败、Coordinator transcript 隔离、递归委派阻断、生命周期事件去重和 CPU-aware 并发限制。
 

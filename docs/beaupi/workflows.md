@@ -29,7 +29,7 @@ nodes:
     writePolicy: none
 ```
 
-节点支持 `id`、`agent`/`profile`、`task`、`dependsOn`、`condition`、`writePolicy`、`timeoutMs`、`failurePolicy`、`budget` 和 `cancelStrategy`。Runtime 在启动前校验额外字段、重复 ID、未知依赖、自依赖、环、未知 Profile、条件和预算。
+节点支持 `id`、`agent`/`profile`、`task`、`dependsOn`、`condition`、`writePolicy`、`timeoutMs`、`failurePolicy`、`budget` 和 `cancelStrategy`。节点级 `timeoutMs` 保持从获得 AgentPool 槽位后计算的最终硬上限；节点 `budget.timeoutMs` 与独立 `delegate_task` 一样，只收紧可由 assistant/turn/Tool 活动续期的无进展窗口。Runtime 在启动前校验额外字段、重复 ID、未知依赖、自依赖、环、未知 Profile、条件和预算。
 
 ## 条件语法
 

@@ -1004,6 +1004,8 @@ export class MonitorRuntime {
 				maxTurns: event.budget.maxTurns,
 				tokensUsed: event.budget.tokensUsed,
 				maxTokens: event.budget.maxTokens,
+				timeoutMs: event.budget.timeoutMs,
+				idleTimeoutMs: event.budget.idleTimeoutMs,
 				lastToolName: event.lastActivity?.toolName,
 				lastTargetPath: event.lastActivity?.targetPath,
 			};

@@ -20,6 +20,7 @@ import {
 	type AgentPoolConfig,
 	type AgentProfile,
 	calculateAgentConcurrencyLimit,
+	DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	DEFAULT_AGENT_PROFILE,
 	MAX_AGENT_TIMEOUT_MS,
 	resolveAgentProfiles,
@@ -52,7 +53,10 @@ export interface AgentTaskUsage {
 export interface AgentTaskBudgetSummary {
 	maxTokens?: number;
 	maxTurns?: number;
+	/** Final wall-clock limit after a pool slot is acquired. */
 	timeoutMs?: number;
+	/** Sliding no-progress limit refreshed by observable child activity. */
+	idleTimeoutMs?: number;
 	tokensUsed: number;
 	turnsUsed: number;
 	elapsedMs: number;
@@ -126,7 +130,7 @@ export type AgentTaskProgressListener = (event: AgentProgressEvent) => void;
 type CreateChildSession = (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 
 interface SlotWaiter {
-	resolve: () => void;
+	resolve: (release: () => void) => void;
 	reject: (error: Error) => void;
 	signal?: AbortSignal;
 	cleanup: () => void;
@@ -151,9 +155,12 @@ export interface DelegateTaskInput {
 	budget?: {
 		maxTokens?: number;
 		maxTurns?: number;
+		/** Sliding no-progress timeout; activity renews it up to the Profile hard limit. */
 		timeoutMs?: number;
 	};
 	cancelStrategy?: AgentCancellationStrategy;
+	/** Internal absolute limit used by Workflow nodes; not exposed by delegate_task. */
+	hardTimeoutMs?: number;
 	/** Internal Workflow override; not exposed by delegate_task. */
 	cwd?: string;
 	/** Internal Workflow boundary that can further restrict, never broaden, Profile write access. */
@@ -167,7 +174,13 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 		Type.Object({
 			maxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
 			maxTurns: Type.Optional(Type.Integer({ minimum: 1 })),
-			timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_TIMEOUT_MS })),
+			timeoutMs: Type.Optional(
+				Type.Integer({
+					minimum: 1,
+					maximum: MAX_AGENT_TIMEOUT_MS,
+					description: "No-progress timeout; child activity renews it up to the Profile hard limit",
+				}),
+			),
 		}),
 	),
 	cancelStrategy: Type.Optional(Type.Union([Type.Literal("abort"), Type.Literal("graceful")])),
@@ -176,6 +189,8 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 type DelegateTaskParameters = Static<typeof DELEGATE_TASK_PARAMETERS>;
 
 const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
+const AGENT_ACTIVITY_HEARTBEAT_MS = 15_000;
+
 const RESERVED_TOOL_NAMES = new Set([
 	"delegate_task",
 	"ask_user_question",
@@ -255,8 +270,14 @@ function agentBudgetSummary(result: AgentTaskResult): string {
 		result.budget.maxTurns === undefined
 			? `${result.budget.turnsUsed} turns`
 			: `${result.budget.turnsUsed}/${result.budget.maxTurns} turns`;
+	const hardTimeout =
+		result.budget.timeoutMs === undefined
+			? "no timeout"
+			: `${Math.round(result.budget.timeoutMs / 60_000)}m hard timeout`;
 	const timeout =
-		result.budget.timeoutMs === undefined ? "no timeout" : `${Math.round(result.budget.timeoutMs / 60_000)}m timeout`;
+		result.budget.idleTimeoutMs !== undefined && result.budget.idleTimeoutMs < (result.budget.timeoutMs ?? Infinity)
+			? `${Math.round(result.budget.idleTimeoutMs / 60_000)}m idle · ${hardTimeout}`
+			: hardTimeout;
 	const elapsedSeconds = Math.max(0, result.budget.elapsedMs) / 1000;
 	const elapsed = elapsedSeconds < 10 ? `${elapsedSeconds.toFixed(1)}s` : `${Math.round(elapsedSeconds)}s`;
 	return `${result.status} · ${turns} · ${result.budget.tokensUsed} output tokens · ${elapsed} · ${timeout}`;
@@ -391,6 +412,7 @@ function createResultBase(
 			maxTokens: profile.maxTokens,
 			maxTurns: profile.maxTurns,
 			timeoutMs: profile.timeoutMs,
+			idleTimeoutMs: profile.idleTimeoutMs,
 			tokensUsed: usage.outputTokens,
 			turnsUsed,
 			elapsedMs: Date.now() - startedAt,
@@ -403,7 +425,7 @@ function bestAvailableSummary(
 	partialAssistantText: string,
 	lastActivity: AgentTaskActivity | undefined,
 	status: AgentTaskStatus,
-	timeoutMs: number | undefined,
+	timeoutMessage: string | undefined,
 ): string {
 	const finalized = session?.getLastAssistantText()?.trim();
 	if (finalized) return finalized;
@@ -414,26 +436,40 @@ function bestAvailableSummary(
 		return `No assistant text was finalized. Last activity: ${lastActivity.message}${target}.`;
 	}
 	if (status === "timed_out") {
-		return `Agent timed out after ${timeoutMs ?? MAX_AGENT_TIMEOUT_MS}ms before producing assistant text.`;
+		return `${timeoutMessage ?? `Agent timed out after ${MAX_AGENT_TIMEOUT_MS}ms`} before producing assistant text.`;
 	}
 	return "No summary returned by the child agent.";
 }
 
-function mergeBudget(profile: AgentProfile, input: DelegateTaskInput): AgentProfile {
+type EffectiveAgentProfile = AgentProfile & { timeoutMs: number; idleTimeoutMs: number };
+type AgentTimeoutKind = "idle" | "hard";
+
+function mergeBudget(profile: AgentProfile, input: DelegateTaskInput): EffectiveAgentProfile {
 	const requestBudget = input.budget;
 	const minimum = (profileValue: number | undefined, requestValue: number | undefined): number | undefined => {
 		if (profileValue === undefined) return requestValue;
 		if (requestValue === undefined) return profileValue;
 		return Math.min(profileValue, requestValue);
 	};
+	const profileHardTimeoutMs = profile.timeoutMs ?? MAX_AGENT_TIMEOUT_MS;
+	const timeoutMs = Math.min(profileHardTimeoutMs, input.hardTimeoutMs ?? profileHardTimeoutMs);
+	const profileIdleTimeoutMs = profile.idleTimeoutMs ?? Math.min(DEFAULT_AGENT_IDLE_TIMEOUT_MS, timeoutMs);
+	const idleTimeoutMs = Math.min(profileIdleTimeoutMs, requestBudget?.timeoutMs ?? profileIdleTimeoutMs, timeoutMs);
 	return {
 		...profile,
 		maxTokens: minimum(profile.maxTokens, requestBudget?.maxTokens),
 		maxTurns: minimum(profile.maxTurns, requestBudget?.maxTurns),
-		timeoutMs: Math.min(profile.timeoutMs ?? MAX_AGENT_TIMEOUT_MS, requestBudget?.timeoutMs ?? MAX_AGENT_TIMEOUT_MS),
+		timeoutMs,
+		idleTimeoutMs,
 		cancelStrategy: input.cancelStrategy ?? profile.cancelStrategy,
 		allowFileModifications: input.allowFileModifications === false ? false : profile.allowFileModifications,
 	};
+}
+
+function timeoutErrorMessage(profile: EffectiveAgentProfile, kind: AgentTimeoutKind): string {
+	return kind === "idle"
+		? `Agent had no activity for ${profile.idleTimeoutMs}ms before its ${profile.timeoutMs}ms hard limit`
+		: `Agent reached its ${profile.timeoutMs}ms hard timeout`;
 }
 
 function getAllowedTools(
@@ -487,6 +523,7 @@ export class AgentPool {
 			promptSnippet: "delegate_task: delegate a bounded task to an isolated sub-agent",
 			promptGuidelines: [
 				"Never use delegate_task from a controlled sub-agent.",
+				"Omit budget.timeoutMs for ordinary reviews; when provided it is a no-progress window, not the expected total task duration.",
 				"When delegate_task returns clarificationRequest, resolve it from existing context or ask the user from the Coordinator; never fabricate a child answer.",
 				"When delegate_task times out, use its partial summary and lastActivity instead of treating the result as empty.",
 			],
@@ -573,16 +610,23 @@ export class AgentPool {
 		}
 	}
 
+	private claimSlot(): () => void {
+		this.activeCountValue++;
+		this.maxObservedConcurrencyValue = Math.max(this.maxObservedConcurrencyValue, this.activeCountValue);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.release();
+		};
+	}
+
 	private async acquire(signal?: AbortSignal): Promise<() => void> {
 		if (this.disposed) throw new Error("Agent pool is disposed");
 		if (signal?.aborted) throw abortError();
-		if (this.activeCountValue < this.maxConcurrency) {
-			this.activeCountValue++;
-			this.maxObservedConcurrencyValue = Math.max(this.maxObservedConcurrencyValue, this.activeCountValue);
-			return () => this.release();
-		}
+		if (this.activeCountValue < this.maxConcurrency) return this.claimSlot();
 
-		await new Promise<void>((resolve, reject) => {
+		const release = await new Promise<() => void>((resolve, reject) => {
 			let onAbort = (): void => {};
 			const waiter: SlotWaiter = {
 				resolve,
@@ -599,11 +643,15 @@ export class AgentPool {
 			this.waiters.push(waiter);
 			signal?.addEventListener("abort", onAbort, { once: true });
 		});
-		if (this.disposed) throw new Error("Agent pool is disposed");
-		if (signal?.aborted) throw abortError();
-		this.activeCountValue++;
-		this.maxObservedConcurrencyValue = Math.max(this.maxObservedConcurrencyValue, this.activeCountValue);
-		return () => this.release();
+		if (this.disposed) {
+			release();
+			throw new Error("Agent pool is disposed");
+		}
+		if (signal?.aborted) {
+			release();
+			throw abortError();
+		}
+		return release;
 	}
 
 	private release(): void {
@@ -616,7 +664,7 @@ export class AgentPool {
 				continue;
 			}
 			waiter.cleanup();
-			waiter.resolve();
+			waiter.resolve(this.claimSlot());
 			break;
 		}
 	}
@@ -697,10 +745,16 @@ export class AgentPool {
 		}
 
 		const effectiveProfile = mergeBudget(configuredProfile, input);
+		let executionStartedAt = startedAt;
+		let executionStartedMonotonic: number | undefined;
+		let lastActivityMonotonic = performance.now();
+		let lastProgressMonotonic = lastActivityMonotonic;
 		let release: (() => void) | undefined;
 		let child: AgentSession | undefined;
 		let unsubscribe: (() => void) | undefined;
-		let timeout: ReturnType<typeof setTimeout> | undefined;
+		let hardTimeout: ReturnType<typeof setTimeout> | undefined;
+		let idleTimeout: ReturnType<typeof setTimeout> | undefined;
+		let timeoutKind: AgentTimeoutKind | undefined;
 		let timedOut = false;
 		let budgetExceeded = false;
 		let cancellationRequested = false;
@@ -712,7 +766,49 @@ export class AgentPool {
 		let lastActivity: AgentTaskActivity | undefined;
 		const activeToolActivities = new Map<string, { toolName: string; targetPath?: string }>();
 		const diagnostics: string[] = [];
+		const waitAbortController = new AbortController();
+		const executionElapsedMs = (): number =>
+			executionStartedMonotonic === undefined ? 0 : Math.max(0, performance.now() - executionStartedMonotonic);
+		const stopForTimeout = (kind: AgentTimeoutKind): void => {
+			if (timedOut) return;
+			timedOut = true;
+			pendingGracefulCancellation = false;
+			timeoutKind = kind;
+			if (child) {
+				child.agent.abort();
+				child.abortBash();
+			} else {
+				waitAbortController.abort();
+			}
+		};
+		const armIdleTimeout = (): void => {
+			if (
+				idleTimeout ||
+				timedOut ||
+				cancellationRequested ||
+				effectiveProfile.idleTimeoutMs >= effectiveProfile.timeoutMs
+			) {
+				return;
+			}
+			const checkIdle = (): void => {
+				idleTimeout = undefined;
+				if (timedOut || cancellationRequested) return;
+				const remainingMs = effectiveProfile.idleTimeoutMs - (performance.now() - lastActivityMonotonic);
+				if (remainingMs > 0) {
+					idleTimeout = setTimeout(checkIdle, Math.max(1, Math.ceil(remainingMs)));
+					return;
+				}
+				stopForTimeout("idle");
+			};
+			idleTimeout = setTimeout(checkIdle, effectiveProfile.idleTimeoutMs);
+		};
+		const resetIdleTimeout = (): void => {
+			lastActivityMonotonic = performance.now();
+			armIdleTimeout();
+		};
 		const progress = (event: AgentProgressEvent): void => {
+			resetIdleTimeout();
+			lastProgressMonotonic = performance.now();
 			lastActivity = {
 				turn: event.turn,
 				toolName: event.toolName,
@@ -740,10 +836,24 @@ export class AgentPool {
 				message: event.message,
 			});
 		};
+		const heartbeat = (message: string, activity?: { toolName: string; targetPath?: string }): void => {
+			resetIdleTimeout();
+			if (performance.now() - lastProgressMonotonic < AGENT_ACTIVITY_HEARTBEAT_MS) return;
+			progress({
+				taskId,
+				profile: effectiveProfile.id,
+				turn: turns,
+				toolName: activity?.toolName,
+				targetPath: activity?.targetPath,
+				outcome: "started",
+				message,
+				timestamp: Date.now(),
+			});
+		};
 
-		const waitAbortController = new AbortController();
 		const cancelChild = (): void => {
 			cancellationRequested = true;
+			if (idleTimeout) clearTimeout(idleTimeout);
 			if (!child) {
 				waitAbortController.abort();
 				return;
@@ -757,24 +867,20 @@ export class AgentPool {
 		};
 
 		const onParentAbort = (): void => cancelChild();
+		this.activeTasks.set(taskId, { cancel: cancelChild });
 		signal?.addEventListener("abort", onParentAbort, { once: true });
 		if (signal?.aborted) cancelChild();
-		if (effectiveProfile.timeoutMs !== undefined) {
-			timeout = setTimeout(() => {
-				timedOut = true;
-				if (child) {
-					child.agent.abort();
-					child.abortBash();
-				} else {
-					waitAbortController.abort();
-				}
-			}, effectiveProfile.timeoutMs);
-		}
 
 		try {
 			release = await this.acquire(waitAbortController.signal);
+			executionStartedAt = Date.now();
+			executionStartedMonotonic = performance.now();
+			lastActivityMonotonic = executionStartedMonotonic;
+			lastProgressMonotonic = executionStartedMonotonic;
+			hardTimeout = setTimeout(() => stopForTimeout("hard"), effectiveProfile.timeoutMs);
+			resetIdleTimeout();
 			if (signal?.aborted || waitAbortController.signal.aborted) {
-				if (timedOut) throw new Error("Agent timed out");
+				if (timedOut) throw new Error(timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard"));
 				throw abortError();
 			}
 			if (this.disposed) throw new Error("Agent pool is disposed");
@@ -860,6 +966,7 @@ export class AgentPool {
 
 			const childEvents = (event: AgentSessionEvent): void => {
 				if (event.type === "agent_start") {
+					resetIdleTimeout();
 					this.emit({
 						taskId,
 						profile: effectiveProfile.id,
@@ -885,11 +992,13 @@ export class AgentPool {
 					return;
 				}
 				if (event.type === "message_update" && event.message.role === "assistant") {
+					heartbeat("Assistant response streaming");
 					const text = contentText(event.message.content).trim();
 					if (text) partialAssistantText = text;
 					return;
 				}
 				if (event.type === "message_end" && event.message.role === "assistant") {
+					resetIdleTimeout();
 					outputTokens += event.message.usage.output;
 					const text = contentText(event.message.content).trim();
 					if (text) partialAssistantText = text;
@@ -909,6 +1018,11 @@ export class AgentPool {
 						message: `Tool ${event.toolName} started`,
 						timestamp: Date.now(),
 					});
+					return;
+				}
+				if (event.type === "tool_execution_update") {
+					const activity = activeToolActivities.get(event.toolCallId);
+					heartbeat(`Tool ${event.toolName} still running`, activity);
 					return;
 				}
 				if (event.type === "tool_execution_end") {
@@ -933,7 +1047,6 @@ export class AgentPool {
 				}
 			};
 			unsubscribe = child.subscribe(childEvents);
-			this.activeTasks.set(taskId, { cancel: cancelChild });
 			if (signal?.aborted) cancelChild();
 			await child.prompt(input.task, { resolveDocumentContract: false });
 			const usage = usageFromSession(child);
@@ -949,7 +1062,7 @@ export class AgentPool {
 							? "failed"
 							: "completed";
 			const error = timedOut
-				? errorWithCode("timed_out", `Agent timed out after ${effectiveProfile.timeoutMs}ms`)
+				? errorWithCode("timed_out", timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard"))
 				: budgetExceeded
 					? errorWithCode("budget_exhausted", "Agent budget was exhausted before the task completed")
 					: assistant?.stopReason === "error"
@@ -957,13 +1070,13 @@ export class AgentPool {
 						: status === "cancelled"
 							? errorWithCode("cancelled", "Agent task was cancelled")
 							: undefined;
-			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, error);
+			const result = createResultBase(taskId, effectiveProfile, status, executionStartedAt, usage, turns, error);
 			result.summary = bestAvailableSummary(
 				child,
 				partialAssistantText,
 				lastActivity,
 				status,
-				effectiveProfile.timeoutMs,
+				timedOut ? timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard") : undefined,
 			);
 			if (lastActivity) result.lastActivity = { ...lastActivity };
 			const clarificationRequest = parseClarificationRequest(result.summary);
@@ -983,9 +1096,10 @@ export class AgentPool {
 				maxTokens: effectiveProfile.maxTokens,
 				maxTurns: effectiveProfile.maxTurns,
 				timeoutMs: effectiveProfile.timeoutMs,
+				idleTimeoutMs: effectiveProfile.idleTimeoutMs,
 				tokensUsed: usage.outputTokens,
 				turnsUsed: turns,
-				elapsedMs: Date.now() - startedAt,
+				elapsedMs: executionElapsedMs(),
 			};
 			this.emitTerminal(result, input.task);
 			return result;
@@ -998,24 +1112,34 @@ export class AgentPool {
 					: "failed";
 			const resultError =
 				status === "timed_out"
-					? errorWithCode("timed_out", `Agent timed out after ${effectiveProfile.timeoutMs}ms`)
+					? errorWithCode("timed_out", timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard"))
 					: status === "cancelled"
 						? errorWithCode("cancelled", "Agent task was cancelled")
 						: errorWithCode("agent_error", asErrorMessage(error));
-			const result = createResultBase(taskId, effectiveProfile, status, startedAt, usage, turns, resultError);
+			const result = createResultBase(
+				taskId,
+				effectiveProfile,
+				status,
+				executionStartedAt,
+				usage,
+				turns,
+				resultError,
+			);
+			result.budget.elapsedMs = executionElapsedMs();
 			result.summary = bestAvailableSummary(
 				child,
 				partialAssistantText,
 				lastActivity,
 				status,
-				effectiveProfile.timeoutMs,
+				timedOut ? timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard") : undefined,
 			);
 			result.diagnostics = [...diagnostics];
 			if (lastActivity) result.lastActivity = { ...lastActivity };
 			this.emitTerminal(result, input.task);
 			return result;
 		} finally {
-			if (timeout) clearTimeout(timeout);
+			if (hardTimeout) clearTimeout(hardTimeout);
+			if (idleTimeout) clearTimeout(idleTimeout);
 			signal?.removeEventListener("abort", onParentAbort);
 			unsubscribe?.();
 			child?.dispose();

@@ -24,6 +24,7 @@ export {
 	type AgentPoolConfig,
 	type AgentProfile,
 	calculateAgentConcurrencyLimit,
+	DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	DEFAULT_AGENT_PROFILE,
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_IMPLEMENTER_PROFILE,

@@ -690,7 +690,8 @@ const { session } = await createAgentSession({
       systemPrompt: "Review the assigned task and return concise findings.",
       toolAllowlist: ["read", "grep", "find", "ls"],
       skillAllowlist: { allow: [] },
-      timeoutMs: 300_000,
+      timeoutMs: 30 * 60_000,
+      idleTimeoutMs: 10 * 60_000,
       cancelStrategy: "abort",
       allowFileModifications: false,
     }],
@@ -698,7 +699,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use only a wall-clock timeout by default; custom profiles may opt into token or turn caps. `delegate_task`, `ask_user_question`, and `privileged_exec` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead, and a child cannot execute sudo without a Coordinator-owned interaction handler. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events.
+When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use a ten-minute no-progress timeout and a thirty-minute final wall-clock limit after a pool slot is acquired; queue wait does not consume either budget. A per-call `budget.timeoutMs` only narrows the no-progress window: assistant streaming, turn transitions, and Tool start/update/end activity renew it, but never beyond the Profile hard limit. Custom profiles may opt into token or turn caps and can lower either timeout. `delegate_task`, `ask_user_question`, and `privileged_exec` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead, and a child cannot execute sudo without a Coordinator-owned interaction handler. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events and both timeout limits.
 
 ### Extensions
 

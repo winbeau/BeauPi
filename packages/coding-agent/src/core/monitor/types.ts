@@ -61,6 +61,8 @@ export interface MonitorAgentTaskSnapshot {
 	maxTurns?: number;
 	tokensUsed: number;
 	maxTokens?: number;
+	timeoutMs?: number;
+	idleTimeoutMs?: number;
 	lastToolName?: string;
 	lastTargetPath?: string;
 }

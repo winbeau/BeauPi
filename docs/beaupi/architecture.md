@@ -112,7 +112,7 @@ interface AgentTaskResult {
 }
 ```
 
-生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态、预算、最后活动和错误；progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，单次 terminal event 可直接由 M6 Monitor Runtime 消费。所有内置 Profile 的 wall-clock 上限为 600 秒，自定义 Profile 或单次 request 只能缩短、不能延长；默认不设置 output token 或 turn 上限。Agent Pool 的全局并发上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低；同一 Assistant message 中的独立 `delegate_task` 调用使用并行 Tool 模式。超时时优先返回最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不再产生空 summary。Ctrl+O 展开 Agent Tool Result 时显示完整结构化摘要、预算、引用、检查和诊断。子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
+生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态、预算、最后活动和错误；progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，并对持续 assistant/Tool 流发出节流活动心跳，单次 terminal event 可直接由 M6 Monitor Runtime 消费。所有内置 Profile 在获得并发槽位后使用 10 分钟无进展窗口和 30 分钟最终 wall-clock 硬上限，排队时间不消耗执行预算；单次 request 的 `budget.timeoutMs` 只能缩短无进展窗口，assistant 流、turn 和 Tool start/update/end 活动会续期该窗口，但不能越过 Profile 硬上限。默认不设置 output token 或 turn 上限。Agent Pool 的全局并发上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低；同一 Assistant message 中的独立 `delegate_task` 调用使用并行 Tool 模式。排队任务可通过同一取消入口停止，槽位交接使用显式 lease，取消一个 waiter 不会饿死后续任务。超时时优先返回最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不再产生空 summary。Ctrl+O 展开 Agent Tool Result 时显示完整结构化摘要、预算、引用、检查和诊断。子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
 
 ## Skill Registry
 

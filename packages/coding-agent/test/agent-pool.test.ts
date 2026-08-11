@@ -7,6 +7,7 @@ import {
 	type AgentLifecycleEvent,
 	type AgentPoolConfig,
 	calculateAgentConcurrencyLimit,
+	DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 	DEFAULT_AGENT_PROFILE,
 	DEFAULT_AGENT_PROFILES,
 	MAX_AGENT_TIMEOUT_MS,
@@ -83,13 +84,15 @@ function resourceLoaderWithSkills(skills: Skill[]): ResourceLoader {
 }
 
 describe("in-process Agent Pool and delegate_task", () => {
-	it("limits built-in profiles only by a ten-minute wall clock", () => {
+	it("gives built-in profiles a ten-minute idle window and thirty-minute hard limit", () => {
 		expect(DEFAULT_AGENT_PROFILE).toMatchObject({
 			id: "reviewer",
 			timeoutMs: MAX_AGENT_TIMEOUT_MS,
+			idleTimeoutMs: DEFAULT_AGENT_IDLE_TIMEOUT_MS,
 		});
 		for (const profile of DEFAULT_AGENT_PROFILES) {
 			expect(profile.timeoutMs).toBe(MAX_AGENT_TIMEOUT_MS);
+			expect(profile.idleTimeoutMs).toBe(DEFAULT_AGENT_IDLE_TIMEOUT_MS);
 			expect(profile.maxTokens).toBeUndefined();
 			expect(profile.maxTurns).toBeUndefined();
 		}
@@ -107,7 +110,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(pool.concurrencyLimit).toBe(calculateAgentConcurrencyLimit());
 	});
 
-	it("enforces the ten-minute cap for custom profiles and direct requests", async () => {
+	it("enforces the thirty-minute hard cap for custom profiles and direct requests", async () => {
 		expect(() =>
 			validateAgentProfile({
 				id: "too-long",
@@ -430,6 +433,7 @@ describe("in-process Agent Pool and delegate_task", () => {
 		const timedOut = await pool.delegateTask({ task: "Timeout", profile: "short" });
 		expect(timedOut.status).toBe("timed_out");
 		expect(timedOut.error?.code).toBe("timed_out");
+		expect(timedOut.error?.message).toContain("hard timeout");
 		expect(timedOut.summary).toContain("Last activity: Turn 1 started.");
 		expect(eventTypes(events, timedOut.taskId).filter((type) => type === "timed_out")).toHaveLength(1);
 
@@ -445,6 +449,168 @@ describe("in-process Agent Pool and delegate_task", () => {
 		const cancelled = await cancelledPromise;
 		expect(cancelled.status).toBe("cancelled");
 		expect(eventTypes(events, cancelled.taskId).filter((type) => type === "cancelled")).toHaveLength(1);
+	});
+
+	it("extends a shorter request timeout while the child keeps making progress", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "progressing", timeoutMs: 500 }],
+				defaultProfile: "progressing",
+			},
+		});
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 55));
+				return fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" });
+			},
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 55));
+				return fauxAssistantMessage("completed after continued progress");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Keep reviewing", budget: { timeoutMs: 80 } });
+
+		expect(result.status).toBe("completed");
+		expect(result.summary).toBe("completed after continued progress");
+		expect(result.budget.timeoutMs).toBe(500);
+		expect(result.budget.idleTimeoutMs).toBe(80);
+	});
+
+	it("stops a child that has no observable activity within the request timeout", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "idle-limit", timeoutMs: 200 }],
+				defaultProfile: "idle-limit",
+			},
+		});
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 60));
+				return fauxAssistantMessage("late response");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Wait without progress", budget: { timeoutMs: 20 } });
+
+		expect(result.status).toBe("timed_out");
+		expect(result.error?.message).toContain("no activity for 20ms");
+		expect(result.budget.timeoutMs).toBe(200);
+		expect(result.budget.idleTimeoutMs).toBe(20);
+	});
+
+	it("keeps a final hard limit even when progress keeps renewing the idle timeout", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "hard-limit", timeoutMs: 110 }],
+				defaultProfile: "hard-limit",
+			},
+		});
+		const continuingTurn = async () => {
+			await new Promise((resolve) => setTimeout(resolve, 45));
+			return fauxAssistantMessage(fauxToolCall("read", { path: "missing" }), { stopReason: "toolUse" });
+		};
+		harness.setResponses([continuingTurn, continuingTurn, continuingTurn, continuingTurn]);
+
+		const result = await pool.delegateTask({ task: "Keep looping", budget: { timeoutMs: 80 } });
+
+		expect(result.status).toBe("timed_out");
+		expect(result.error?.message).toContain("hard timeout");
+		expect(result.budget.timeoutMs).toBe(110);
+		expect(result.budget.idleTimeoutMs).toBe(80);
+	});
+
+	it("starts the timeout budget only after a concurrency slot is acquired", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				maxConcurrency: 1,
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "queued", timeoutMs: 500 }],
+				defaultProfile: "queued",
+			},
+		});
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 90));
+				return fauxAssistantMessage("first completed");
+			},
+			fauxAssistantMessage("queued child completed"),
+		]);
+
+		const [first, queued] = await Promise.all([
+			pool.delegateTask({ task: "occupy the slot" }),
+			pool.delegateTask({ task: "wait for the slot", budget: { timeoutMs: 50 } }),
+		]);
+
+		expect(first.status).toBe("completed");
+		expect(queued.status).toBe("completed");
+		expect(queued.summary).toBe("queued child completed");
+	});
+
+	it("allows Monitor cancellation while a child is queued", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				maxConcurrency: 1,
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "queue-cancel", timeoutMs: 500 }],
+				defaultProfile: "queue-cancel",
+			},
+		});
+		let queuedTaskId: string | undefined;
+		pool.subscribe((event) => {
+			if (event.type === "started" && event.taskSummary === "queued cancellation") queuedTaskId = event.taskId;
+		});
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 60));
+				return fauxAssistantMessage("slot holder completed");
+			},
+			fauxAssistantMessage("queued child should not run"),
+		]);
+
+		const holderPromise = pool.delegateTask({ task: "slot holder" });
+		const queuedPromise = pool.delegateTask({ task: "queued cancellation" });
+		expect(queuedTaskId).toBeDefined();
+		const accepted = pool.cancelTask(queuedTaskId!);
+		const [holder, queued] = await Promise.all([holderPromise, queuedPromise]);
+
+		expect(accepted).toBe(true);
+		expect(holder.status).toBe("completed");
+		expect(queued.status).toBe("cancelled");
+	});
+
+	it("does not strand later waiters when an acquired slot is cancelled during handoff", async () => {
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				maxConcurrency: 1,
+				profiles: [{ ...DEFAULT_TEST_PROFILE(), id: "handoff", timeoutMs: 120 }],
+				defaultProfile: "handoff",
+			},
+		});
+		const controller = new AbortController();
+		let firstTaskId: string | undefined;
+		pool.subscribe((event) => {
+			if (event.type === "started" && event.taskSummary === "first handoff") firstTaskId = event.taskId;
+			if (event.type === "completed" && event.taskId === firstTaskId) {
+				queueMicrotask(() => controller.abort());
+			}
+		});
+		harness.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				return fauxAssistantMessage("first completed");
+			},
+			fauxAssistantMessage("third completed"),
+		]);
+
+		const [first, cancelled, third] = await Promise.all([
+			pool.delegateTask({ task: "first handoff" }),
+			pool.delegateTask({ task: "cancelled handoff" }, controller.signal),
+			pool.delegateTask({ task: "third handoff" }),
+		]);
+
+		expect(first.status).toBe("completed");
+		expect(cancelled.status).toBe("cancelled");
+		expect(third.status).toBe("completed");
+		expect(third.summary).toBe("third completed");
 	});
 
 	it("returns streamed assistant text when a child times out mid-response", async () => {
@@ -550,7 +716,8 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(collapsed).not.toContain("second line");
 		expect(collapsed).toContain("to expand");
 		expect(expanded).toContain("second line");
-		expect(expanded).toContain("10m timeout");
+		expect(expanded).toContain("10m idle");
+		expect(expanded).toContain("30m hard timeout");
 	});
 
 	it("executes delegate_task through the Coordinator AgentSession without importing child history", async () => {
