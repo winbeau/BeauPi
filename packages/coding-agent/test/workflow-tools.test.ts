@@ -61,6 +61,20 @@ function details(result: AgentToolResult<unknown>): WorkflowToolDetails {
 }
 
 describe("workflow_* Tools", () => {
+	it("adds Workflow construction constraints to the system prompt", async () => {
+		const setup = await createSetup();
+		const prompt = setup.session.systemPrompt;
+
+		expect(prompt).toContain(
+			"put background only at the workflow_run top level next to workflow, never inside the Workflow object",
+		);
+		expect(prompt).toContain("Workflow and node ids must match ^[A-Za-z][A-Za-z0-9_-]*$");
+		expect(prompt).toContain("dots are invalid");
+		expect(prompt).toContain("Put timeoutMs on the Workflow node itself, not in budget");
+		expect(prompt).toContain("budget accepts only maxTokens and maxTurns");
+		expect(prompt).toContain("never send an empty budget object");
+	});
+
 	it("returns versioned run/status/cancel details and idempotent duplicate cancellation", async () => {
 		const setup = await createSetup();
 		setup.harness.setResponses([fauxAssistantMessage("done")]);

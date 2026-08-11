@@ -110,7 +110,10 @@ function createRunTool(runtime: WorkflowRuntime): ToolDefinition<typeof WORKFLOW
 		promptSnippet: "workflow_run: run a versioned built-in or YAML/JSON multi-Agent DAG",
 		promptGuidelines: [
 			profileGuidance,
-			"Set background=true when the DAG should continue after workflow_run returns; inspect it with workflow_status and cancel it with workflow_cancel.",
+			"Pass workflow as either a built-in Workflow id string or a Workflow definition object; put background only at the workflow_run top level next to workflow, never inside the Workflow object.",
+			"Workflow and node ids must match ^[A-Za-z][A-Za-z0-9_-]*$: start with a letter, then use only letters, digits, underscores, or hyphens; dots are invalid.",
+			"Put timeoutMs on the Workflow node itself, not in budget; budget accepts only maxTokens and maxTurns, and must be omitted entirely when neither limit is needed—never send an empty budget object.",
+			"When background is true, inspect the running DAG with workflow_status and cancel it with workflow_cancel.",
 			"Workflow nodes receive only structured dependency outputs, never dependency transcripts.",
 			"Use shared writes for a single workspace writer and isolated writes only when a Git Worktree is required.",
 		],

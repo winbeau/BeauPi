@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Workflow startup guidance to keep `background` at the `workflow_run` top level, place `timeoutMs` on nodes, omit empty `budget` objects, and avoid dots in Workflow or node IDs.
+
 ## [1.2.1] - 2026-08-11
 
 ### Added
