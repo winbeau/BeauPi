@@ -493,7 +493,7 @@ Pi is aggressively extensible so it doesn't have to dictate your workflow. Featu
 
 **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
 
-**Bounded sub-agents.** BeauPi provides an in-process `delegate_task` Agent Pool with isolated sessions, Profile tool/Skill boundaries, budgets, cancellation, and structured results. Multi-agent Workflow orchestration remains a later layer built on that execution unit.
+**Bounded sub-agents.** BeauPi provides an in-process `delegate_task` Agent Pool with isolated sessions, Profile tool/Skill boundaries, budgets, cancellation, stable Agent IDs, optional read-only tmux transcripts, and structured results. `agent_control` can list, inspect, capture, steer, follow up, or cancel by ID. Workflow nodes reuse that execution unit and may run synchronously or with `background: true`.
 
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 

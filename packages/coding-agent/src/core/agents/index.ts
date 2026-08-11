@@ -1,6 +1,9 @@
 export {
 	type AgentClarificationQuestion,
 	type AgentClarificationRequest,
+	type AgentControlSnapshot,
+	type AgentControlStatus,
+	type AgentControlToolDetails,
 	type AgentLifecycleEvent,
 	type AgentLifecycleEventListener,
 	type AgentLifecycleEventType,
@@ -34,4 +37,13 @@ export {
 	validateAgentPoolConfig,
 	validateAgentProfile,
 } from "./agent-profile.ts";
-export { createControlledResourceLoader } from "./controlled-resource-loader.ts";
+export {
+	type AgentTerminalCapture,
+	type AgentTerminalReference,
+	AgentTerminalRuntime,
+	type AgentTerminalRuntimeOptions,
+} from "./agent-terminal.ts";
+export {
+	type ControlledAgentRuntimeContext,
+	createControlledResourceLoader,
+} from "./controlled-resource-loader.ts";

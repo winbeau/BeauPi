@@ -43,6 +43,11 @@ export interface WorkflowDefinition {
 	nodes: WorkflowNodeDefinition[];
 }
 
+/** Ergonomic Workflow input; omitted versions normalize to the current schema version. */
+export type WorkflowDefinitionInput = Omit<WorkflowDefinition, "version"> & {
+	version?: typeof WORKFLOW_DEFINITION_VERSION;
+};
+
 export interface NormalizedWorkflowNodeDefinition {
 	id: string;
 	profile: string;
@@ -79,6 +84,8 @@ export interface WorkflowWorktreeSnapshot {
 
 export interface WorkflowNodeSnapshot {
 	id: string;
+	/** Stable AgentPool task id used by agent_control while this node runs. */
+	agentId?: string;
 	profile: string;
 	taskSummary: string;
 	dependsOn: string[];
@@ -115,8 +122,10 @@ export interface WorkflowSnapshot {
 }
 
 export interface WorkflowRunInput {
-	workflow: string | WorkflowDefinition;
+	workflow: string | WorkflowDefinitionInput;
 	task?: string;
+	/** Return after deterministic startup instead of waiting for the DAG to finish. */
+	background?: boolean;
 }
 
 export interface WorkflowCancelResult {

@@ -1,10 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	type AgentControlToolDetails,
 	type AgentLifecycleEvent,
+	type AgentPool,
 	type AgentPoolConfig,
 	calculateAgentConcurrencyLimit,
 	DEFAULT_AGENT_IDLE_TIMEOUT_MS,
@@ -13,7 +16,7 @@ import {
 	MAX_AGENT_TIMEOUT_MS,
 	validateAgentProfile,
 } from "../src/core/agents/index.ts";
-import { createExtensionRuntime, defineTool } from "../src/core/extensions/index.ts";
+import { createExtensionRuntime, defineTool, type ExtensionContext } from "../src/core/extensions/index.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "../src/core/sdk.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -25,6 +28,8 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 import { createHarness, type HarnessOptions } from "./suite/harness.ts";
 
 const cleanups: Array<() => void> = [];
+const tmuxAvailable = spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
+const tmuxIt = tmuxAvailable ? it : it.skip;
 
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
@@ -56,6 +61,20 @@ async function createCoordinator(
 
 function eventTypes(events: readonly AgentLifecycleEvent[], taskId: string): string[] {
 	return events.filter((event) => event.taskId === taskId).map((event) => event.type);
+}
+
+async function executeAgentControl(
+	pool: AgentPool,
+	params: { action: string; agentId?: string; message?: string },
+): Promise<AgentControlToolDetails> {
+	const result = await pool.agentControlTool.execute(
+		"agent-control-test",
+		params as never,
+		undefined,
+		undefined,
+		{} as ExtensionContext,
+	);
+	return result.details as AgentControlToolDetails;
 }
 
 function skill(name: string, description: string): Skill {
@@ -176,6 +195,122 @@ describe("in-process Agent Pool and delegate_task", () => {
 		);
 		expect(eventTypes(events, result.taskId).filter((type) => type === "started")).toHaveLength(1);
 		expect(eventTypes(events, result.taskId).filter((type) => type === "completed")).toHaveLength(1);
+	});
+
+	it("exposes stable Agent IDs and bounded peer control", async () => {
+		let seenTools: string[] = [];
+		let seenSystemPrompt = "";
+		const { harness, pool } = await createCoordinator({
+			pool: {
+				peerControl: true,
+				profiles: [
+					{
+						id: "peer",
+						systemPrompt: "PEER PROFILE",
+						toolAllowlist: ["agent_control"],
+					},
+				],
+				defaultProfile: "peer",
+			},
+		});
+		harness.setResponses([
+			(context) => {
+				seenTools = context.tools?.map((tool) => tool.name) ?? [];
+				seenSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage(
+					fauxToolCall("agent_control", { action: "capture", agentId: "agent-peer-one" }),
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("capture_failed");
+				expect(JSON.stringify(context.messages)).not.toContain("capture_forbidden");
+				return fauxAssistantMessage("peer complete");
+			},
+		]);
+
+		const result = await pool.delegateTask({ task: "Inspect peers", taskId: "agent-peer-one" });
+
+		expect(result.taskId).toBe("agent-peer-one");
+		expect(seenTools).toContain("agent_control");
+		expect(seenSystemPrompt).toContain("Agent ID: agent-peer-one");
+		expect(seenSystemPrompt).toContain("capture a bounded tmux transcript");
+		expect(await executeAgentControl(pool, { action: "status", agentId: result.taskId })).toMatchObject({
+			ok: true,
+			agent: { agentId: result.taskId, status: "completed", resultSummary: "peer complete" },
+		});
+	});
+
+	tmuxIt("mirrors Agent execution into a controllable tmux transcript", async () => {
+		const { harness, pool } = await createCoordinator({ pool: { tmux: true } });
+		harness.setResponses([fauxAssistantMessage("tmux child output")]);
+
+		const result = await pool.delegateTask({ task: "Render tmux output", taskId: "agent-tmux-integration" });
+		expect(result.terminal?.attachCommand).toContain("attach-session -r");
+		const control = await executeAgentControl(pool, { action: "capture", agentId: result.taskId });
+		expect(control).toMatchObject({ ok: true, capture: { truncated: false } });
+		expect(control.capture?.content).toContain("BeauPi Agent agent-tmux-integration");
+		expect(control.capture?.content).toContain("tmux child output");
+	});
+
+	it("steers active Agents by ID through agent_control", async () => {
+		const { harness, pool } = await createCoordinator();
+		let childStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			childStarted = resolve;
+		});
+		harness.setResponses([
+			async () => {
+				childStarted();
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				return fauxAssistantMessage("initial response");
+			},
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("change direction");
+				return fauxAssistantMessage("steered response");
+			},
+		]);
+		const running = pool.delegateTask({ task: "Wait for control", taskId: "agent-control-target" });
+		await started;
+
+		expect(await executeAgentControl(pool, { action: "list" })).toMatchObject({
+			ok: true,
+			agents: [{ agentId: "agent-control-target", status: "running" }],
+		});
+		expect(
+			await executeAgentControl(pool, {
+				action: "steer",
+				agentId: "agent-control-target",
+				message: "change direction",
+			}),
+		).toMatchObject({ ok: true, accepted: true });
+		await expect(running).resolves.toMatchObject({ status: "completed", summary: "steered response" });
+
+		let followUpStarted!: () => void;
+		const followStarted = new Promise<void>((resolve) => {
+			followUpStarted = resolve;
+		});
+		harness.setResponses([
+			async () => {
+				followUpStarted();
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				return fauxAssistantMessage("first run complete");
+			},
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("check one more thing");
+				return fauxAssistantMessage("follow-up response");
+			},
+		]);
+		const followRunning = pool.delegateTask({ task: "Wait for follow-up", taskId: "agent-follow-up-target" });
+		await followStarted;
+		expect(
+			await executeAgentControl(pool, {
+				action: "follow_up",
+				agentId: "agent-follow-up-target",
+				message: "check one more thing",
+			}),
+		).toMatchObject({ ok: true, accepted: true });
+		await expect(followRunning).resolves.toMatchObject({ status: "completed", summary: "follow-up response" });
 	});
 
 	it("does not attach default turn or token limits to unknown-profile failures", async () => {
@@ -569,10 +704,10 @@ describe("in-process Agent Pool and delegate_task", () => {
 		const holderPromise = pool.delegateTask({ task: "slot holder" });
 		const queuedPromise = pool.delegateTask({ task: "queued cancellation" });
 		expect(queuedTaskId).toBeDefined();
-		const accepted = pool.cancelTask(queuedTaskId!);
+		const control = await executeAgentControl(pool, { action: "cancel", agentId: queuedTaskId });
 		const [holder, queued] = await Promise.all([holderPromise, queuedPromise]);
 
-		expect(accepted).toBe(true);
+		expect(control).toMatchObject({ ok: true, accepted: true });
 		expect(holder.status).toBe("completed");
 		expect(queued.status).toBe("cancelled");
 	});
@@ -753,8 +888,10 @@ describe("in-process Agent Pool and delegate_task", () => {
 		]);
 		await session.prompt("inspect tools");
 		expect(coordinatorTools).toContain("delegate_task");
+		expect(coordinatorTools).toContain("agent_control");
 		expect(coordinatorTools).toContain("privileged_exec");
 		expect(session.getToolDefinition("delegate_task")).toBeDefined();
+		expect(session.getToolDefinition("agent_control")).toBeDefined();
 		expect(session.getToolDefinition("privileged_exec")).toBeDefined();
 	});
 });

@@ -42,6 +42,12 @@ function nodeDepth(
 	return 1 + Math.max(0, ...node.dependsOn.map((id) => nodeDepth(byId.get(id) ?? node, byId, nextSeen)));
 }
 
+function shortAgentId(agentId: string): string {
+	const nodeSeparator = agentId.lastIndexOf(":");
+	if (nodeSeparator === -1) return agentId.slice(0, 12);
+	return `${agentId.slice(0, 11)}…${agentId.slice(nodeSeparator)}`;
+}
+
 function nodeFailure(node: WorkflowNodeSnapshot): string {
 	if (node.status === "skipped") return node.error?.message ?? "condition false";
 	if (node.status === "cancelled") return node.error?.message ?? "cancelled";
@@ -97,6 +103,8 @@ export class WorkflowSnapshotComponent implements Component {
 			if (node.status === "running") label = this.currentTheme.bold(label);
 			else if (node.status === "completed") label = this.currentTheme.fg("dim", label);
 			const failure = nodeFailure(node);
+			const agentId =
+				this.expanded && node.agentId ? this.currentTheme.fg("dim", `agent ${shortAgentId(node.agentId)}`) : "";
 			const durationText = node.status === "pending" ? "" : this.currentTheme.fg("dim", duration(node.durationMs));
 			const body = failure
 				? fitSingleLine(
@@ -112,6 +120,7 @@ export class WorkflowSnapshotComponent implements Component {
 				: fitSingleLine(
 						[
 							{ text: label, required: true, truncate: true },
+							{ text: agentId, separator: " · ", priority: 1 },
 							{ text: durationText, separator: " ", priority: 2 },
 						],
 						Math.max(0, availableWidth - visibleWidth(prefix)),

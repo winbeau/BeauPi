@@ -78,6 +78,37 @@ nodes:
 		}
 	});
 
+	it("defaults omitted versions and node profiles while listing valid profiles in failures", () => {
+		const parsed = parseWorkflowDefinition(`
+id: ergonomic
+nodes:
+  - id: inspect
+    task: Inspect files
+`);
+		const normalized = validateWorkflowDefinition(parsed, profileExists, {
+			defaultProfile: "reviewer",
+			availableProfiles: [...profiles],
+		});
+		expect(parsed.version).toBe(1);
+		expect(normalized.nodes[0]?.profile).toBe("reviewer");
+
+		try {
+			validateWorkflowDefinition(
+				parseWorkflowDefinition({
+					id: "missing-profile",
+					nodes: [{ id: "inspect", profile: "default", task: "Inspect files" }],
+				}),
+				profileExists,
+				{ defaultProfile: "reviewer", availableProfiles: [...profiles] },
+			);
+			throw new Error("missing profile unexpectedly passed");
+		} catch (error) {
+			expect(error).toBeInstanceOf(WorkflowValidationError);
+			expect((error as WorkflowValidationError).message).toContain("reviewer, researcher, implementer");
+			expect((error as WorkflowValidationError).message).toContain("Omit agent/profile");
+		}
+	});
+
 	it("rejects duplicate ids, unknown dependencies, cycles, profiles, conditions, budgets, and extra fields", () => {
 		const base = {
 			version: 1 as const,

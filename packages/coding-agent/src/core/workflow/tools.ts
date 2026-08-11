@@ -5,7 +5,7 @@ import { Compile } from "typebox/compile";
 import { WorkflowSnapshotComponent } from "../../modes/interactive/components/workflow.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { attachWorkflowToolDetails, getWorkflowToolDetails } from "./details.ts";
-import { WORKFLOW_DEFINITION_SCHEMA, WorkflowValidationError } from "./schema.ts";
+import { WORKFLOW_RUN_DEFINITION_SCHEMA, WorkflowValidationError } from "./schema.ts";
 import {
 	WORKFLOW_DETAILS_VERSION,
 	type WorkflowCancelResult,
@@ -18,9 +18,12 @@ export const WORKFLOW_RUN_SCHEMA = Type.Object(
 	{
 		workflow: Type.Union([
 			Type.String({ minLength: 1, description: "Built-in Workflow id or serialized Workflow YAML/JSON" }),
-			WORKFLOW_DEFINITION_SCHEMA,
+			WORKFLOW_RUN_DEFINITION_SCHEMA,
 		]),
 		task: Type.Optional(Type.String({ minLength: 1, maxLength: 20_000 })),
+		background: Type.Optional(
+			Type.Boolean({ description: "Return after startup and keep the Workflow running session-scoped" }),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -97,12 +100,17 @@ function renderResult(
 }
 
 function createRunTool(runtime: WorkflowRuntime): ToolDefinition<typeof WORKFLOW_RUN_SCHEMA, Record<string, unknown>> {
+	const profiles = runtime.getProfileIds();
+	const profileGuidance = `Omit node agent/profile to use ${runtime.defaultProfileId}. Available profiles: ${profiles.join(", ")}.`;
 	return {
 		name: "workflow_run",
 		label: "Workflow",
-		description: "Run a validated multi-Agent Workflow DAG using the existing Agent Pool and Monitor Runtime.",
+		description:
+			"Start a validated multi-Agent Workflow DAG using the existing Agent Pool and Monitor Runtime; version and node profile may be omitted.",
 		promptSnippet: "workflow_run: run a versioned built-in or YAML/JSON multi-Agent DAG",
 		promptGuidelines: [
+			profileGuidance,
+			"Set background=true when the DAG should continue after workflow_run returns; inspect it with workflow_status and cancel it with workflow_cancel.",
 			"Workflow nodes receive only structured dependency outputs, never dependency transcripts.",
 			"Use shared writes for a single workspace writer and isolated writes only when a Git Worktree is required.",
 		],
@@ -111,10 +119,14 @@ function createRunTool(runtime: WorkflowRuntime): ToolDefinition<typeof WORKFLOW
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			validate<WorkflowRunParameters>("workflow_run", runValidator, params);
 			try {
-				const snapshot = await runtime.run(params, signal, (update) =>
-					(onUpdate as AgentToolUpdateCallback<Record<string, unknown>> | undefined)?.(partialResult(update)),
-				);
-				const ok = snapshot.status === "completed";
+				const snapshot = params.background
+					? runtime.start(params)
+					: await runtime.run(params, signal, (update) =>
+							(onUpdate as AgentToolUpdateCallback<Record<string, unknown>> | undefined)?.(
+								partialResult(update),
+							),
+						);
+				const ok = params.background === true || snapshot.status === "completed";
 				return {
 					content: [{ type: "text", text: snapshotText(snapshot) }],
 					details: details("workflow_run", {

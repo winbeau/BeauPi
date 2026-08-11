@@ -3,7 +3,12 @@ import { Compile } from "typebox/compile";
 import { parse } from "yaml";
 import { BUILTIN_WORKFLOWS } from "./builtins.ts";
 import { validateWorkflowCondition } from "./condition.ts";
-import { type NormalizedWorkflowDefinition, WORKFLOW_DEFINITION_VERSION, type WorkflowDefinition } from "./types.ts";
+import {
+	type NormalizedWorkflowDefinition,
+	WORKFLOW_DEFINITION_VERSION,
+	type WorkflowDefinition,
+	type WorkflowDefinitionInput,
+} from "./types.ts";
 
 export const WORKFLOW_LIMITS = Object.freeze({
 	maxNodes: 64,
@@ -47,13 +52,26 @@ export const WORKFLOW_NODE_SCHEMA = Type.Object(
 	{ additionalProperties: false },
 );
 
+const workflowDefinitionFields = {
+	id: Type.String({ minLength: 1, maxLength: 64, pattern: "^[A-Za-z][A-Za-z0-9_-]*$" }),
+	description: Type.Optional(Type.String({ maxLength: WORKFLOW_LIMITS.maxDescriptionLength })),
+	maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, maximum: WORKFLOW_LIMITS.maxConcurrency })),
+	nodes: Type.Array(WORKFLOW_NODE_SCHEMA, { minItems: 1, maxItems: WORKFLOW_LIMITS.maxNodes }),
+};
+
 export const WORKFLOW_DEFINITION_SCHEMA = Type.Object(
 	{
 		version: Type.Literal(WORKFLOW_DEFINITION_VERSION),
-		id: Type.String({ minLength: 1, maxLength: 64, pattern: "^[A-Za-z][A-Za-z0-9_-]*$" }),
-		description: Type.Optional(Type.String({ maxLength: WORKFLOW_LIMITS.maxDescriptionLength })),
-		maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, maximum: WORKFLOW_LIMITS.maxConcurrency })),
-		nodes: Type.Array(WORKFLOW_NODE_SCHEMA, { minItems: 1, maxItems: WORKFLOW_LIMITS.maxNodes }),
+		...workflowDefinitionFields,
+	},
+	{ additionalProperties: false },
+);
+
+/** Tool-facing schema accepts the current version implicitly for easier startup. */
+export const WORKFLOW_RUN_DEFINITION_SCHEMA = Type.Object(
+	{
+		version: Type.Optional(Type.Literal(WORKFLOW_DEFINITION_VERSION)),
+		...workflowDefinitionFields,
 	},
 	{ additionalProperties: false },
 );
@@ -83,16 +101,24 @@ function workflowSchemaError(value: unknown): WorkflowValidationError {
 	return new WorkflowValidationError("invalid_schema", `Invalid Workflow definition: ${summary || "schema mismatch"}`);
 }
 
-function cloneDefinition(definition: WorkflowDefinition): WorkflowDefinition {
-	return structuredClone(definition);
+function normalizeDefinitionVersion(definition: WorkflowDefinitionInput): WorkflowDefinition {
+	return { ...structuredClone(definition), version: definition.version ?? WORKFLOW_DEFINITION_VERSION };
 }
 
-export function parseWorkflowDefinition(input: string | WorkflowDefinition): WorkflowDefinition {
-	if (typeof input !== "string") return cloneDefinition(input);
+function normalizeParsedVersion(value: unknown): WorkflowDefinition {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return value as WorkflowDefinition;
+	const record = value as Record<string, unknown>;
+	return (record.version === undefined
+		? { ...record, version: WORKFLOW_DEFINITION_VERSION }
+		: record) as unknown as WorkflowDefinition;
+}
+
+export function parseWorkflowDefinition(input: string | WorkflowDefinitionInput): WorkflowDefinition {
+	if (typeof input !== "string") return normalizeDefinitionVersion(input);
 	const source = input.trim();
 	if (!source) throw new WorkflowValidationError("invalid_source", "Workflow source must not be empty");
 	const builtin = BUILTIN_WORKFLOWS[source];
-	if (builtin) return cloneDefinition(builtin);
+	if (builtin) return normalizeDefinitionVersion(builtin);
 	let parsed: unknown;
 	try {
 		parsed = parse(source, { maxAliasCount: 0 }) as unknown;
@@ -102,7 +128,7 @@ export function parseWorkflowDefinition(input: string | WorkflowDefinition): Wor
 			`Failed to parse Workflow YAML/JSON: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
-	return parsed as WorkflowDefinition;
+	return normalizeParsedVersion(parsed);
 }
 
 function assertAcyclic(nodes: readonly { id: string; dependsOn: readonly string[] }[]): void {
@@ -127,9 +153,25 @@ function assertAcyclic(nodes: readonly { id: string; dependsOn: readonly string[
 	for (const node of nodes) visit(node.id, []);
 }
 
+export interface WorkflowProfileResolutionOptions {
+	defaultProfile?: string;
+	availableProfiles?: readonly string[];
+}
+
+function profileResolutionHint(options: WorkflowProfileResolutionOptions): string {
+	const available = options.availableProfiles?.length
+		? ` Available profiles: ${options.availableProfiles.join(", ")}.`
+		: "";
+	const fallback = options.defaultProfile
+		? ` Omit agent/profile to use ${JSON.stringify(options.defaultProfile)}.`
+		: "";
+	return `${available}${fallback}`;
+}
+
 export function validateWorkflowDefinition(
 	definition: WorkflowDefinition,
 	profileExists: (profile: string) => boolean,
+	options: WorkflowProfileResolutionOptions = {},
 ): NormalizedWorkflowDefinition {
 	if (!definitionValidator.Check(definition)) throw workflowSchemaError(definition);
 	const ids = new Set<string>();
@@ -144,11 +186,11 @@ export function validateWorkflowDefinition(
 		ids.add(node.id);
 	}
 	const normalizedNodes = definition.nodes.map((node) => {
-		const profile = node.profile ?? node.agent;
+		const profile = node.profile ?? node.agent ?? options.defaultProfile;
 		if (!profile) {
 			throw new WorkflowValidationError(
 				"profile_required",
-				`Workflow node ${JSON.stringify(node.id)} needs agent or profile`,
+				`Workflow node ${JSON.stringify(node.id)} needs agent or profile.${profileResolutionHint(options)}`,
 				node.id,
 			);
 		}
@@ -162,7 +204,7 @@ export function validateWorkflowDefinition(
 		if (!profileExists(profile)) {
 			throw new WorkflowValidationError(
 				"profile_not_found",
-				`Unknown Agent Profile ${JSON.stringify(profile)}`,
+				`Unknown Agent Profile ${JSON.stringify(profile)}.${profileResolutionHint(options)}`,
 				node.id,
 			);
 		}

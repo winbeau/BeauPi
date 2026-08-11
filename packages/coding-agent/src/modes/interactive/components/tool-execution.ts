@@ -41,6 +41,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
 	web_fetch: "Fetch",
 	playwright: "Playwright",
 	delegate_task: "Agent",
+	agent_control: "Agent Control",
 	workflow_run: "Workflow",
 	workflow_status: "Workflow Status",
 	workflow_cancel: "Workflow Cancel",

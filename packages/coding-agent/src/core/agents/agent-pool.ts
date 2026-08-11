@@ -14,6 +14,7 @@ import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../sdk
 import type { SearchRuntime, WebCitation } from "../search/index.ts";
 import { SessionManager } from "../session-manager.ts";
 import { SettingsManager } from "../settings-manager.ts";
+import type { LocalTmuxTransport } from "../terminal/local-tmux-transport.ts";
 import { allToolNames } from "../tools/index.ts";
 import {
 	type AgentCancellationStrategy,
@@ -25,6 +26,7 @@ import {
 	MAX_AGENT_TIMEOUT_MS,
 	resolveAgentProfiles,
 } from "./agent-profile.ts";
+import { type AgentTerminalCapture, type AgentTerminalReference, AgentTerminalRuntime } from "./agent-terminal.ts";
 import { createControlledResourceLoader } from "./controlled-resource-loader.ts";
 
 export type AgentTaskStatus = "completed" | "failed" | "cancelled" | "timed_out";
@@ -86,6 +88,7 @@ export interface AgentClarificationRequest {
 }
 
 export interface AgentTaskResult {
+	/** Stable Agent ID used by agent_control and Monitor. */
 	taskId: string;
 	profile: string;
 	status: AgentTaskStatus;
@@ -98,8 +101,37 @@ export interface AgentTaskResult {
 	clarificationRequest?: AgentClarificationRequest;
 	lastActivity?: AgentTaskActivity;
 	error?: AgentTaskError;
+	terminal?: AgentTerminalReference;
 	usage: AgentTaskUsage;
 	budget: AgentTaskBudgetSummary;
+}
+
+export type AgentControlStatus = "starting" | "running" | AgentTaskStatus;
+
+export interface AgentControlSnapshot {
+	agentId: string;
+	profile: string;
+	taskSummary: string;
+	status: AgentControlStatus;
+	createdAt: number;
+	startedAt?: number;
+	completedAt?: number;
+	lastActivity?: AgentTaskActivity;
+	terminal?: AgentTerminalReference;
+	terminalDiagnostic?: string;
+	resultSummary?: string;
+}
+
+export interface AgentControlToolDetails {
+	version: 1;
+	action: "list" | "status" | "capture" | "steer" | "follow_up" | "cancel";
+	ok: boolean;
+	callerAgentId?: string;
+	agents?: AgentControlSnapshot[];
+	agent?: AgentControlSnapshot;
+	capture?: AgentTerminalCapture;
+	accepted?: boolean;
+	error?: AgentTaskError;
 }
 
 export interface AgentLifecycleEvent {
@@ -139,6 +171,7 @@ interface SlotWaiter {
 export interface AgentPoolDependencies {
 	cwd: string;
 	agentDir: string;
+	sessionId: string;
 	modelRuntime: ModelRuntime;
 	resourceLoader: ResourceLoader;
 	model?: Model<Api>;
@@ -146,6 +179,7 @@ export interface AgentPoolDependencies {
 	searchRuntime: SearchRuntime;
 	searchBudgetScopeId: string;
 	policySettings?: PolicySettings;
+	terminalTransport?: LocalTmuxTransport;
 	createSession: CreateChildSession;
 }
 
@@ -165,6 +199,8 @@ export interface DelegateTaskInput {
 	cwd?: string;
 	/** Internal Workflow boundary that can further restrict, never broaden, Profile write access. */
 	allowFileModifications?: boolean;
+	/** Internal stable Agent ID supplied by Workflow nodes. */
+	taskId?: string;
 }
 
 const DELEGATE_TASK_PARAMETERS = Type.Object({
@@ -188,7 +224,43 @@ const DELEGATE_TASK_PARAMETERS = Type.Object({
 
 type DelegateTaskParameters = Static<typeof DELEGATE_TASK_PARAMETERS>;
 
+const AGENT_CONTROL_PARAMETERS = Type.Object(
+	{
+		action: Type.Union([
+			Type.Literal("list"),
+			Type.Literal("status"),
+			Type.Literal("capture"),
+			Type.Literal("steer"),
+			Type.Literal("follow_up"),
+			Type.Literal("cancel"),
+		]),
+		agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
+		message: Type.Optional(Type.String({ minLength: 1, maxLength: 20_000 })),
+	},
+	{ additionalProperties: false },
+);
+
+type AgentControlParameters = Static<typeof AGENT_CONTROL_PARAMETERS>;
+
+interface PendingAgentMessage {
+	mode: "steer" | "follow_up";
+	message: string;
+}
+
+interface ActiveAgentTask {
+	cancel: () => void;
+	child?: AgentSession;
+	pendingMessages: PendingAgentMessage[];
+}
+
+interface AgentTaskRecord {
+	snapshot: AgentControlSnapshot;
+	result?: AgentTaskResult;
+}
+
 const DEFAULT_CHILD_TOOLS = new Set(DEFAULT_AGENT_PROFILE.toolAllowlist ?? []);
+const CONTROLLED_RUNTIME_TOOL_NAMES = new Set(["agent_control"]);
+const MAX_RETAINED_AGENT_RECORDS = 64;
 const AGENT_ACTIVITY_HEARTBEAT_MS = 15_000;
 
 const RESERVED_TOOL_NAMES = new Set([
@@ -205,6 +277,7 @@ const RESERVED_TOOL_NAMES = new Set([
 	"background_logs",
 	"background_wait",
 	"background_cancel",
+	"agent_control",
 ]);
 
 function errorWithCode(code: string, message: string): AgentTaskError {
@@ -224,6 +297,10 @@ function asErrorMessage(error: unknown): string {
 function taskSummary(task: string): string {
 	const firstLine = task.split(/\r\n|\r|\n/, 1)[0]?.trim() ?? "";
 	return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
+}
+
+function shortAgentId(agentId: string): string {
+	return agentId.length > 18 ? `${agentId.slice(0, 17)}…` : agentId;
 }
 
 function unique(values: readonly string[]): string[] {
@@ -247,9 +324,10 @@ function isAgentTaskResult(value: AgentTaskResult | AgentProgressEvent): value i
 function agentResultText(result: AgentTaskResult | AgentProgressEvent): string {
 	if (!isAgentTaskResult(result)) {
 		const target = result.targetPath ? ` · ${result.targetPath}` : "";
-		return `${result.message}${target}`;
+		return `${shortAgentId(result.taskId)} · ${result.message}${target}`;
 	}
-	if (result.status === "completed") return taskSummary(result.summary) || "Completed";
+	if (result.status === "completed")
+		return `${shortAgentId(result.taskId)} · ${taskSummary(result.summary) || "Completed"}`;
 	const code = result.error?.code ?? result.status;
 	const turns =
 		result.budget.maxTurns === undefined
@@ -284,7 +362,8 @@ function agentBudgetSummary(result: AgentTaskResult): string {
 }
 
 function agentDetailBody(result: AgentTaskResult): string {
-	const lines: string[] = [];
+	const lines: string[] = [`Agent ID: ${result.taskId}`];
+	if (result.terminal) lines.push(`tmux: ${result.terminal.attachCommand}`);
 	const summary = result.summary.trim();
 	if (summary) lines.push(summary);
 	if (result.error) lines.push(`Error: ${result.error.message}`);
@@ -309,6 +388,18 @@ function agentDetailBody(result: AgentTaskResult): string {
 		lines.push(`Diagnostics:\n${result.diagnostics.map((diagnostic) => `- ${diagnostic}`).join("\n")}`);
 	}
 	return lines.join("\n");
+}
+
+function isAgentControlTerminal(status: AgentControlStatus): boolean {
+	return status === "completed" || status === "failed" || status === "cancelled" || status === "timed_out";
+}
+
+function agentControlSummary(details: AgentControlToolDetails): string {
+	if (!details.ok) return details.error?.message ?? "Agent control failed";
+	if (details.action === "list") return `${details.agents?.length ?? 0} Agent records`;
+	if (details.action === "capture") return details.capture?.terminal.attachCommand ?? "Agent transcript captured";
+	if (details.agent) return `${details.agent.agentId} · ${details.agent.status}`;
+	return details.accepted ? `Agent ${details.action} accepted` : `Agent ${details.action} not accepted`;
 }
 
 function parseClarificationRequest(text: string | undefined): AgentClarificationRequest | undefined {
@@ -482,7 +573,9 @@ function getAllowedTools(
 	const known = new Set<string>([...allToolNames, ...customTools.map((tool) => tool.name), ...extensionTools]);
 	// Unknown names are left out by AgentSession as well; keeping this filtering
 	// here makes the child context deterministic and avoids provider-side schema noise.
-	return configured.filter((name) => known.has(name) && !RESERVED_TOOL_NAMES.has(name));
+	return configured.filter(
+		(name) => known.has(name) && (!RESERVED_TOOL_NAMES.has(name) || CONTROLLED_RUNTIME_TOOL_NAMES.has(name)),
+	);
 }
 
 function createPartialResult(progress: AgentProgressEvent): AgentToolResult<AgentProgressEvent> {
@@ -495,12 +588,15 @@ function createPartialResult(progress: AgentProgressEvent): AgentToolResult<Agen
 export class AgentPool {
 	private readonly maxConcurrency: number;
 	private readonly profiles: Map<string, AgentProfile>;
-	private readonly defaultProfileId: string;
+	private readonly _defaultProfileId: string;
 	private readonly dependencies: AgentPoolDependencies;
 	private readonly customTools: readonly ToolDefinition[];
+	private readonly peerControlEnabled: boolean;
+	private readonly terminalRuntime?: AgentTerminalRuntime;
 	private readonly eventListeners = new Set<AgentLifecycleEventListener>();
 	private readonly waiters: SlotWaiter[] = [];
-	private readonly activeTasks = new Map<string, { cancel: () => void }>();
+	private readonly activeTasks = new Map<string, ActiveAgentTask>();
+	private readonly taskRecords = new Map<string, AgentTaskRecord>();
 	private activeCountValue = 0;
 	private maxObservedConcurrencyValue = 0;
 	private disposed = false;
@@ -508,18 +604,25 @@ export class AgentPool {
 		typeof DELEGATE_TASK_PARAMETERS,
 		AgentTaskResult | AgentProgressEvent
 	>;
+	private readonly _agentControlTool: ToolDefinition<typeof AGENT_CONTROL_PARAMETERS, AgentControlToolDetails>;
 
 	constructor(config: AgentPoolConfig, dependencies: AgentPoolDependencies) {
 		const cpuConcurrencyLimit = calculateAgentConcurrencyLimit();
 		this.maxConcurrency = Math.min(config.maxConcurrency ?? cpuConcurrencyLimit, cpuConcurrencyLimit);
 		this.profiles = resolveAgentProfiles(config);
-		this.defaultProfileId = config.defaultProfile ?? config.profiles?.[0]?.id ?? DEFAULT_AGENT_PROFILE.id;
+		this._defaultProfileId = config.defaultProfile ?? config.profiles?.[0]?.id ?? DEFAULT_AGENT_PROFILE.id;
 		this.dependencies = dependencies;
 		this.customTools = (dependencies.customTools ?? []).filter((tool) => !RESERVED_TOOL_NAMES.has(tool.name));
+		this.peerControlEnabled = config.peerControl === true;
+		this.terminalRuntime = config.tmux
+			? new AgentTerminalRuntime({ sessionId: dependencies.sessionId, transport: dependencies.terminalTransport })
+			: undefined;
+		this._agentControlTool = this.createAgentControlTool(undefined);
 		this._delegateTaskTool = {
 			name: "delegate_task",
 			label: "Agent",
-			description: "Run an isolated in-process sub-agent and return only a structured result.",
+			description:
+				"Run an isolated in-process sub-agent with a stable Agent ID and return only a structured result.",
 			promptSnippet: "delegate_task: delegate a bounded task to an isolated sub-agent",
 			promptGuidelines: [
 				"Never use delegate_task from a controlled sub-agent.",
@@ -539,7 +642,7 @@ export class AgentPool {
 			},
 			renderCall: (args, currentTheme) =>
 				new Text(
-					`${currentTheme.fg("toolTitle", currentTheme.bold(`Agent(${args.profile ?? this.defaultProfileId})`))}(${taskSummary(args.task)})`,
+					`${currentTheme.fg("toolTitle", currentTheme.bold(`Agent(${args.profile ?? this._defaultProfileId})`))}(${taskSummary(args.task)})`,
 					0,
 					0,
 				),
@@ -567,6 +670,14 @@ export class AgentPool {
 		return this._delegateTaskTool as ToolDefinition;
 	}
 
+	get agentControlTool(): ToolDefinition {
+		return this._agentControlTool as ToolDefinition;
+	}
+
+	get defaultProfileId(): string {
+		return this._defaultProfileId;
+	}
+
 	get activeCount(): number {
 		return this.activeCountValue;
 	}
@@ -587,12 +698,44 @@ export class AgentPool {
 		return [...this.profiles.keys()];
 	}
 
+	listAgents(): AgentControlSnapshot[] {
+		return [...this.taskRecords.values()]
+			.map((record) => structuredClone(record.snapshot))
+			.sort((left, right) => {
+				const leftTerminal = isAgentControlTerminal(left.status) ? 1 : 0;
+				const rightTerminal = isAgentControlTerminal(right.status) ? 1 : 0;
+				return leftTerminal - rightTerminal || right.createdAt - left.createdAt;
+			});
+	}
+
+	getAgent(agentId: string): AgentControlSnapshot | undefined {
+		const snapshot = this.taskRecords.get(agentId)?.snapshot;
+		return snapshot ? structuredClone(snapshot) : undefined;
+	}
+
 	/** Request cancellation for an active task without exposing child session state. */
 	cancelTask(taskId: string): boolean {
 		const task = this.activeTasks.get(taskId);
 		if (!task) return false;
 		task.cancel();
 		return true;
+	}
+
+	async sendAgentMessage(agentId: string, mode: PendingAgentMessage["mode"], message: string): Promise<boolean> {
+		const task = this.activeTasks.get(agentId);
+		if (!task || !message.trim()) return false;
+		if (!task.child) {
+			task.pendingMessages.push({ mode, message: message.trim() });
+			return true;
+		}
+		if (mode === "steer") await task.child.steer(message.trim());
+		else await task.child.followUp(message.trim());
+		return true;
+	}
+
+	captureAgent(agentId: string): Promise<AgentTerminalCapture> {
+		if (!this.terminalRuntime) throw new Error("Agent tmux visualization is disabled");
+		return this.terminalRuntime.capture(agentId);
 	}
 
 	subscribe(listener: AgentLifecycleEventListener): () => void {
@@ -607,6 +750,161 @@ export class AgentPool {
 			} catch {
 				// Monitor consumers must not break child execution.
 			}
+		}
+	}
+
+	private createAgentControlTool(
+		callerAgentId: string | undefined,
+	): ToolDefinition<typeof AGENT_CONTROL_PARAMETERS, AgentControlToolDetails> {
+		return {
+			name: "agent_control",
+			label: "Agent Control",
+			description:
+				"List, inspect, steer, follow up, capture, or cancel current Agent Pool tasks by stable Agent ID.",
+			promptSnippet: "agent_control: control Agent Pool tasks by stable Agent ID",
+			promptGuidelines: [
+				"Use list before targeting an unknown Agent ID.",
+				"Use steer to affect current work and follow_up for work after the current run settles.",
+				"When peer control is enabled, Agents may also request a bounded transcript capture by Agent ID.",
+			],
+			parameters: AGENT_CONTROL_PARAMETERS,
+			executionMode: "parallel",
+			execute: async (_toolCallId, params) => {
+				const details = await this.executeAgentControl(params, callerAgentId);
+				return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+			},
+			renderCall: (args, currentTheme) =>
+				new Text(
+					`${currentTheme.bold("Agent Control")}(${args.action}${args.agentId ? `:${shortAgentId(args.agentId)}` : ""})`,
+					0,
+					0,
+				),
+			renderResult: (result, _options, currentTheme) =>
+				new Text(
+					currentTheme.fg(result.details.ok ? "success" : "error", agentControlSummary(result.details)),
+					0,
+					0,
+				),
+		};
+	}
+
+	private async executeAgentControl(
+		params: AgentControlParameters,
+		callerAgentId: string | undefined,
+	): Promise<AgentControlToolDetails> {
+		const base = { version: 1 as const, action: params.action, callerAgentId };
+		if (params.action === "list") return { ...base, ok: true, agents: this.listAgents() };
+		const agentId = params.agentId?.trim();
+		if (!agentId) {
+			return {
+				...base,
+				ok: false,
+				error: errorWithCode("agent_id_required", `agent_control ${params.action} requires agentId`),
+			};
+		}
+		const agent = this.getAgent(agentId);
+		if (!agent) {
+			return {
+				...base,
+				ok: false,
+				error: errorWithCode("agent_not_found", `Unknown Agent ID ${JSON.stringify(agentId)}`),
+			};
+		}
+		if (params.action === "status") return { ...base, ok: true, agent };
+		if (params.action === "capture") {
+			try {
+				return { ...base, ok: true, agent, capture: await this.captureAgent(agentId) };
+			} catch (error) {
+				return {
+					...base,
+					ok: false,
+					agent,
+					error: errorWithCode("capture_failed", asErrorMessage(error)),
+				};
+			}
+		}
+		if (params.action === "cancel") {
+			const accepted = this.cancelTask(agentId);
+			return accepted
+				? { ...base, ok: true, agent: this.getAgent(agentId) ?? agent, accepted }
+				: {
+						...base,
+						ok: false,
+						agent,
+						accepted,
+						error: errorWithCode("agent_not_active", `Agent ${JSON.stringify(agentId)} is not active`),
+					};
+		}
+		const message = params.message?.trim();
+		if (!message) {
+			return {
+				...base,
+				ok: false,
+				agent,
+				error: errorWithCode("message_required", `agent_control ${params.action} requires message`),
+			};
+		}
+		try {
+			const accepted = await this.sendAgentMessage(agentId, params.action, message);
+			return accepted
+				? { ...base, ok: true, agent: this.getAgent(agentId) ?? agent, accepted }
+				: {
+						...base,
+						ok: false,
+						agent,
+						accepted,
+						error: errorWithCode("agent_not_active", `Agent ${JSON.stringify(agentId)} is not active`),
+					};
+		} catch (error) {
+			return {
+				...base,
+				ok: false,
+				agent,
+				error: errorWithCode("agent_control_failed", asErrorMessage(error)),
+			};
+		}
+	}
+
+	private registerTaskRecord(taskId: string, profile: string, task: string, createdAt: number): void {
+		this.taskRecords.set(taskId, {
+			snapshot: {
+				agentId: taskId,
+				profile,
+				taskSummary: taskSummary(task),
+				status: "starting",
+				createdAt,
+			},
+		});
+		this.pruneTaskRecords();
+	}
+
+	private updateTaskRecord(taskId: string, update: Partial<AgentControlSnapshot>): void {
+		const record = this.taskRecords.get(taskId);
+		if (!record) return;
+		record.snapshot = { ...record.snapshot, ...structuredClone(update) };
+	}
+
+	private finishTaskRecord(result: AgentTaskResult): void {
+		const record = this.taskRecords.get(result.taskId);
+		if (!record) return;
+		record.result = structuredClone(result);
+		record.snapshot = {
+			...record.snapshot,
+			status: result.status,
+			completedAt: Date.now(),
+			lastActivity: result.lastActivity ? structuredClone(result.lastActivity) : record.snapshot.lastActivity,
+			terminal: result.terminal ? structuredClone(result.terminal) : record.snapshot.terminal,
+			resultSummary: taskSummary(result.summary),
+		};
+	}
+
+	private pruneTaskRecords(): void {
+		if (this.taskRecords.size <= MAX_RETAINED_AGENT_RECORDS) return;
+		for (const [agentId, record] of this.taskRecords) {
+			if (this.activeTasks.has(agentId) || !isAgentControlTerminal(record.snapshot.status)) continue;
+			void this.terminalRuntime?.close(agentId);
+			this.taskRecords.delete(agentId);
+			if (this.taskRecords.size <= MAX_RETAINED_AGENT_RECORDS) break;
 		}
 	}
 
@@ -686,11 +984,16 @@ export class AgentPool {
 		signal?: AbortSignal,
 		onProgress?: AgentTaskProgressListener,
 	): Promise<AgentTaskResult> {
-		const taskId = randomUUID();
+		const taskId = input.taskId ?? randomUUID();
 		const startedAt = Date.now();
-		const profileId = input.profile ?? this.defaultProfileId;
+		const profileId = input.profile ?? this._defaultProfileId;
 		const configuredProfile = this.profiles.get(profileId);
 		const profile = configuredProfile ?? DEFAULT_AGENT_PROFILE;
+		if (this.taskRecords.has(taskId)) {
+			const error = errorWithCode("duplicate_agent_id", `Agent ID ${JSON.stringify(taskId)} is already registered`);
+			return createResultBase(taskId, profile, "failed", startedAt, emptyUsage(), 0, error);
+		}
+		this.registerTaskRecord(taskId, profileId, input.task, startedAt);
 		this.emit({
 			taskId,
 			profile: profileId,
@@ -722,7 +1025,10 @@ export class AgentPool {
 			return result;
 		}
 		if (!configuredProfile) {
-			const error = errorWithCode("profile_not_found", `Unknown agent profile ${JSON.stringify(profileId)}`);
+			const error = errorWithCode(
+				"profile_not_found",
+				`Unknown agent profile ${JSON.stringify(profileId)}. Available profiles: ${this.getProfileIds().join(", ")}.`,
+			);
 			const result = createResultBase(
 				taskId,
 				profile,
@@ -817,6 +1123,7 @@ export class AgentPool {
 				message: event.message,
 				timestamp: event.timestamp,
 			};
+			this.updateTaskRecord(taskId, { status: "running", lastActivity });
 			try {
 				onProgress?.(event);
 			} catch {
@@ -867,7 +1174,8 @@ export class AgentPool {
 		};
 
 		const onParentAbort = (): void => cancelChild();
-		this.activeTasks.set(taskId, { cancel: cancelChild });
+		const activeTask: ActiveAgentTask = { cancel: cancelChild, pendingMessages: [] };
+		this.activeTasks.set(taskId, activeTask);
 		signal?.addEventListener("abort", onParentAbort, { once: true });
 		if (signal?.aborted) cancelChild();
 
@@ -885,11 +1193,45 @@ export class AgentPool {
 			}
 			if (this.disposed) throw new Error("Agent pool is disposed");
 
-			const allowedTools = getAllowedTools(effectiveProfile, this.customTools, this.dependencies.resourceLoader);
+			const childCwd = input.cwd ?? this.dependencies.cwd;
+			this.updateTaskRecord(taskId, { status: "running", startedAt: executionStartedAt });
+			if (this.terminalRuntime) {
+				try {
+					const terminal = await this.terminalRuntime.open({
+						agentId: taskId,
+						profile: effectiveProfile.id,
+						taskSummary: taskSummary(input.task),
+						cwd: childCwd,
+					});
+					this.updateTaskRecord(taskId, { terminal });
+					progress({
+						taskId,
+						profile: effectiveProfile.id,
+						turn: 0,
+						outcome: "started",
+						message: `tmux ready: ${terminal.attachCommand}`,
+						timestamp: Date.now(),
+					});
+				} catch (error) {
+					const diagnostic = `Agent tmux unavailable: ${asErrorMessage(error)}`;
+					diagnostics.push(diagnostic);
+					this.updateTaskRecord(taskId, { terminalDiagnostic: diagnostic });
+				}
+			}
+			const peerControlTool = this.peerControlEnabled
+				? (this.createAgentControlTool(taskId) as ToolDefinition)
+				: undefined;
+			const childCustomTools: ToolDefinition[] = [
+				...this.customTools.filter((tool) => tool.name !== "privileged_exec"),
+				...(peerControlTool ? [peerControlTool] : []),
+			];
+			const allowedTools = getAllowedTools(effectiveProfile, childCustomTools, this.dependencies.resourceLoader);
 			const blockedByBoundary = effectiveProfile.allowFileModifications === false ? ["bash", "edit", "write"] : [];
 			const toolAllowlist = allowedTools.filter((name) => !blockedByBoundary.includes(name));
-			const controlledLoader = createControlledResourceLoader(this.dependencies.resourceLoader, effectiveProfile);
-			const childCwd = input.cwd ?? this.dependencies.cwd;
+			const controlledLoader = createControlledResourceLoader(this.dependencies.resourceLoader, effectiveProfile, {
+				agentId: taskId,
+				peerControl: this.peerControlEnabled,
+			});
 			const childResult = await this.dependencies.createSession({
 				cwd: childCwd,
 				agentDir: this.dependencies.agentDir,
@@ -920,7 +1262,7 @@ export class AgentPool {
 					"background_wait",
 					"background_cancel",
 				],
-				customTools: this.customTools.filter((tool) => tool.name !== "privileged_exec"),
+				customTools: childCustomTools,
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
 				synchronizeSearchBudget: false,
@@ -929,6 +1271,11 @@ export class AgentPool {
 				agentPool: false,
 			});
 			child = childResult.session;
+			activeTask.child = child;
+			for (const pending of activeTask.pendingMessages.splice(0)) {
+				if (pending.mode === "steer") await child.steer(pending.message);
+				else await child.followUp(pending.message);
+			}
 			if (timedOut) {
 				child.agent.abort();
 				child.abortBash();
@@ -965,8 +1312,10 @@ export class AgentPool {
 			};
 
 			const childEvents = (event: AgentSessionEvent): void => {
+				this.terminalRuntime?.recordEvent(taskId, event);
 				if (event.type === "agent_start") {
 					resetIdleTimeout();
+					this.updateTaskRecord(taskId, { status: "running", startedAt: executionStartedAt });
 					this.emit({
 						taskId,
 						profile: effectiveProfile.id,
@@ -1092,6 +1441,7 @@ export class AgentPool {
 			result.filesModified = [...snapshot.filesModified];
 			result.checks = makeChecks(child);
 			result.diagnostics = [...diagnostics, ...controlledLoader.getSkills().diagnostics.map((item) => item.message)];
+			result.terminal = this.terminalRuntime?.get(taskId);
 			result.budget = {
 				maxTokens: effectiveProfile.maxTokens,
 				maxTurns: effectiveProfile.maxTurns,
@@ -1134,6 +1484,7 @@ export class AgentPool {
 				timedOut ? timeoutErrorMessage(effectiveProfile, timeoutKind ?? "hard") : undefined,
 			);
 			result.diagnostics = [...diagnostics];
+			result.terminal = this.terminalRuntime?.get(taskId);
 			if (lastActivity) result.lastActivity = { ...lastActivity };
 			this.emitTerminal(result, input.task);
 			return result;
@@ -1149,6 +1500,11 @@ export class AgentPool {
 	}
 
 	private emitTerminal(result: AgentTaskResult, task: string): void {
+		this.finishTaskRecord(result);
+		void this.terminalRuntime?.write(
+			result.taskId,
+			`\n${"=".repeat(80)}\n[agent] ${result.status}${result.error ? ` · ${result.error.message}` : ""}\n`,
+		);
 		this.emit({
 			taskId: result.taskId,
 			profile: result.profile,
@@ -1172,6 +1528,7 @@ export class AgentPool {
 		for (const task of this.activeTasks.values()) {
 			task.cancel();
 		}
+		this.terminalRuntime?.dispose();
 	}
 }
 

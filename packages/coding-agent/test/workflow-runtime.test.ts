@@ -61,10 +61,9 @@ describe("WorkflowRuntime", () => {
 		]);
 		const snapshot = await session.workflowRuntime!.run({
 			workflow: definition([
-				{ id: "inspect", profile: "reviewer", task: "Inspect", writePolicy: "none" },
+				{ id: "inspect", task: "Inspect", writePolicy: "none" },
 				{
 					id: "review",
-					profile: "reviewer",
 					task: "Review",
 					dependsOn: ["inspect"],
 					condition: 'deps.inspect.output.summary == "dependency-ready"',
@@ -74,6 +73,9 @@ describe("WorkflowRuntime", () => {
 		});
 		expect(snapshot.status).toBe("completed");
 		expect(snapshot.nodes.map((node) => node.status)).toEqual(["completed", "completed"]);
+		expect(snapshot.nodes.map((node) => node.profile)).toEqual(["reviewer", "reviewer"]);
+		expect(snapshot.nodes[0]?.agentId).toBe(`${snapshot.workflowId}:inspect`);
+		expect(snapshot.nodes[0]?.output?.taskId).toBe(snapshot.nodes[0]?.agentId);
 		expect(dependentContext).toContain('<workflow_dependencies version=\\"1\\">');
 		expect(dependentContext).toContain("dependency-ready");
 		expect(snapshot.nodes[0]?.output).not.toHaveProperty("messages");

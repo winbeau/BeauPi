@@ -61,6 +61,10 @@ function taskSummary(task: string): string {
 	return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
 }
 
+function workflowAgentId(workflowId: string, nodeId: string): string {
+	return `${workflowId}:${nodeId}`;
+}
+
 function elapsed(start: string | undefined, end: string | undefined, now: Date): number {
 	if (!start) return 0;
 	const startMs = Date.parse(start);
@@ -199,14 +203,33 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 		return snapshot ? cloneSnapshot(snapshot, this.now()) : undefined;
 	}
 
+	get defaultProfileId(): string {
+		return this.agentPool.defaultProfileId;
+	}
+
+	getProfileIds(): string[] {
+		return this.agentPool.getProfileIds();
+	}
+
 	async run(
 		input: WorkflowRunInput,
 		signal?: AbortSignal,
 		onProgress?: WorkflowProgressListener,
 	): Promise<WorkflowSnapshot> {
+		const started = this.start(input, signal, onProgress);
+		const active = this.active.get(started.workflowId);
+		return active ? await active.completion : (this.status(started.workflowId) ?? started);
+	}
+
+	start(input: WorkflowRunInput, signal?: AbortSignal, onProgress?: WorkflowProgressListener): WorkflowSnapshot {
 		if (this.disposed) throw new Error("Workflow Runtime is disposed");
-		const definition = validateWorkflowDefinition(parseWorkflowDefinition(input.workflow), (profile) =>
-			this.agentPool.hasProfile(profile),
+		const definition = validateWorkflowDefinition(
+			parseWorkflowDefinition(input.workflow),
+			(profile) => this.agentPool.hasProfile(profile),
+			{
+				defaultProfile: this.agentPool.defaultProfileId,
+				availableProfiles: this.agentPool.getProfileIds(),
+			},
 		);
 		materializeWorkflowTask(definition, input.task);
 		const createdAt = this.now();
@@ -218,6 +241,7 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 			createdAt: createdAt.getTime(),
 		});
 		const nodes = definition.nodes.map((node): WorkflowNodeSnapshot => {
+			const agentId = workflowAgentId(workflowId, node.id);
 			const monitor = this.monitorRuntime.attach({
 				target: {
 					kind: "workflow",
@@ -236,6 +260,7 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 			});
 			return {
 				id: node.id,
+				agentId,
 				profile: node.profile,
 				taskSummary: taskSummary(node.task),
 				dependsOn: [...node.dependsOn],
@@ -282,7 +307,7 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 		signal?.addEventListener("abort", onAbort, { once: true });
 		if (signal?.aborted) this.requestCancel(active);
 		void this.execute(active).finally(() => signal?.removeEventListener("abort", onAbort));
-		return await completion;
+		return cloneSnapshot(active.snapshot, this.now());
 	}
 
 	async cancelWorkflow(workflowId: string): Promise<WorkflowCancelResult> {
@@ -391,6 +416,7 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 					const nodeStatus = workflowNodeStatusFromMonitor(record);
 					return {
 						id: target.nodeId,
+						agentId: workflowAgentId(workflowId, target.nodeId),
 						profile: target.profile ?? "unknown",
 						taskSummary: record.taskSummary,
 						dependsOn: [...(target.dependsOn ?? [])],
@@ -621,6 +647,7 @@ export class WorkflowRuntime implements WorkflowMonitorSource {
 			const input: DelegateTaskInput = {
 				task: nodePrompt(definition, snapshots),
 				profile: definition.profile,
+				taskId: node.agentId,
 				budget: definition.budget,
 				cancelStrategy: definition.cancelStrategy,
 				hardTimeoutMs: definition.timeoutMs,

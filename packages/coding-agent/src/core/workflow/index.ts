@@ -19,7 +19,9 @@ export {
 	WORKFLOW_DEFINITION_SCHEMA,
 	WORKFLOW_LIMITS,
 	WORKFLOW_NODE_SCHEMA,
+	WORKFLOW_RUN_DEFINITION_SCHEMA,
 	type WorkflowDefinitionSchema,
+	type WorkflowProfileResolutionOptions,
 	WorkflowValidationError,
 } from "./schema.ts";
 export {
@@ -38,6 +40,7 @@ export {
 	type WorkflowBudget,
 	type WorkflowCancelResult,
 	type WorkflowDefinition,
+	type WorkflowDefinitionInput,
 	type WorkflowDiagnostic,
 	type WorkflowFailurePolicy,
 	type WorkflowNodeDefinition,

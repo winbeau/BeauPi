@@ -6,7 +6,7 @@ M11 已完成。Workflow Runtime 位于 `packages/coding-agent/src/core/workflow
 
 ## Workflow 格式
 
-当前 Schema 版本为 `1`。`workflow_run.workflow` 接受内置 Workflow 名称、序列化 YAML/JSON，或符合严格 TypeBox Schema 的对象。
+当前 Schema 版本为 `1`。`workflow_run.workflow` 接受内置 Workflow 名称、序列化 YAML/JSON，或符合严格 TypeBox Schema 的对象。为降低启动摩擦，对象和序列化定义都可省略 `version`，Runtime 会规范化为当前版本；显式提供未知版本仍会失败。
 
 ```yaml
 version: 1
@@ -29,7 +29,7 @@ nodes:
     writePolicy: none
 ```
 
-节点支持 `id`、`agent`/`profile`、`task`、`dependsOn`、`condition`、`writePolicy`、`timeoutMs`、`failurePolicy`、`budget` 和 `cancelStrategy`。节点级 `timeoutMs` 保持从获得 AgentPool 槽位后计算的最终硬上限；节点 `budget.timeoutMs` 与独立 `delegate_task` 一样，只收紧可由 assistant/turn/Tool 活动续期的无进展窗口。Runtime 在启动前校验额外字段、重复 ID、未知依赖、自依赖、环、未知 Profile、条件和预算。
+节点支持 `id`、`agent`/`profile`、`task`、`dependsOn`、`condition`、`writePolicy`、`timeoutMs`、`failurePolicy`、`budget` 和 `cancelStrategy`。`agent`/`profile` 可省略，此时使用 AgentPool 默认 Profile；CLI 内置 Profile 为 `reviewer`（默认）、`researcher` 和 `implementer`。未知 Profile 错误会同时列出可用 ID 和默认值。节点级 `timeoutMs` 保持从获得 AgentPool 槽位后计算的最终硬上限；节点 `budget.timeoutMs` 与独立 `delegate_task` 一样，只收紧可由 assistant/turn/Tool 活动续期的无进展窗口。Runtime 在启动前校验额外字段、重复 ID、未知依赖、自依赖、环、未知 Profile、条件和预算。
 
 ## 条件语法
 
@@ -89,7 +89,12 @@ Workflow 取消会取消全部运行节点并结束 pending 节点。重复取�
 
 ### `workflow_run`
 
-输入 Workflow 和可选 `task`。同步等待 DAG 到达终态，返回 `WorkflowRunDetailsV1`。它不会启动 M12 后台自动唤醒。
+输入 Workflow、可选 `task` 和可选 `background`：
+
+- 默认同步等待 DAG 到达终态，返回 `WorkflowRunDetailsV1`。
+- `background: true` 在完成确定性校验和启动后立即返回 `workflowId`/运行快照；DAG 继续由当前 Session Runtime 执行，随后使用 `workflow_status`、`workflow_cancel` 或 Monitor Tools 查询和控制。
+
+后台 Workflow 不创建第二个进程或第二套 Agent Runtime，也不等同于 M12 的进程 Wake Queue。
 
 ### `workflow_status`
 
@@ -97,9 +102,23 @@ Workflow 取消会取消全部运行节点并结束 pending 节点。重复取�
 
 ### `workflow_cancel`
 
-幂等请求取消一个 Workflow，返回 `WorkflowCancelDetailsV1`。
+幂等请求取消一个 Workflow，并等待运行节点完成受控 abort/graceful 收尾后返回 `WorkflowCancelDetailsV1`；因此慢速 provider/Tool 的取消响应可能持续到其既有硬上限。
 
-Details 包含 Workflow/节点状态、时间、结构化输出、Monitor ID、诊断和错误，不包含子 Agent transcript。受控子 Agent 不暴露 Workflow Tools，防止递归 Workflow。
+Details 包含 Workflow/节点状态、时间、结构化输出、Monitor ID、稳定 `agentId`、诊断和错误，不包含子 Agent transcript。每个节点的 Agent ID 为 `<workflowId>:<nodeId>`，从节点创建开始即可用于 `agent_control`。受控子 Agent 不暴露 Workflow Tools，防止递归 Workflow。
+
+## Agent ID、tmux 与控制
+
+交互式 CLI 默认为每个运行中的子 Agent 创建独立、只读的本地 tmux transcript；AgentSession 仍在当前进程执行，不启动第二个不受控 CLI。tmux 不可用时 Agent 继续运行，并在结构化诊断中说明可视化降级。
+
+`agent_control` 使用稳定 Agent ID 提供：
+
+- `list` / `status`：发现 Agent、状态、任务、最近活动和 tmux attach 命令。
+- `steer`：在当前 Tool batch 结束后注入方向调整。
+- `follow_up`：在当前 run 完成后追加任务。
+- `cancel`：请求 AgentPool 的既有受控取消路径。
+- `capture`：有界读取 tmux transcript，最多返回当前捕获尾部；不会自动注入其他 Agent 上下文。
+
+启用 `peerControl` 后，内置子 Agent 可通过同一 Tool 按 ID 查看、capture、steer、follow-up 或取消同一 AgentPool 中的 peer。完整 transcript 仍不会自动进入下游 Workflow 依赖上下文，只有显式 `agent_control capture` 才会读取。SDK 可通过 `agentPool.tmux` 和 `agentPool.peerControl` 分别启用这两个能力。
 
 ## Monitor、Task Ledger 与恢复
 

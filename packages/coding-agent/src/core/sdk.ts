@@ -323,6 +323,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? new AgentPool(options.agentPool, {
 					cwd,
 					agentDir,
+					sessionId: sessionManager.getSessionId(),
 					modelRuntime,
 					resourceLoader,
 					model,
@@ -400,7 +401,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const customTools = [...(options.customTools ?? [])];
 	const includeRuntimeTools = options.noTools !== "builtin" || options.tools !== undefined;
 	if (includeRuntimeTools) {
-		if (childAgentPool) customTools.push(childAgentPool.delegateTaskTool);
+		if (childAgentPool) {
+			customTools.push(childAgentPool.delegateTaskTool);
+			customTools.push(childAgentPool.agentControlTool);
+		}
 		for (const monitorTool of monitorTools) {
 			if (!customTools.some((tool) => tool.name === monitorTool.name)) customTools.push(monitorTool);
 		}
@@ -437,7 +441,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"privileged_exec",
 		"web_search",
 		"web_fetch",
-		...(childAgentPool ? ["delegate_task", "workflow_run", "workflow_status", "workflow_cancel"] : []),
+		...(childAgentPool
+			? ["delegate_task", "agent_control", "workflow_run", "workflow_status", "workflow_cancel"]
+			: []),
 		"target_select",
 		"remote_exec",
 		"terminal_create",

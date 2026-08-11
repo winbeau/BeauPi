@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added stable Agent IDs, per-Agent read-only tmux transcripts, and `agent_control` operations for discovery, status, bounded capture, steering, follow-up work, and controlled cancellation.
+- Added background Workflow startup plus implicit current-version and default-Profile resolution, with available Profile guidance in validation errors and Tool prompts.
+
 ## [1.2.0] - 2026-08-11
 
 ### Breaking Changes

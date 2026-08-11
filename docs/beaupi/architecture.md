@@ -112,7 +112,9 @@ interface AgentTaskResult {
 }
 ```
 
-生命周期事件携带稳定 task ID、Profile、任务摘要、时间、状态、预算、最后活动和错误；progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，并对持续 assistant/Tool 流发出节流活动心跳，单次 terminal event 可直接由 M6 Monitor Runtime 消费。所有内置 Profile 在获得并发槽位后使用 10 分钟无进展窗口和 30 分钟最终 wall-clock 硬上限，排队时间不消耗执行预算；单次 request 的 `budget.timeoutMs` 只能缩短无进展窗口，assistant 流、turn 和 Tool start/update/end 活动会续期该窗口，但不能越过 Profile 硬上限。默认不设置 output token 或 turn 上限。Agent Pool 的全局并发上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低；同一 Assistant message 中的独立 `delegate_task` 调用使用并行 Tool 模式。排队任务可通过同一取消入口停止，槽位交接使用显式 lease，取消一个 waiter 不会饿死后续任务。超时时优先返回最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不再产生空 summary。Ctrl+O 展开 Agent Tool Result 时显示完整结构化摘要、预算、引用、检查和诊断。子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。子 Agent 的完整消息历史只存在于其内存 Session，不进入 Coordinator branch。
+生命周期事件携带稳定 task ID（即 Agent ID）、Profile、任务摘要、时间、状态、预算、最后活动和错误；Workflow 节点预分配 `<workflowId>:<nodeId>`，普通委派使用随机稳定 ID。progress 记录 turn、Tool、目标路径与 started/succeeded/failed 结果，并对持续 assistant/Tool 流发出节流活动心跳，单次 terminal event 可直接由 M6 Monitor Runtime 消费。所有内置 Profile 在获得并发槽位后使用 10 分钟无进展窗口和 30 分钟最终 wall-clock 硬上限，排队时间不消耗执行预算；单次 request 的 `budget.timeoutMs` 只能缩短无进展窗口，assistant 流、turn 和 Tool start/update/end 活动会续期该窗口，但不能越过 Profile 硬上限。默认不设置 output token 或 turn 上限。Agent Pool 的全局并发上限为 `max(1, floor(availableParallelism() / 3))`，显式配置只能进一步降低；同一 Assistant message 中的独立 `delegate_task` 调用使用并行 Tool 模式。排队任务可通过同一取消入口停止，槽位交接使用显式 lease，取消一个 waiter 不会饿死后续任务。超时时优先返回最后已完成或流式生成的 assistant 文本；没有文本时返回最后活动摘要，不再产生空 summary。Ctrl+O 展开 Agent Tool Result 时显示 Agent ID、tmux attach 命令、完整结构化摘要、预算、引用、检查和诊断。子任务 prompt 跳过自动 Document Contract preflight，只有显式文档驱动审查才使用 `docs_resolve_task`。
+
+交互式 CLI 可为每个 Agent ID 建立独立的只读本地 tmux transcript。它镜像 thinking/text delta、turn、Tool 调用、Bash 流输出和终态，但实际 `AgentSession` 仍在主进程内运行；tmux 缺失只降低可视化，不改变任务结果。transcript 保留到 Coordinator Session dispose 或有界历史淘汰，使用 `tmux -L <server> attach-session -r -t <session>` 查看。`agent_control` 在同一 AgentPool 内按 ID 提供 list/status/capture/steer/follow-up/cancel；capture 有界且必须显式调用，不会自动进入下游 Workflow 依赖上下文。子 Agent 的模型消息历史仍只存在于其内存 Session，不进入 Coordinator branch；启用 `peerControl` 时，peer 可主动读取 transcript 并据此协作。
 
 ## Skill Registry
 
@@ -154,7 +156,7 @@ interface WorkflowNodeDefinition {
 - `fail-workflow` 取消其余节点，`continue` 允许依赖节点按条件继续，`skip-dependents` 跳过传递依赖
 - Workflow/节点快照只通过 `workflow_run/status/cancel` Tool Result 和现有 Monitor custom entries 持久化；恢复时无法确认的非终态标记为 `lost`
 
-`workflow_run` 同步等待 DAG 到达终态，不实现 M12 的后台自动唤醒；`workflow_status` 和 `workflow_cancel` 可由 SDK、并行 Tool 调用或后续回合查询/取消。详细契约见 [多 Agent Workflow](./workflows.md)。
+`workflow_run` 默认同步等待 DAG 到达终态；`background: true` 则在确定性启动后返回，DAG 继续使用同一 Session Runtime。两种模式都不实现 M12 的进程自动唤醒；`workflow_status` 和 `workflow_cancel` 可由 SDK、并行 Tool 调用或后续回合查询/取消。对象/YAML 可省略当前 `version`，节点可省略 Profile 并使用 AgentPool 默认值；未知 Profile 诊断会列出可用 ID。详细契约见 [多 Agent Workflow](./workflows.md)。
 
 ## Document Runtime
 

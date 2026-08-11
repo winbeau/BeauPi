@@ -66,9 +66,8 @@ describe("workflow_* Tools", () => {
 		setup.harness.setResponses([fauxAssistantMessage("done")]);
 		const run = await execute(setup.definitions.workflow_run!, {
 			workflow: {
-				version: 1,
 				id: "tool-run",
-				nodes: [{ id: "inspect", profile: "reviewer", task: "Inspect", writePolicy: "none" }],
+				nodes: [{ id: "inspect", task: "Inspect", writePolicy: "none" }],
 			},
 		});
 		const runDetails = details(run);
@@ -102,6 +101,53 @@ describe("workflow_* Tools", () => {
 		});
 	});
 
+	it("starts background Workflows without waiting for the DAG to finish", async () => {
+		const setup = await createSetup();
+		let childStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			childStarted = resolve;
+		});
+		setup.harness.setResponses([
+			async () => {
+				childStarted();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				return fauxAssistantMessage("late");
+			},
+		]);
+
+		const run = details(
+			await execute(setup.definitions.workflow_run!, {
+				workflow: { id: "background-run", nodes: [{ id: "wait", task: "Wait" }] },
+				background: true,
+			}),
+		);
+		expect(run).toMatchObject({ ok: true, workflow: { status: "running" } });
+		await started;
+		const workflowId = run.workflow!.workflowId;
+		expect(details(await execute(setup.definitions.workflow_status!, { workflowId }))).toMatchObject({
+			ok: true,
+			workflow: { status: "running", nodes: [{ agentId: `${workflowId}:wait`, status: "running" }] },
+		});
+		expect(details(await execute(setup.definitions.workflow_cancel!, { workflowId }))).toMatchObject({
+			ok: true,
+			workflow: { status: "cancelled" },
+		});
+
+		setup.harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "background provider failure" }),
+		]);
+		const failedRun = details(
+			await execute(setup.definitions.workflow_run!, {
+				workflow: { id: "background-failure", nodes: [{ id: "fail", task: "Fail" }] },
+				background: true,
+			}),
+		);
+		await setup.session.monitorRuntime.wait(failedRun.workflow!.monitorId, 1_000);
+		expect(
+			details(await execute(setup.definitions.workflow_status!, { workflowId: failedRun.workflow!.workflowId })),
+		).toMatchObject({ ok: true, workflow: { status: "failed", nodes: [{ status: "failed" }] } });
+	});
+
 	it("returns structured validation/not-found errors and cancels workflow_run through AbortSignal", async () => {
 		const setup = await createSetup();
 		const invalid = details(
@@ -114,6 +160,8 @@ describe("workflow_* Tools", () => {
 			}),
 		);
 		expect(invalid).toMatchObject({ ok: false, error: { code: "profile_not_found" } });
+		expect(invalid.error?.message).toContain("reviewer, researcher, implementer");
+		expect(invalid.error?.message).toContain("Omit agent/profile");
 		expect(details(await execute(setup.definitions.workflow_status!, { workflowId: "missing" }))).toMatchObject({
 			ok: false,
 			error: { code: "workflow_not_found" },

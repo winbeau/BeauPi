@@ -127,6 +127,7 @@ src/components/permissions/AskUserQuestionPermissionRequest/PreviewQuestionView.
 | `web_fetch` | `Fetch` |
 | `ask_user_question` | `Question` |
 | `delegate_task` | `Agent` |
+| `agent_control` | `Agent Control` |
 | `workflow_run` | `Workflow` |
 | `background_start` | `Background` |
 | `terminal_bash` | `Terminal Bash` |
@@ -306,13 +307,15 @@ Tasks
 
 规则：
 
+- `taskId` 是稳定 Agent ID；折叠结果显示短 ID，Ctrl+O 展开显示完整 ID 与只读 tmux attach 命令。
+- 交互式 CLI 的 tmux pane 镜像完整运行过程；TUI 默认仍只展示工具摘要、最终结果和用量，避免把 peer transcript 注入模型上下文。
 - 使用 `├─`、`└─` 和 `│  ⎿  ` 树形 gutter
 - Agent 类型/名称加粗，描述放在括号内
 - 运行中显示最近 Tool 信息，未开始显示 `Initializing…`
 - 完成显示 `Done`
 - 后台 Agent 完成主回合但仍运行时显示任务描述，不显示普通 Done 行
 - 默认展示 tool use 数和 token 数
-- 默认不展示完整子 Agent 对话，只展示工具摘要、最终结果和用量；Ctrl+O 展开详情
+- 默认不展示完整子 Agent 对话，只展示工具摘要、最终结果和用量；Ctrl+O 展开结构化详情，完整实时过程通过只读 tmux transcript 查看
 
 ## Workflow
 
