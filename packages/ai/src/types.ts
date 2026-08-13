@@ -402,6 +402,23 @@ export interface AssistantMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/** Structured error carried by a failed tool result. */
+export interface ToolResultError {
+	/** Machine-readable category, e.g. "command_failed" | "not_found" | "permission_denied" | "timeout" | "aborted" | "blocked" | "validation". */
+	type: string;
+	message: string;
+	/** Whether retrying or fixing is plausibly useful (timeout: true, permission: false). */
+	recoverable: boolean;
+}
+
+/** Execution metadata; purely additive, never affects behavior. */
+export interface ToolResultMeta {
+	durationMs?: number;
+	truncated?: boolean;
+	changedState?: boolean;
+	exitCode?: number;
+}
+
 export interface ToolResultMessage<TDetails = any> {
 	role: "toolResult";
 	toolCallId: string;
@@ -417,6 +434,10 @@ export interface ToolResultMessage<TDetails = any> {
 	 */
 	addedToolNames?: string[];
 	isError: boolean;
+	/** Structured error for failed results. Optional; absent for legacy or unclassified errors. */
+	error?: ToolResultError;
+	/** Execution metadata (duration, truncation, state changes). Purely additive. */
+	meta?: ToolResultMeta;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
