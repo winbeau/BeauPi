@@ -31,6 +31,15 @@
 - CI publishing is triggered by `workflow_dispatch` on `build-binaries.yml` (tag pushes do not trigger it): `gh workflow run build-binaries.yml --ref main -f tag=vX.Y.Z`.
 - Model data is generated, not checked in: `packages/ai/src/providers/data/` is gitignored. When CI check fails on stale model IDs (test references removed upstream IDs), regenerate on an online host (huawei2 via the 10808 proxy) and update the test IDs; `skip_validation=true` dispatch is the recovery path only.
 
+## Dynamic Task Planning
+
+- Classify every user message before touching the task plan (see `packages/coding-agent/src/core/tasks/prompt-trigger.ts` `classifyUserPrompt`):
+  - `new_work` (executable request, e.g. "修复 xxx", "发布新版本", "Implement feature X"): update the plan/goal via `tasks_update(reason: plan_changed)` or open a new plan.
+  - `clarification` (status questions, follow-ups like "进度如何", "修好了吗") and `background` (preferences, constraints, context supplements): never change the goal or task structure; just answer or incorporate the context.
+  - `other` (commands like `/skill:...`, plain chat): never change the goal.
+- Keep user input and plan state separate when feeding the model: since v1.2.6 the dynamic task projection is never appended to user messages; do not reintroduce mixing.
+- When a new executable request arrives while a plan exists, evaluate only whether the goal changed before calling `tasks_update(plan_changed)`; a mere clarification or preference does not need one.
+
 ## Commands
 
 - After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.

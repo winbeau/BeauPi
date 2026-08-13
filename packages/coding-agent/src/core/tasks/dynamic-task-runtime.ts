@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { SessionEntry, SessionManager } from "../session-manager.ts";
-import { isExecutableDynamicTaskPrompt } from "./prompt-trigger.ts";
+import { classifyUserPrompt } from "./prompt-trigger.ts";
 import {
 	DYNAMIC_TASK_LIMITS,
 	DynamicTaskValidationError,
@@ -392,14 +392,16 @@ export class DynamicTaskRuntime {
 	}
 
 	beginUserPrompt(text: string): void {
-		const executable = isExecutableDynamicTaskPrompt(text);
+		// Only genuinely new executable work may change the plan. Clarifications,
+		// background supplements, and preferences must not touch the goal.
+		const intent = classifyUserPrompt(text);
 		if (!this.snapshot) {
-			this.initialPlanRequired = executable;
+			this.initialPlanRequired = intent === "new_work";
 			this.refreshReminder = undefined;
 			return;
 		}
 		this.initialPlanRequired = false;
-		if (executable) {
+		if (intent === "new_work") {
 			this.refreshReminder =
 				"The user supplied executable work while a Dynamic Task plan exists. Check whether scope, dependencies, blockers, or verification changed; call tasks_update(reason: plan_changed) only when needed.";
 		}
