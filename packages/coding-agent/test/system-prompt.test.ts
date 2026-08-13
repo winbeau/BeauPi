@@ -128,6 +128,9 @@ describe("buildSystemPrompt", () => {
 			);
 			expect(prompt).toContain("- State failures matter-of-factly with the location, cause, and fix.");
 			expect(prompt).toContain("Safety confirmations, genuine ambiguity, and higher-priority instructions override");
+			expect(prompt).toContain(
+				"Keep fenced code block contents flush-left with no extra indentation, including bash blocks",
+			);
 		});
 	});
 

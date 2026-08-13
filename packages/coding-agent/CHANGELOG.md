@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed fenced code block output guidance to keep command contents flush-left for direct copying.
+
 ## [1.2.3] - 2026-08-13
 
 ### Added

@@ -143,6 +143,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"State failures matter-of-factly with the location, cause, and fix.",
 		"When work remains, end with one concrete next action; otherwise stop without a recap or generic closing.",
 		"Honor explicit requests for detail or output format. Safety confirmations, genuine ambiguity, and higher-priority instructions override these style rules.",
+		"Keep fenced code block contents flush-left with no extra indentation, including bash blocks, so users can copy commands directly.",
 		"After three unsuccessful fix attempts, stop and identify the assumption most likely to be wrong; ask one diagnostic question if needed.",
 	]
 		.map((guideline) => `- ${guideline}`)
