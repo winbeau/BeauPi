@@ -149,7 +149,7 @@ describe("AgentSession model and extension characterization", () => {
 
 		await harness.session.prompt("hi");
 
-		expect(getAssistantTexts(harness)).toContain("Blocked by test");
+		expect(getAssistantTexts(harness)).toContain("[tool-error type=tool_error recoverable=false] Blocked by test");
 		expect(
 			harness.session.messages.find((message) => message.role === "toolResult" && message.isError),
 		).toBeDefined();

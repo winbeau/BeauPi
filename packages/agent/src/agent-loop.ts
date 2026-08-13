@@ -8,6 +8,7 @@ import {
 	type Context,
 	EventStream,
 	type ToolResultMessage,
+	type ToolResultMeta,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
 import { getDefaultStreamFn } from "./stream-fn.ts";
@@ -21,6 +22,7 @@ import type {
 	AgentToolResult,
 	StreamFn,
 } from "./types.ts";
+import { ToolError } from "./types.ts";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
@@ -670,6 +672,7 @@ async function executePreparedToolCall(
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
+	const startedAt = Date.now();
 
 	try {
 		const result = await prepared.tool.execute(
@@ -693,17 +696,22 @@ async function executePreparedToolCall(
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		return { result: withDuration(result, startedAt), isError: false };
 	} catch (error) {
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
 		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: withDuration(createErrorToolResult(error instanceof Error ? error.message : String(error)), startedAt),
 			isError: true,
 		};
 	} finally {
 		acceptingUpdates = false;
 	}
+}
+
+function withDuration<T>(result: AgentToolResult<T>, startedAt: number): AgentToolResult<T> {
+	const durationMs = Date.now() - startedAt;
+	return { ...result, meta: { ...result.meta, durationMs } };
 }
 
 async function finalizeExecutedToolCall(
@@ -753,10 +761,44 @@ async function finalizeExecutedToolCall(
 	};
 }
 
-function createErrorToolResult(message: string): AgentToolResult<any> {
+function createErrorToolResult(error: ToolError | Error | string): AgentToolResult<any> {
+	const message = error instanceof Error ? error.message : String(error);
+	let type = "tool_error";
+	let recoverable = false;
+	let meta: ToolResultMeta | undefined;
+
+	if (error instanceof ToolError) {
+		type = error.type;
+		recoverable = error.recoverable;
+		meta = error.meta;
+	} else if (/exited with code/i.test(message)) {
+		type = "command_failed";
+		recoverable = true;
+		const match = /exited with code (-?\d+)/i.exec(message);
+		if (match) meta = { exitCode: Number(match[1]) };
+	} else if (/timeout|timed out/i.test(message)) {
+		type = "timeout";
+		recoverable = true;
+	} else if (/permission|denied|EACCES/i.test(message)) {
+		type = "permission_denied";
+		recoverable = false;
+	} else if (/not found|ENOENT/i.test(message)) {
+		type = "not_found";
+		recoverable = false;
+	} else if (/aborted/i.test(message)) {
+		type = "aborted";
+		recoverable = false;
+	}
+
+	const text =
+		`[tool-error type=${type} recoverable=${recoverable}` +
+		(meta?.exitCode !== undefined ? ` exitCode=${meta.exitCode}` : "") +
+		`] ${message}`;
 	return {
-		content: [{ type: "text", text: message }],
+		content: [{ type: "text", text }],
 		details: {},
+		error: { type, message, recoverable },
+		...(meta ? { meta } : {}),
 	};
 }
 

@@ -10,7 +10,9 @@ import type {
 	SimpleStreamOptions,
 	TextContent,
 	Tool,
+	ToolResultError,
 	ToolResultMessage,
+	ToolResultMeta,
 	Usage,
 } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
@@ -366,6 +368,28 @@ export interface AgentToolResult<T> {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+	/** Structured error carried by a failed tool result. Optional; absent for legacy or unclassified errors. */
+	error?: ToolResultError;
+	/** Execution metadata (duration, truncation, state changes). Purely additive, never affects behavior. */
+	meta?: ToolResultMeta;
+}
+
+/**
+ * Error thrown by tools to carry a machine-readable category and recoverability.
+ * Falls back to heuristic classification when a plain `Error` is thrown instead.
+ */
+export class ToolError extends Error {
+	readonly type: string;
+	readonly recoverable: boolean;
+	readonly meta?: ToolResultMeta;
+
+	constructor(type: string, message: string, recoverable: boolean, meta?: ToolResultMeta) {
+		super(message);
+		this.name = "ToolError";
+		this.type = type;
+		this.recoverable = recoverable;
+		this.meta = meta;
+	}
 }
 
 /**
