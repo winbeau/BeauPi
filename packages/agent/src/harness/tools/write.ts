@@ -32,6 +32,7 @@ export function createWriteTool<TContext extends ExecutionToolContext = Executio
 				return {
 					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
 					details: undefined,
+					meta: { changedState: true },
 				};
 			});
 		},

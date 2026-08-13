@@ -120,6 +120,7 @@ export function createEditTool<TContext extends ExecutionToolContext = Execution
 						patch: generateUnifiedPatch(path, baseContent, newContent),
 						firstChangedLine: diffResult.firstChangedLine,
 					},
+					meta: { changedState: true },
 				};
 			});
 		},

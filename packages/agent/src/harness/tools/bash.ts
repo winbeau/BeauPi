@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { ToolError } from "../../types.ts";
 import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
 import { executeShellWithCapture, type ShellCaptureProgress } from "../utils/shell-output.ts";
@@ -142,17 +143,26 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
 				}
 
 				const appendStatus = (status: string): string => `${outputText ? `${outputText}\n\n` : ""}${status}`;
-				if (capture.cancelled) throw new Error(appendStatus("Command aborted"));
+				if (capture.cancelled) throw new ToolError("aborted", appendStatus("Command aborted"), false);
 				if (capture.executionError?.code === "timeout") {
-					throw new Error(appendStatus(`Command timed out after ${timeout} seconds`), {
-						cause: capture.executionError,
+					throw new ToolError("timeout", appendStatus(`Command timed out after ${timeout} seconds`), true, {
+						truncated: capture.truncation.truncated,
 					});
 				}
 				if (capture.executionError) throw capture.executionError;
 				if (capture.exitCode !== 0 && capture.exitCode !== undefined) {
-					throw new Error(appendStatus(`Command exited with code ${capture.exitCode}`));
+					throw new ToolError(
+						"command_failed",
+						appendStatus(`Command exited with code ${capture.exitCode}`),
+						true,
+						{ exitCode: capture.exitCode, truncated: capture.truncation.truncated },
+					);
 				}
-				return { content: [{ type: "text", text: outputText || "(no output)" }], details };
+				return {
+					content: [{ type: "text", text: outputText || "(no output)" }],
+					details,
+					meta: { truncated: capture.truncation.truncated, exitCode: 0, changedState: false },
+				};
 			} finally {
 				clearUpdateTimer();
 			}
