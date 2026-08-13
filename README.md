@@ -35,6 +35,8 @@ The standalone installer verifies the selected archive against the release's `SH
 
 Development and architecture documentation is under [docs/beaupi](docs/beaupi/README.md). BeauPi retains the upstream Pi runtime and MIT license; upstream project documentation is available at [pi.dev](https://pi.dev).
 
+Releasing a new version: follow the [release runbook](docs/beaupi/release-runbook.md) (normal flow, offline/network fallbacks, model-data drift recovery, and CI dispatch).
+
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Published Packages

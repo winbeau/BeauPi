@@ -18,6 +18,7 @@
 - [Claude Code 风格 TUI](./ui-style.md)
 - [Claude Code 风格 TUI 实施计划](./plans/README.md)
 - [Skill 导入与注册](./skills.md)
+- [发布手册（Release Runbook）](./release-runbook.md)
 
 ## 产品定位
 

@@ -23,6 +23,14 @@
 - Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
 - Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
 
+## Release
+
+- Follow the release runbook in `docs/beaupi/release-runbook.md` before publishing.
+- Release entry point is `node scripts/release.mjs <major|minor|patch>`; it requires a clean working tree (untracked files included).
+- npm packages are published under renamed scopes (`@winbeau/beaupi-*`); never check `@earendil-works/pi-*` on the npm registry for release verification.
+- CI publishing is triggered by `workflow_dispatch` on `build-binaries.yml` (tag pushes do not trigger it): `gh workflow run build-binaries.yml --ref main -f tag=vX.Y.Z`.
+- Model data is generated, not checked in: `packages/ai/src/providers/data/` is gitignored. When CI check fails on stale model IDs (test references removed upstream IDs), regenerate on an online host (huawei2 via the 10808 proxy) and update the test IDs; `skip_validation=true` dispatch is the recovery path only.
+
 ## Commands
 
 - After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
