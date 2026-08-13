@@ -1838,7 +1838,10 @@ export class AgentSession {
 			}
 
 			if (this.getActiveToolNames().includes("tasks_update")) {
-				this.dynamicTaskRuntime?.beginUserPrompt(expandedText);
+				// Judge on the user's actual input, not template/skill-expanded text: commands
+				// (e.g. "/review ...") are explicit system features, not new executable work,
+				// and must not trigger dynamic-task planning guidance.
+				this.dynamicTaskRuntime?.beginUserPrompt(currentText);
 			}
 
 			// Build messages array (custom message if any, then user message)
