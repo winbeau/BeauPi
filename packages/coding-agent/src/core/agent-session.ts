@@ -968,7 +968,17 @@ export class AgentSession {
 				...previousSnapshot,
 				context: {
 					...previousContext,
-					systemPrompt: taskProjection ? `${baseSystemPrompt}\n\n${taskProjection}` : baseSystemPrompt,
+					systemPrompt: baseSystemPrompt,
+					messages: taskProjection
+						? [
+								...previousContext.messages,
+								{
+									role: "user",
+									content: [{ type: "text", text: taskProjection }],
+									timestamp: Date.now(),
+								},
+							]
+						: previousContext.messages,
 					tools: this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
@@ -1881,7 +1891,10 @@ export class AgentSession {
 			}
 			const baseSystemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
 			const taskProjection = this.dynamicTaskRuntime?.getPromptProjection({ consumeReminder: true });
-			this.agent.state.systemPrompt = taskProjection ? `${baseSystemPrompt}\n\n${taskProjection}` : baseSystemPrompt;
+			this.agent.state.systemPrompt = baseSystemPrompt;
+			if (taskProjection) {
+				userContent.push({ type: "text", text: taskProjection });
+			}
 		} catch (error) {
 			releasePreflight();
 			preflightResult?.(false);

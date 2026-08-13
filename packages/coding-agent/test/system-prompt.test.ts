@@ -60,6 +60,33 @@ describe("buildSystemPrompt", () => {
 		});
 	});
 
+	describe("tool ordering", () => {
+		test("sorts selected tools alphabetically", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["write", "read", "bash"],
+				toolSnippets: { write: "Write", read: "Read", bash: "Bash" },
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt.indexOf("- bash:")).toBeLessThan(prompt.indexOf("- read:"));
+			expect(prompt.indexOf("- read:")).toBeLessThan(prompt.indexOf("- write:"));
+		});
+
+		test("produces deterministic output for the same options", () => {
+			const options = {
+				selectedTools: ["write", "read", "bash"],
+				toolSnippets: { write: "Write", read: "Read", bash: "Bash" },
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			};
+
+			expect(buildSystemPrompt(options)).toBe(buildSystemPrompt(options));
+		});
+	});
+
 	describe("actionable response style", () => {
 		test("includes ADHD-friendly guidance adapted for autonomous coding agents", () => {
 			const prompt = buildSystemPrompt({

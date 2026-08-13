@@ -116,6 +116,119 @@ describe("openai-completions tool_choice", () => {
 		mockState.chunks = undefined;
 	});
 
+	async function captureTools(tools: Tool[], model = getModel("openai", "gpt-4o-mini")!) {
+		let payload: unknown;
+		await stream(
+			{ ...model, api: "openai-completions" } as Model<"openai-completions">,
+			{
+				messages: [{ role: "user", content: "Use a tool.", timestamp: Date.now() }],
+				tools,
+			},
+			{
+				apiKey: "test",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+		return (payload ?? mockState.lastParams) as {
+			tools?: Array<{
+				type?: string;
+				function?: { name?: string; parameters?: unknown; strict?: boolean };
+				custom?: { name?: string; format?: unknown };
+			}>;
+		};
+	}
+
+	it("sorts tools by name in payload regardless of registration order", async () => {
+		const makeTool = (name: string): Tool => ({
+			name,
+			description: `${name} tool`,
+			parameters: { type: "object", properties: {}, required: [] } as Tool["parameters"],
+		});
+
+		const first = await captureTools([makeTool("zeta"), makeTool("alpha")]);
+		const second = await captureTools([makeTool("alpha"), makeTool("zeta")]);
+
+		expect(first.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
+		expect(second.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
+	});
+
+	it("canonicalizes parameters key order on the wire", async () => {
+		const first = await captureTools([
+			{
+				name: "lookup",
+				description: "Look up a value",
+				parameters: {
+					type: "object",
+					required: ["query"],
+					properties: { query: { description: "Search text", type: "string" } },
+				} as Tool["parameters"],
+			},
+		]);
+		const second = await captureTools([
+			{
+				name: "lookup",
+				description: "Look up a value",
+				parameters: {
+					properties: { query: { type: "string", description: "Search text" } },
+					required: ["query"],
+					type: "object",
+				} as Tool["parameters"],
+			},
+		]);
+
+		expect(JSON.stringify(first.tools)).toBe(JSON.stringify(second.tools));
+	});
+
+	it("preserves strict sampling while canonicalizing the schema", async () => {
+		const params = await captureTools([
+			{
+				name: "lookup",
+				description: "Look up a value",
+				parameters: {
+					required: ["query"],
+					properties: { query: { type: "string" } },
+					type: "object",
+				} as Tool["parameters"],
+				constrainedSampling: { type: "json_schema", strict: "prefer" },
+			},
+		]);
+
+		expect(params.tools?.[0]?.function?.strict).toBe(true);
+		expect(params.tools?.[0]?.function?.parameters).toEqual({
+			properties: { query: { type: "string" } },
+			required: ["query"],
+			type: "object",
+		});
+	});
+
+	it("leaves grammar tools as custom tools without function parameters", async () => {
+		const model = getModel("openai", "gpt-4o-mini")!;
+		const params = await captureTools(
+			[
+				{
+					name: "sample",
+					description: "Sample text",
+					parameters: {
+						type: "object",
+						required: ["input"],
+						properties: { input: { type: "string" } },
+					} as Tool["parameters"],
+					constrainedSampling: { type: "grammar", variants: { openai_lark: "start: /[a-z]+/" } },
+				},
+			],
+			{ ...model, compat: { ...model.compat, supportsOpenAIGrammarTools: true } },
+		);
+
+		expect(params.tools?.[0]?.type).toBe("custom");
+		expect(params.tools?.[0]?.custom?.format).toEqual({
+			type: "grammar",
+			grammar: { syntax: "lark", definition: "start: /[a-z]+/" },
+		});
+		expect(params.tools?.[0]?.function).toBeUndefined();
+	});
+
 	it("forwards toolChoice from simple options to payload", async () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;

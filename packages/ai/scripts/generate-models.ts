@@ -620,6 +620,7 @@ function detectOpenAICompletionsCompat(model: Model<"openai-completions">): Open
 		...(cacheControlFormat ? { cacheControlFormat } : {}),
 		sendSessionAffinityHeaders: false,
 		supportsLongCacheRetention: !(
+			isDeepSeek ||
 			isTogether ||
 			isCloudflareWorkersAI ||
 			isCloudflareAiGateway ||

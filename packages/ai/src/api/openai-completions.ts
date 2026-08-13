@@ -51,6 +51,7 @@ import {
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import { canonicalizeToolSchema } from "./schema-canonicalize.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -1279,7 +1280,8 @@ function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
-	return tools.map((tool) => {
+	const sorted = [...tools].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+	return sorted.map((tool) => {
 		const grammar = resolveGrammarConstrainedSampling(tool, compat.supportsOpenAIGrammarTools);
 		if (grammar) {
 			return {
@@ -1304,7 +1306,7 @@ function convertTools(
 			function: {
 				name: tool.name,
 				description: tool.description,
-				parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
+				parameters: canonicalizeToolSchema(tool.parameters) as Record<string, unknown>,
 				// Only include strict if provider supports it. Some reject unknown fields.
 				...(compat.supportsStrictMode !== false && { strict: strict ?? false }),
 			},
@@ -1464,6 +1466,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		deferredToolsMode: undefined,
 		sessionAffinityFormat: isOpenRouter ? "openrouter" : "openai",
 		supportsLongCacheRetention: !(
+			isDeepSeek ||
 			isTogether ||
 			isCloudflareWorkersAI ||
 			isCloudflareAiGateway ||

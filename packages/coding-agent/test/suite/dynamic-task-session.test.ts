@@ -18,6 +18,7 @@ describe("Dynamic Task AgentSession integration", () => {
 		harnesses.push(harness);
 		let firstSystemPrompt = "";
 		let secondSystemPrompt = "";
+		let secondUserText = "";
 		let firstTools: string[] = [];
 		harness.setResponses([
 			(context) => {
@@ -50,6 +51,10 @@ describe("Dynamic Task AgentSession integration", () => {
 			},
 			(context) => {
 				secondSystemPrompt = context.systemPrompt ?? "";
+				secondUserText = context.messages
+					.filter((message) => message.role === "user")
+					.map((message) => getMessageText(message))
+					.join("\n");
 				return fauxAssistantMessage("Plan created.");
 			},
 		]);
@@ -58,14 +63,12 @@ describe("Dynamic Task AgentSession integration", () => {
 
 		expect(harness.faux.state.callCount).toBe(2);
 		expect(firstTools).toContain("tasks_update");
-		expect(firstSystemPrompt).toContain('<dynamic_tasks required="initial_plan">');
-		expect(firstSystemPrompt).toContain("15 Chinese characters");
-		expect(firstSystemPrompt).toContain("domain nouns");
-		expect(firstSystemPrompt).toContain("PrivilegeRuntime");
-		expect(firstSystemPrompt).toContain("soft style target");
-		expect(secondSystemPrompt).toContain('<dynamic_tasks revision="1">');
-		expect(secondSystemPrompt).toContain("- inspect [pending] Inspect the implementation");
-		expect(secondSystemPrompt).not.toContain("task_patch");
+		expect(secondSystemPrompt).toBe(firstSystemPrompt);
+		expect(firstSystemPrompt).not.toContain("<dynamic_tasks");
+		expect(secondSystemPrompt).not.toContain("<dynamic_tasks");
+		expect(secondUserText).toContain('<dynamic_tasks revision="1">');
+		expect(secondUserText).toContain("- inspect [pending] Inspect the implementation");
+		expect(secondUserText).not.toContain("task_patch");
 		expect(harness.session.dynamicTaskRuntime?.getSnapshot()).toMatchObject({ revision: 1 });
 		expect(
 			harness.sessionManager
@@ -218,7 +221,7 @@ describe("Dynamic Task AgentSession integration", () => {
 				},
 			]);
 			await resumed.prompt("Report current progress");
-			expect(resumedPrompt).toContain('<dynamic_tasks revision="1">');
+			expect(resumedPrompt).not.toContain("<dynamic_tasks");
 			const runtimeBeforeReload = resumed.dynamicTaskRuntime;
 			await resumed.reload();
 			expect(resumed.dynamicTaskRuntime).toBe(runtimeBeforeReload);

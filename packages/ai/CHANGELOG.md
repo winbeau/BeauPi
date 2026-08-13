@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added canonical tool schema serialization and DeepSeek prompt-cache compatibility fixes.
+
 ## [1.2.2] - 2026-08-11
 
 ## [1.2.1] - 2026-08-11
