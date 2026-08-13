@@ -66,8 +66,7 @@ describe("Dynamic Task AgentSession integration", () => {
 		expect(secondSystemPrompt).toBe(firstSystemPrompt);
 		expect(firstSystemPrompt).not.toContain("<dynamic_tasks");
 		expect(secondSystemPrompt).not.toContain("<dynamic_tasks");
-		expect(secondUserText).toContain('<dynamic_tasks revision="1">');
-		expect(secondUserText).toContain("- inspect [pending] Inspect the implementation");
+		expect(secondUserText).not.toContain("<dynamic_tasks");
 		expect(secondUserText).not.toContain("task_patch");
 		expect(harness.session.dynamicTaskRuntime?.getSnapshot()).toMatchObject({ revision: 1 });
 		expect(

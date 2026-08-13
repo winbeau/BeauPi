@@ -962,23 +962,13 @@ export class AgentSession {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 			const previousContext = previousSnapshot?.context ?? turn.context;
 			const baseSystemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
-			const taskProjection = this.dynamicTaskRuntime?.getPromptProjection({ consumeReminder: true });
 
 			return {
 				...previousSnapshot,
 				context: {
 					...previousContext,
 					systemPrompt: baseSystemPrompt,
-					messages: taskProjection
-						? [
-								...previousContext.messages,
-								{
-									role: "user",
-									content: [{ type: "text", text: taskProjection }],
-									timestamp: Date.now(),
-								},
-							]
-						: previousContext.messages,
+					messages: previousContext.messages,
 					tools: this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
@@ -1893,11 +1883,7 @@ export class AgentSession {
 				this._systemPromptOverride = undefined;
 			}
 			const baseSystemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
-			const taskProjection = this.dynamicTaskRuntime?.getPromptProjection({ consumeReminder: true });
 			this.agent.state.systemPrompt = baseSystemPrompt;
-			if (taskProjection) {
-				userContent.push({ type: "text", text: taskProjection });
-			}
 		} catch (error) {
 			releasePreflight();
 			preflightResult?.(false);
