@@ -823,6 +823,8 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		details: finalized.result.details,
 		usage: finalized.result.usage,
 		...(finalized.result.addedToolNames?.length ? { addedToolNames: finalized.result.addedToolNames } : {}),
+		...(finalized.result.error ? { error: finalized.result.error } : {}),
+		...(finalized.result.meta ? { meta: finalized.result.meta } : {}),
 		isError: finalized.isError,
 		timestamp: Date.now(),
 	};
