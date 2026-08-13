@@ -16,6 +16,7 @@ import {
 	createHarness,
 	type Harness,
 	type JsonValue,
+	type NormalizedError,
 	normalizeRecord,
 	type SimpleHarnessResult,
 	type TranscriptEvent,
@@ -65,7 +66,18 @@ function toTranscriptEvents(messages: AgentSession["messages"]): TranscriptEvent
 				toolCallId: message.toolCallId,
 				name: message.toolName,
 				content: message.content.every((part) => part.type === "text") ? text : toJsonValue(message.content),
-				...(message.isError ? { error: { message: text || "Tool failed" } } : {}),
+				...(message.isError
+					? {
+							error: message.error
+								? // `recoverable` rides the schema catchall; the emitted type only lists message/type.
+									({
+										type: message.error.type,
+										message: message.error.message,
+										recoverable: message.error.recoverable,
+									} as NormalizedError)
+								: { message: text || "Tool failed" },
+						}
+					: {}),
 			});
 		}
 	}
