@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-evals",
-	"version": "1.2.6",
+	"version": "1.2.7",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -8,8 +8,8 @@
 		"eval": "node scripts/run-evals.mjs"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-ai": "^1.2.6",
-		"@earendil-works/pi-coding-agent": "^1.2.6",
+		"@earendil-works/pi-ai": "^1.2.7",
+		"@earendil-works/pi-coding-agent": "^1.2.7",
 		"@types/node": "24.12.4",
 		"shx": "0.4.0",
 		"typescript": "5.9.3",
