@@ -171,6 +171,7 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - `workflow_status`
 - `workflow_cancel`
 - `dependency_check`
+- `privileged_exec`
 
 工具按需动态激活，避免一次向模型暴露过多 Schema。
 
@@ -263,13 +264,17 @@ M12 第一版实现约束：
 - 默认进程轮询只读取 Monitor/PID/exit/log/activity/resources，不调用模型。Progress Reviewer 默认关闭，启用时复用 AgentPool/ModelRuntime 并限制间隔、次数、输入字符、输出和 wall-clock。
 - Session dispose 停止轮询和新注入；恢复时不能确认的非终态目标必须为 `lost`。
 
-### 受控 sudo 终端（已移除）
+### 受控 sudo 终端
 
-M13 受控 sudo 终端已在 Trusted-Local Runtime 升级中删除：
-
-- `sudo`、`su`、`doas`、`pkexec` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter
-- 不存在 `privileged_exec`、受控 PTY、逐请求确认或 JSONL 审计
-- root 与普通用户行为完全由宿主 OS 决定；已配置 Target 使用 `root` 登录不视为授权
+- 本地 Agent 进程始终保持普通用户身份
+- 远程 Target 按已配置的 SSH 登录身份运行，可包含平台提供的 `root` 账户
+- 不提供 `/mode user`、`/mode sudo once` 或 `/mode sudo session`，也不保存一次或限时会话授权
+- local Bash 和 `terminal_bash` 中能够明确解析的 sudo 命令必须在执行前自动路由到统一 `PrivilegeRuntime`
+- 每个 sudo request 独立显示完整只读命令或换行分隔批次并等待用户 Enter；系统 sudo credential cache 不能绕过该确认
+- 密码只进入受控 PTY，不进入 Tool 参数、argv、Session、Monitor、日志、审计或模型上下文
+- 非交互模式和没有可控 PTY 的远程 one-shot 路径默认阻止 sudo
+- `terminal_send` 的完整或分片 sudo command 在 Enter 前拦截，不能绕过受控执行路径
+- 认证完成后临时终端自动detach，command继续写入work log并由Runtime等待；阻止 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s`，不提供持久或隐藏root shell、后台root会话及其他身份切换；已配置Target本身使用`root`登录不视为sudo授权
 - 所有 sudo request 和执行结果写入不含秘密的 JSONL 审计日志
 
 ### 文档驱动执行

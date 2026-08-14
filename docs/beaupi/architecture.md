@@ -12,10 +12,12 @@ BeauPi CLI / TUI
 │   ├── Agent Pool
 │   ├── Monitor Runtime
 │   ├── Workflow Engine
-│   └── Background Task Manager
+│   ├── Background Task Manager
+│   └── Privilege Runtime
 │
 ├── Execution Boundaries
-│   └── Ordinary User Execution
+│   ├── Ordinary User Execution
+│   └── Per-request Controlled Sudo
 │
 ├── Execution Backends
 │   ├── Local WSL
@@ -28,7 +30,8 @@ BeauPi CLI / TUI
 │   ├── Search
 │   ├── Remote/Terminal
 │   ├── Multi-Agent
-│   └── Background Tasks
+│   ├── Background Tasks
+│   └── Privileged Operations
 │
 └── Observability
     ├── Task Status
@@ -57,6 +60,7 @@ packages/coding-agent/
 │   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
 │   │   ├── questions/       # 询问 schema、pending interaction 和结构化答案
 │   │   ├── execution/       # 中性失败分类与 workspace mutation 事实
+│   │   ├── privilege/       # 逐请求 sudo 路由、受控 PTY、交互与审计
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
 │   └── modes/
@@ -216,7 +220,7 @@ BeauPi 是 trusted-local agent：Agent 使用启动 BeauPi 的同一 OS 用户�
 - 失败分类：把失败结果映射为 missing_dependency/permission/network/timeout 等中性类别，只用于结果诊断与可重试提示；
 - 工具种类：workspace mutation 分类只服务于 Dynamic Task 进度跟踪。
 
-Shell 继承宿主完整环境和用户权限；`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter。
+Shell 继承宿主完整环境和用户权限；普通命令由现有本地/SSH/tmux 后端按调用者身份直接执行。能够明确解析的 `sudo`/`su`/`doas`/`pkexec` 命令由 M13 受控 sudo 终端逐次确认后执行（详见 [受控 sudo 终端](./controlled-privilege-terminal.md)），不提供 `/mode sudo` 或持久 root shell。
 
 BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则。
 
@@ -268,7 +272,7 @@ terminal_create
 
 `terminal_read`、`terminal_write` 和 `terminal_edit` 在已有 pane 上构造 terminal-bound Read/Write/Edit operations。相对路径保留远端 shell 当前 cwd 语义，工具层继续复用本地 schema、截断、精确替换、Diff 和 renderer；内部文件命令跳过输出审阅，避免读取长文件时产生无用模型调用；工作日志只记录语义化文件操作，不复制文件内容或 Base64 载荷。
 
-`TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
+`TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 与 `PrivilegeRuntime` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
 
 ## Monitor 与后台任务
 
@@ -305,9 +309,20 @@ Background store 使用 `beaupi.background.snapshot` 版本化 custom entry。Ta
 
 ## 权限边界
 
-BeauPi 不以 root 身份启动，也不提供 sudo mode、持久 root shell、session grant 或受控 sudo 终端。Agent 使用启动 BeauPi 的同一 OS 用户、cwd、环境和文件权限执行工具；`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter。root 与普通用户行为完全由宿主 OS 决定。
+BeauPi 不以 root 身份启动，也不提供 sudo mode、持久 root shell 或 session grant。M13 使用唯一的 session-scoped `PrivilegeRuntime` 接收 `privileged_exec`、local `bash` 和 `terminal_bash` 路由的完整 sudo command 或换行分隔批次；每个 request 都必须在 TUI 中独立确认。认证结束后临时终端自动detach，command继续由Runtime等待并写入work log；`sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 会被阻止，避免留下隐藏root shell。
 
-Shell privilege inspection（`core/privilege/shell-inspection.ts`）已随受控 sudo 路由一并移除；`core/execution/` 保留中性的失败分类与 workspace mutation 事实。
+```text
+AgentSession
+├── PrivilegeRuntime                 # request 状态机与唯一结果事实
+│   ├── local tmux command session
+│   └── existing remote terminal pane
+├── MonitorRuntime / TaskLedger      # 引用结构化 result/monitor facts
+└── Session custom fact + 0600 JSONL audit
+```
+
+Local adapter 使用独立 tmux server 继承当前进程环境、目标 cwd 和配置的真实用户 shell，并保留 shell startup files；不使用 `env -i`、`--noprofile` 或 `--norc`。sudo 自己在 controlling TTY 上管理密码输入的 echo，wrapper 不在整个 command/root-shell 生命周期关闭回显。输入只经 `tmux load-buffer` child stdin 和 `paste-buffer -d -r` 进入 TTY，finally 删除 buffer；不进入 Tool、argv、env、Session、Monitor、Task Ledger、日志、审计、RPC 或模型上下文。
+
+`terminal_send` 在 Enter 前检查累计 line 并用 Ctrl-U 清理 sudo；one-shot remote 路径阻止提权。取消或恢复失败时local关闭ephemeral session，remote发送Ctrl-C并复核原用户shell。`sudo bash`/`sudo -i`、`sudo -S`、`su`、`doas`、`pkexec` 和 namespace/chroot identity switch 不支持。详细设计见 [受控 sudo 终端](./controlled-privilege-terminal.md)。
 
 ## 搜索架构
 

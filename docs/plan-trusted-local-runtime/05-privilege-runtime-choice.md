@@ -2,7 +2,7 @@
 
 ## 状态
 
-设计完成，待产品选择。依赖 Step 02、Step 04。
+已按 05A 落地（2026-08）：Core Policy 删除保持不变，M13 PrivilegeRuntime（`privileged_exec`、受控 sudo tmux 终端、审计）已恢复保留。
 
 ## 1. 为什么单独分叉
 

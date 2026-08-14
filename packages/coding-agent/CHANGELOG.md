@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Restored the M13 controlled sudo terminal (05A): `privileged_exec`, local `bash` and `terminal_bash` sudo routing, the controlled tmux PTY with Enter-to-run/Escape-to-cancel, and 0600 JSONL audit are back. Neutral shell privilege inspection lives in `core/privilege/shell-inspection.ts`, independent of the removed Core Policy; ordinary tools still execute without any authorization gate.
+
 ## [1.3.0] - 2026-08-14
 
 ### Breaking Changes

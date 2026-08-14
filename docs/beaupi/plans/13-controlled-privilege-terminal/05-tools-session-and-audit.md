@@ -1,5 +1,3 @@
-> 已移除：M13 受控 sudo 终端已在 Trusted-Local Runtime 升级中删除，本文保留为历史实施记录。
-
 # 05 Tools、Session、Monitor 与 Audit
 
 ## 目标

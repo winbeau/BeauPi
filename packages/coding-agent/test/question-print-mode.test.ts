@@ -4,8 +4,10 @@ import { runPrintMode } from "../src/modes/print-mode.ts";
 
 function createRuntime() {
 	const setQuestionInteractionHandler = vi.fn();
+	const setPrivilegeInteractionHandler = vi.fn();
 	const session = {
 		setQuestionInteractionHandler,
+		setPrivilegeInteractionHandler,
 		bindExtensions: vi.fn(async () => {}),
 		subscribe: vi.fn(() => () => {}),
 		sessionManager: { getHeader: () => undefined },

@@ -29,7 +29,7 @@
 4. Tool 返回结构化 `details`，渲染器不从日志文本反向推断状态。
 5. Session 恢复、Compact 和分支切换不能破坏已实现状态。
 6. 子 Agent 默认不能递归委派，也不能自动继承全部 Tool 和 Skill。
-7. 本地 Agent 进程使用启动它的同一 OS 用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。`sudo`、`su` 等身份切换命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter；不提供 sudo mode、持久 root shell 或 session grant。
+7. 本地 Agent 进程始终保持普通用户身份；受信任远程 Target 使用 OpenSSH 已配置的登录身份。M13 只允许逐请求受控 sudo：完整命令或批次先填充到 tmux，用户按 Enter 才执行或按 Escape 取消；认证后视图detach且command继续写日志，交互式root shell被阻止，不提供sudo mode、持久root shell或Session grant。
 8. 每个里程碑完成后运行 `npm run check`；修改测试文件时运行对应测试。
 9. 第一开发里程碑先建立 Claude Code 风格的 TUI 视觉基础；后续功能必须复用该组件和状态语言，不能重新引入旧式大背景 Tool 卡片。
 
@@ -50,7 +50,7 @@
 | M10 | 建立确定性执行策略 | Policy Engine、失败预算、Footer advisory（已在 Trusted-Local 升级中移除） | M2、M6、M7、M8、M9 |
 | M11 | 建立多 Agent Workflow | DAG、并发、单写者、Worktree | M5、M6、M10 |
 | M12 | 建立后台任务自动唤醒 | Monitor 扩展、Wake Queue、Session 恢复 | M5、M6、M7、M10 |
-| M13 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计（已在 Trusted-Local 升级中移除） | M7、M9、M10、M12 |
+| M13 | 建立受控权限能力 | 普通用户边界、结构化 sudo、审计 | M7、M9、M10、M12 |
 | M14 | 建立动态 Task 计划闭环 | 主 Agent 计划、Task Runtime、快速模型进度审阅 | M2、M5、M6、M12、M13 |
 | M Final | 准备可发布发行版 | 安装、二进制、CI、Smoke Test | 全部功能里程碑 |
 
@@ -422,7 +422,7 @@ M6 不实现自动唤醒 Coordinator turn、远程 SSH 连接或 sudo。自动�
 - 非零退出、超时、取消和断线保留 Tool details、usage、Monitor 关联和正确 `isError`
 - 连接、认证、主机密钥、命令、超时和会话丢失的结构化诊断
 - 远程目标和长任务状态复用 Monitor Widget、Footer 和 Tool renderer
-- 第一版使用受信任 Target 的 OpenSSH 登录身份，允许 AutoDL 等平台提供的 `root` 账户；登录后的 `sudo`/`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行
+- 第一版使用受信任 Target 的 OpenSSH 登录身份，允许 AutoDL 等平台提供的 `root` 账户；不实现 sudo、su 等登录后提权或身份切换
 
 ### 测试
 
@@ -653,11 +653,38 @@ M10 的 Core Policy Engine（PolicyRuntime、失败预算、敏感路径分类�
 - custom entries 保存 task、trigger、Wake Queue、消费 key 和 review budget；Compact/resume/branch 只恢复当前分支，未确认目标为 `lost`，已消费事件不重复。
 - Task Ledger、Todo、Footer、Tool renderer 和 Background renderer 已接入；测试覆盖真实短本地进程、fake process/remote、faux idle wake/busy follow-up/reviewer、进程组取消、恢复/branch 和暗/亮 40/80/120/160 列。
 
-## M13：受控权限能力（已移除）
+## M13：受控权限能力
 
-状态：已完成（2026-08-01），随后在 Trusted-Local Runtime 升级中删除（2026）。
+状态：已完成（2026-08-01），并在 Trusted-Local Runtime 升级（删除 Core Policy）后保持保留（2026）。
 
-M13 的 `PrivilegeRuntime`、`privileged_exec`、受控 tmux PTY、逐请求 Enter 确认和 JSONL 审计已全部移除：`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter。root 与普通用户行为完全由宿主 OS 决定。
+### 目标
+
+在 SSH/tmux 稳定后提供可审计的结构化提权，不改变 Agent 进程的普通用户边界。
+
+### 交付物
+
+- local Bash 和 `terminal_bash` 的 sudo 自动路由到统一 `PrivilegeRuntime`
+- 结构化 `privileged_exec`
+- 完整 sudo 命令或换行分隔批次直接填充到双分割线 tmux、用户 Enter 执行或 Escape 取消，以及受控 PTY 输入
+- 认证完成后临时终端自动detach，缓存credential时在稳定running后detach；`sudo bash`、`sudo sh`、`sudo -i`和`sudo -s`明确阻止
+- `terminal_send` sudo bypass 拦截
+- 非交互模式和无可控 PTY 的远程 one-shot 路径默认阻止
+- JSONL 审计日志
+- permission/confirm/blocked 状态复用统一 Tool renderer 和 Monitor
+- 不实现 `/mode sudo`、一次授权或限时会话授权
+
+### 验收标准
+
+Agent 进程始终以普通用户运行；每个 sudo request 都先在受控权限终端中填充而不执行，并只由用户按 Enter 释放；密码不进入 Agent 数据链；本地与远程提权均有审计记录。
+
+### 验收记录（2026-08-01）
+
+- `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一进入 session-scoped `PrivilegeRuntime`；普通执行器和 one-shot SSH 路径不能旁路。
+- 每个 request 第一帧直接在双分割线 tmux 中显示完整只读命令或批次；Enter 执行、Escape 取消，不存在 `/mode sudo`、once/session grant、keepalive 或恢复授权。
+- local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；local 与 existing remote terminal 共用 secure stdin buffer，认证输入不进入 argv、Session、Monitor、Task Ledger、日志、审计或模型上下文。
+- 认证视图detach后command继续由Runtime等待并写work log；正常pane dead先解析end marker而不误报lost；短成功输出直返，长输出或失败复用共享`review.model`。
+- `terminal_send` sudo bypass、非交互模式、取消、超时、terminal lost、JSONL 权限和 branch/reload/dispose 生命周期均有自动化验证。
+- M13 相关定向测试 16 个文件、85 个测试通过；`./test.sh` 和 `npm run check` 通过，无错误、warning 或 info。
 
 ## M14：动态 Task 计划与进度审阅
 
@@ -695,7 +722,7 @@ M13 的 `PrivilegeRuntime`、`privileged_exec`、受控 tmux PTY、逐请求 Ent
 - 已交付 Coordinator-only `tasks_update`、严格 TypeBox schema、单调 revision/CAS、branch-local snapshot/review custom entry 和唯一 `DynamicTaskRuntime`。
 - 首次 mutation、sudo、verification、Workflow、Background 和 Monitor 使用稳定结构化 facts；无明确匹配不修改任意 Task，重复事件不推进 revision，facts-only revision漂移可安全重基而不触发重复 `tasks_update`。
 - 受限 Task Reviewer 与 Terminal 共用 `review.model`、ModelRuntime 和 provider fallback；无新 facts零调用，revision/hash/evidence不匹配及失败路径均原子丢弃。
-- Dynamic Tasks 已接入 Task Ledger、Tasks Widget、Footer、usage统计和每请求 prompt projection，并保持 Document、Workflow、Background、Monitor、interaction 和 failure 共存。
+- Dynamic Tasks 已接入 Task Ledger、Tasks Widget、Footer、usage统计和每请求 prompt projection，并保持 Document、Workflow、Background、Monitor、interaction、privilege 和 failure 共存。
 - faux provider、恢复、并发、dispose、Reviewer、Prompt、暗亮主题及 40/80/120/160 宽度测试已覆盖；定向测试、相关测试、`./test.sh` 和 `npm run check` 通过。
 
 ## M Final：发行准备

@@ -14,6 +14,7 @@ import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import { bashExecutionStatus, bashFailureCategory, type ExecutionStatus } from "./execution/execution-types.ts";
 import type { ExecutionFailureCategory } from "./execution/failure-types.ts";
+import type { PrivilegeToolDetailsV1 } from "./privilege/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -45,6 +46,8 @@ export interface BashResult {
 	fullOutputPath?: string;
 	/** Error recorded by higher-level session execution when the backend throws. */
 	error?: string;
+	/** Versioned M13 privilege fact for controlled sudo execution. */
+	privilege?: PrivilegeToolDetailsV1;
 }
 
 // ============================================================================

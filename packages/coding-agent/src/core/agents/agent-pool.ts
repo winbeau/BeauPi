@@ -265,6 +265,7 @@ const RESERVED_TOOL_NAMES = new Set([
 	"delegate_task",
 	"ask_user_question",
 	"tasks_update",
+	"privileged_exec",
 	"workflow_run",
 	"workflow_status",
 	"workflow_cancel",
@@ -1219,7 +1220,7 @@ export class AgentPool {
 				? (this.createAgentControlTool(taskId) as ToolDefinition)
 				: undefined;
 			const childCustomTools: ToolDefinition[] = [
-				...this.customTools,
+				...this.customTools.filter((tool) => tool.name !== "privileged_exec"),
 				...(peerControlTool ? [peerControlTool] : []),
 			];
 			const allowedTools = getAllowedTools(effectiveProfile, childCustomTools, this.dependencies.resourceLoader);
@@ -1247,6 +1248,7 @@ export class AgentPool {
 					"delegate_task",
 					"ask_user_question",
 					"tasks_update",
+					"privileged_exec",
 					"workflow_run",
 					"workflow_status",
 					"workflow_cancel",

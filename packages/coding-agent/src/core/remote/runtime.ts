@@ -5,13 +5,21 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { detectSupportedImageMimeType } from "../../utils/mime.ts";
 import type { MonitorRuntime } from "../monitor/monitor-runtime.ts";
 import type { MonitorAdapterSnapshot } from "../monitor/types.ts";
+import { hasPotentialShellPrivilege } from "../privilege/shell-inspection.ts";
+import {
+	isPrivilegeAuthenticationPrompt,
+	type PrivilegeCommandResultV1,
+	type PrivilegeCommandSession,
+	type PrivilegeRequestV1,
+	type PrivilegeTerminalFrameV1,
+} from "../privilege/types.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { SettingsManager } from "../settings-manager.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditOperations } from "../tools/edit.ts";
 import type { ReadOperations } from "../tools/read.ts";
 import type { WriteOperations } from "../tools/write.ts";
-import { OpenSshTmuxAdapter } from "./adapter.ts";
+import { OpenSshTmuxAdapter, parseTerminalCommandCapture } from "./adapter.ts";
 import { reviewTerminalOutput, type TerminalOutputReviewer, type TerminalReviewInput } from "./output-reviewer.ts";
 import { ExecutionTargetRegistry } from "./targets.ts";
 import {
@@ -25,6 +33,8 @@ import {
 	type SshTmuxAdapter,
 	type TmuxCreateOptions,
 } from "./types.ts";
+
+const REMOTE_PRIVILEGE_START_TIMEOUT_MS = 5_000;
 
 interface RemoteTerminalState {
 	terminalId: string;
@@ -137,6 +147,10 @@ function safeId(value: string, label: string): string {
 	return value;
 }
 
+function containsPotentialPrivilege(command: string): boolean {
+	return hasPotentialShellPrivilege(command);
+}
+
 function applyTerminalInput(current: string, currentOpaque: boolean, input: string): { line: string; opaque: boolean } {
 	let line = current;
 	let opaque = currentOpaque;
@@ -157,6 +171,15 @@ function applyTerminalInput(current: string, currentOpaque: boolean, input: stri
 	return { line, opaque };
 }
 
+function assertNoPrivilegeChange(command: string): void {
+	if (containsPotentialPrivilege(command)) {
+		throw new RemoteExecutionError({
+			code: "terminal_required",
+			message: "Privilege-changing remote commands require an existing interactive terminal and PrivilegeRuntime",
+		});
+	}
+}
+
 function commandOperationId(): string {
 	return `cmd-${randomUUID()}`;
 }
@@ -175,6 +198,35 @@ function hashText(value: string): string {
 
 function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function privilegeTerminalWrapper(
+	command: string,
+	stageMarker: string,
+	beginMarker: string,
+	endMarker: string,
+): string {
+	const encoded = Buffer.from(command, "utf8").toString("base64");
+	return [
+		`printf '\\n%s\\n' ${shellQuote(stageMarker)}`,
+		`printf '$ %s' "$(printf %s ${shellQuote(encoded)} | base64 -d)"`,
+		"if IFS= read -r __beaupi_execute; then printf '\\n%s\\n' " +
+			shellQuote(beginMarker) +
+			`; eval "$(printf %s ${shellQuote(encoded)} | base64 -d)"; __beaupi_privilege_status=$?; else __beaupi_privilege_status=130; fi`,
+		`printf '\\n%s:%s\\n' ${shellQuote(endMarker)} "$__beaupi_privilege_status"`,
+	].join("; ");
+}
+
+function stagedCommandCapture(capture: string, stageMarker: string): string | undefined {
+	const lines = capture
+		.replaceAll("\r", "")
+		.split("\n")
+		.map((line) => line.trimEnd());
+	const index = lines.lastIndexOf(stageMarker);
+	if (index === -1) return undefined;
+	const output = lines.slice(index + 1);
+	while (output.at(-1) === "") output.pop();
+	return output.join("\n");
 }
 
 function incrementalCapture(previous: string, current: string): string {
@@ -350,6 +402,7 @@ export class RemoteExecutionRuntime {
 				code: "remote_command",
 				message: "remote_exec requires a non-empty command without NUL bytes",
 			});
+		assertNoPrivilegeChange(command);
 		const target = this.assertTarget(options.targetId);
 		const operationId = commandOperationId();
 		const logPath = remoteCommandLogPath(this.cwd, this.sessionId, operationId);
@@ -441,6 +494,7 @@ export class RemoteExecutionRuntime {
 	}): Promise<TerminalCreateResult> {
 		const target = this.assertTarget(options.targetId);
 		const terminalId = safeId(options.terminalId ?? `term-${randomUUID().slice(0, 12)}`, "terminalId");
+		if (options.command) assertNoPrivilegeChange(options.command);
 		const operationId = terminalId;
 		const logPath = terminalLogPath(this.cwd, this.sessionId, terminalId);
 		await mkdir(dirname(logPath), { recursive: true });
@@ -540,6 +594,18 @@ export class RemoteExecutionRuntime {
 			const segment = parts[index] ?? "";
 			const delimiter = parts[index + 1];
 			if (delimiter !== undefined) {
+				const pending = applyTerminalInput(terminal.pendingInput, terminal.pendingInputOpaque, segment);
+				if (pending.opaque || containsPotentialPrivilege(pending.line)) {
+					await connection.tmuxSendKey(terminal.paneId, "C-u", { signal }).catch(() => undefined);
+					terminal.pendingInput = "";
+					terminal.pendingInputOpaque = false;
+					throw new RemoteExecutionError({
+						code: "terminal_required",
+						message: "Blocked a pending privilege-changing terminal line; use terminal_bash or privileged_exec",
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
 				const result = await connection.tmuxSend(terminal.paneId, `${segment}${delimiter}`, { signal });
 				if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
 				terminal.pendingInput = "";
@@ -579,6 +645,367 @@ export class RemoteExecutionRuntime {
 		};
 	}
 
+	async createPrivilegeCommandSession(
+		request: PrivilegeRequestV1,
+		signal?: AbortSignal,
+	): Promise<PrivilegeCommandSession> {
+		const terminalId = request.target.terminalId;
+		if (!terminalId)
+			throw new RemoteExecutionError({
+				code: "terminal_not_found",
+				message: "Privilege request requires terminalId",
+			});
+		const terminal = this.assertTerminal(terminalId);
+		if (!terminal.interactive) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is not an interactive shell`,
+				operationId: terminalId,
+			});
+		}
+		if (terminal.busy || terminal.pendingInput.length > 0 || terminal.pendingInputOpaque) {
+			throw new RemoteExecutionError({
+				code: "terminal_busy",
+				message: `Terminal ${JSON.stringify(terminalId)} is busy or has pending input`,
+				operationId: terminalId,
+			});
+		}
+		const target = this.assertTarget(terminal.targetId);
+		const connection = await this.connect(target.id, signal);
+		const token = randomUUID().replaceAll("-", "");
+		const stageMarker = `__BEAUPI_PRIV_STAGE_${token}__`;
+		const beginMarker = `__BEAUPI_PRIV_BEGIN_${token}__`;
+		const endMarker = `__BEAUPI_PRIV_END_${token}__`;
+		const controller = new AbortController();
+		const forwardAbort = (): void => controller.abort();
+		if (signal?.aborted) controller.abort();
+		else signal?.addEventListener("abort", forwardAbort, { once: true });
+		let startAttempted = false;
+		let prepared = false;
+		let executionReleased = false;
+		let executed = false;
+		let startedAt: number | undefined;
+		let completed = false;
+		let disposed = false;
+		let finalized = false;
+		let reusable = true;
+		let lastOutput = "";
+		const finalize = async (
+			result: PrivilegeCommandResultV1,
+			remoteDiagnostic?: RemoteDiagnostic,
+		): Promise<PrivilegeCommandResultV1> => {
+			if (!finalized) {
+				finalized = true;
+				if (remoteDiagnostic?.code === "ssh_disconnected" || remoteDiagnostic?.code === "terminal_session_lost") {
+					reusable = false;
+				}
+				terminal.busy = !reusable;
+				const output = redactOutput(result.output);
+				await this.recordTerminalCommandOutput(terminal, connection, {
+					command: request.command,
+					output,
+					exitCode: result.exitCode,
+					diagnostic: remoteDiagnostic,
+					startedAt: result.startedAt,
+					completedAt: result.completedAt,
+				});
+				result.output = output;
+			}
+			return result;
+		};
+		const waitForCompletionMarker = async (timeoutMs: number): Promise<boolean> => {
+			const deadline = this.now() + timeoutMs;
+			while (this.now() < deadline) {
+				const capture = await connection.tmuxCapture(terminal.paneId, { timeoutMs: 2_000 }).catch(() => undefined);
+				if (!capture || capture.exitCode !== 0) return false;
+				if (parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker).exitCode !== undefined) return true;
+				await delay(50);
+			}
+			return false;
+		};
+		let recoveryPromise: Promise<boolean> | undefined;
+		const recoverTerminal = (): Promise<boolean> => {
+			recoveryPromise ??= (async () => {
+				await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+				return waitForCompletionMarker(2_000);
+			})();
+			return recoveryPromise;
+		};
+		return {
+			start: async () => {
+				if (startAttempted) throw new Error("Remote privilege command already started");
+				startAttempted = true;
+				const status = await connection.tmuxStatus(terminal.paneId, { signal: controller.signal });
+				if (!status.exists) {
+					throw new RemoteExecutionError({
+						code: "terminal_session_lost",
+						message: `Local tmux pane for terminal ${JSON.stringify(terminalId)} no longer exists`,
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
+				if (terminal.shellCommand && status.currentCommand && status.currentCommand !== terminal.shellCommand) {
+					throw new RemoteExecutionError({
+						code: "terminal_busy",
+						message: `Terminal ${JSON.stringify(terminalId)} is currently running another command`,
+						targetId: target.id,
+						operationId: terminalId,
+					});
+				}
+				terminal.busy = true;
+				const sent = await connection.tmuxSend(
+					terminal.paneId,
+					`${privilegeTerminalWrapper(request.command, stageMarker, beginMarker, endMarker)}\n`,
+					{ signal: controller.signal },
+				);
+				if (sent.exitCode !== 0) {
+					reusable = false;
+					terminal.busy = true;
+					throw this.tmuxError(sent, target.id, terminalId, "terminal_session_lost");
+				}
+				const deadline = this.now() + REMOTE_PRIVILEGE_START_TIMEOUT_MS;
+				while (true) {
+					const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
+					if (capture.exitCode !== 0) {
+						reusable = false;
+						terminal.busy = true;
+						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
+					}
+					if (stagedCommandCapture(capture.stdout, stageMarker) !== undefined) break;
+					if (this.now() >= deadline) {
+						reusable = false;
+						terminal.busy = true;
+						throw new RemoteExecutionError({
+							code: "terminal_busy",
+							message: "Privilege command staging timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						});
+					}
+					await delay(50);
+				}
+				prepared = true;
+			},
+			execute: async () => {
+				if (!prepared || executed || completed)
+					throw new Error("Remote privilege command is not waiting for execution");
+				const executionStartedAt = this.now();
+				executionReleased = true;
+				const sent = await connection.tmuxSendKey(terminal.paneId, "Enter", { signal: controller.signal });
+				if (sent.exitCode !== 0) throw this.tmuxError(sent, target.id, terminalId, "terminal_session_lost");
+				const deadline = this.now() + REMOTE_PRIVILEGE_START_TIMEOUT_MS;
+				while (true) {
+					const capture = await connection.tmuxCapture(terminal.paneId, { signal: controller.signal });
+					if (capture.exitCode !== 0)
+						throw this.tmuxError(capture, target.id, terminalId, "terminal_session_lost");
+					const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+					if (parsed.found) break;
+					if (this.now() >= deadline) {
+						reusable = false;
+						terminal.busy = true;
+						throw new RemoteExecutionError({
+							code: "terminal_busy",
+							message: "Privilege command start marker timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						});
+					}
+					await delay(50);
+				}
+				executed = true;
+				startedAt = executionStartedAt;
+			},
+			sendSensitive: async (input) => {
+				if (!executed || startedAt === undefined || completed)
+					throw new Error("Remote privilege terminal is not accepting input");
+				await connection.tmuxSendSensitive(terminal.paneId, Buffer.from(input), { signal: controller.signal });
+			},
+			capture: async (): Promise<PrivilegeTerminalFrameV1> => {
+				if (!prepared) return { content: "", state: "starting" };
+				const [capture, styledCapture, screen, status] = await Promise.all([
+					connection.tmuxCapture(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxCaptureStyled(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxCaptureScreen(terminal.paneId, { signal: controller.signal }),
+					connection.tmuxStatus(terminal.paneId, { signal: controller.signal }),
+				]);
+				const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+				const styledParsed =
+					styledCapture.exitCode === 0
+						? parseTerminalCommandCapture(styledCapture.stdout, beginMarker, endMarker)
+						: undefined;
+				const executedContent = redactOutput(
+					styledParsed?.found ? styledParsed.output : parsed.found ? parsed.output : "",
+				);
+				if (parsed.exitCode !== undefined) return { content: executedContent, state: "complete" };
+				if (capture.exitCode !== 0 || screen.exitCode !== 0 || !status.exists) {
+					return { content: "", state: "lost" };
+				}
+				const content = executed ? executedContent : (stagedCommandCapture(capture.stdout, stageMarker) ?? "");
+				if (!executed) return { content, state: "waiting_for_user" };
+				const authenticating =
+					status.cursorY === undefined
+						? /(?:password|passphrase)[^:\r\n]*:/i.test(content)
+						: isPrivilegeAuthenticationPrompt(screen.stdout, status.cursorY);
+				return {
+					content,
+					state: parsed.exitCode !== undefined ? "complete" : authenticating ? "authenticating" : "running",
+				};
+			},
+			resize: async (columns, rows) => {
+				if (completed) return;
+				const result = await connection.tmuxResize(terminal.paneId, columns, rows, { signal: controller.signal });
+				if (result.exitCode !== 0) throw this.tmuxError(result, target.id, terminalId, "terminal_session_lost");
+			},
+			cancel: async () => {
+				if (completed) return;
+				controller.abort();
+				if (!executionReleased) {
+					await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+					reusable = true;
+					terminal.busy = false;
+					return;
+				}
+				reusable = await recoverTerminal();
+				terminal.busy = !reusable;
+			},
+			wait: async (onOutput) => {
+				if (!executed || startedAt === undefined) throw new Error("Remote privilege command has not started");
+				const deadline = request.timeoutMs === undefined ? undefined : startedAt + request.timeoutMs;
+				let emittedOutput = "";
+				while (true) {
+					try {
+						const capture = await connection.tmuxCapture(terminal.paneId);
+						const parsed = parseTerminalCommandCapture(capture.stdout, beginMarker, endMarker);
+						if (parsed.found) {
+							lastOutput = parsed.output;
+							if (lastOutput !== emittedOutput) {
+								emittedOutput = lastOutput;
+								onOutput?.(redactOutput(lastOutput));
+							}
+						}
+						if (parsed.exitCode !== undefined) {
+							completed = true;
+							return finalize({
+								output: lastOutput,
+								exitCode: parsed.exitCode,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+							});
+						}
+					} catch (error) {
+						const remoteIssue = diagnosticForError(error, target.id, terminalId);
+						completed = true;
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: { code: "terminal_lost", message: remoteIssue.message },
+							},
+							remoteIssue,
+						);
+					}
+					if (controller.signal.aborted) {
+						reusable = await recoverTerminal();
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "remote_cancelled",
+							message: "Privileged terminal command cancelled",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								cancelled: true,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: reusable
+									? { code: "cancelled", message: remoteIssue.message }
+									: {
+											code: "terminal_recovery_failed",
+											message: "Privilege terminal did not return to the user shell",
+										},
+							},
+							remoteIssue,
+						);
+					}
+					if (deadline !== undefined && this.now() >= deadline) {
+						reusable = await recoverTerminal();
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "remote_timeout",
+							message: "Privileged terminal command timed out",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								timedOut: true,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: reusable
+									? { code: "timeout", message: remoteIssue.message }
+									: {
+											code: "terminal_recovery_failed",
+											message: "Privilege terminal did not return to the user shell",
+										},
+							},
+							remoteIssue,
+						);
+					}
+					const status = await connection
+						.tmuxStatus(terminal.paneId)
+						.catch(() => ({ exists: false, attached: false }));
+					if (!status.exists) {
+						completed = true;
+						const remoteIssue: RemoteDiagnostic = {
+							code: "terminal_session_lost",
+							message: "Privilege terminal pane was lost",
+							targetId: target.id,
+							operationId: terminalId,
+						};
+						return finalize(
+							{
+								output: lastOutput,
+								exitCode: null,
+								startedAt,
+								completedAt: this.now(),
+								monitorId: terminal.monitorId,
+								logPath: terminal.logPath,
+								diagnostic: { code: "terminal_lost", message: remoteIssue.message },
+							},
+							remoteIssue,
+						);
+					}
+					await delay(50);
+				}
+			},
+			dispose: async () => {
+				if (disposed) return;
+				disposed = true;
+				signal?.removeEventListener("abort", forwardAbort);
+				if (prepared && !executionReleased && !completed) {
+					await connection.tmuxSendKey(terminal.paneId, "C-c", { timeoutMs: 2_000 }).catch(() => undefined);
+					reusable = true;
+				} else if (executionReleased && !completed) reusable = await recoverTerminal();
+				terminal.busy = !reusable;
+			},
+		};
+	}
+
 	async terminalBash(
 		terminalId: string,
 		command: string,
@@ -598,6 +1025,7 @@ export class RemoteExecutionRuntime {
 				operationId: terminalId,
 			});
 		}
+		assertNoPrivilegeChange(command);
 		const terminal = this.assertTerminal(terminalId);
 		if (!terminal.interactive) {
 			throw new RemoteExecutionError({

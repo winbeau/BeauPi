@@ -34,7 +34,7 @@ describe("neutral bash execution results", () => {
 		});
 		const completed = await tool.execute("t1", { command: "true" }, undefined, undefined, {} as never);
 		expect(completed.details).toMatchObject({ exitCode: 0, status: "completed" });
-		expect(completed.details?.failureCategory).toBeUndefined();
+		expect((completed.details as { failureCategory?: string } | undefined)?.failureCategory).toBeUndefined();
 
 		const killedTool = createBashToolDefinition("/tmp", {
 			exposeSessionEnvironment: false,

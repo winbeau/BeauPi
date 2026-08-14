@@ -417,7 +417,7 @@ export class DynamicTaskRuntime {
 			return [
 				'<dynamic_tasks required="initial_plan">',
 				"This is an executable user task. In the existing first model turn, call tasks_update once with version 1, expectedRevision 0, and reason initial_plan before the first mutation.",
-				"A coarse 3-7 Task plan is sufficient before read-only discovery. Use concise mid-level phase titles that retain one or two distinguishing domain nouns (for example WorkflowRuntime, tmux, or TUI), normally around 15 Chinese characters or an equivalently short phrase. Avoid commands, paths, key sequences, and step-by-step details. This is a soft style target, not a validation limit.",
+				"A coarse 3-7 Task plan is sufficient before read-only discovery. Use concise mid-level phase titles that retain one or two distinguishing domain nouns (for example PrivilegeRuntime, tmux, sudo, or TUI), normally around 15 Chinese characters or an equivalently short phrase. Avoid commands, paths, key sequences, and step-by-step details. This is a soft style target, not a validation limit.",
 				"Do not expose JSON to the user and do not create one Task per file or command.",
 				"</dynamic_tasks>",
 			].join("\n");

@@ -116,6 +116,7 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export * from "./monitor/index.ts";
+export * from "./privilege/index.ts";
 export * from "./question.ts";
 export * from "./remote/index.ts";
 export {

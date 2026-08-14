@@ -84,6 +84,11 @@ import {
 } from "../../core/model-resolver.ts";
 import { MONITOR_SESSION_ENTRY_TYPE } from "../../core/monitor/index.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import type {
+	PrivilegeInteractionRequest,
+	PrivilegeInteractionResponse,
+	PrivilegeTerminalControl,
+} from "../../core/privilege/index.ts";
 import type { QuestionInteractionRequest, QuestionInteractionResponse } from "../../core/question.ts";
 import {
 	EXECUTION_TARGET_VERSION,
@@ -139,6 +144,7 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
+import { PrivilegeTerminalComponent } from "./components/privilege-terminal.ts";
 import { QuestionSelectorComponent } from "./components/question-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -1677,6 +1683,9 @@ export class InteractiveMode {
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
 		this.session.setQuestionInteractionHandler((request, signal) => this.showQuestionInteraction(request, signal));
+		this.session.setPrivilegeInteractionHandler((request, control, signal) =>
+			this.showPrivilegeInteraction(request, control, signal),
+		);
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
@@ -2555,6 +2564,27 @@ export class InteractiveMode {
 					onSubmit: (answers) => done({ status: "answered", answers }),
 					onCancel: () => done({ status: "cancelled" }),
 				});
+			});
+		} finally {
+			if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+		}
+	}
+
+	private async showPrivilegeInteraction(
+		request: PrivilegeInteractionRequest,
+		control: PrivilegeTerminalControl,
+		signal: AbortSignal | undefined,
+	): Promise<PrivilegeInteractionResponse> {
+		if (signal?.aborted) return { status: "cancelled" };
+		let abortHandler: (() => void) | undefined;
+		try {
+			return await this.showExtensionCustom<PrivilegeInteractionResponse>((tui, _theme, keybindings, done) => {
+				abortHandler = () => {
+					void control.cancel().catch(() => undefined);
+					done({ status: "cancelled" });
+				};
+				signal?.addEventListener("abort", abortHandler, { once: true });
+				return new PrivilegeTerminalComponent({ tui, keybindings, request, control, onDone: done });
 			});
 		} finally {
 			if (abortHandler) signal?.removeEventListener("abort", abortHandler);

@@ -105,6 +105,7 @@ export const RUNTIME_TOOL_NAMES: readonly string[] = [
 	"background_wait",
 	"background_cancel",
 	"tasks_update",
+	"privileged_exec",
 ];
 
 export class ToolRegistry {

@@ -17,6 +17,14 @@ import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
 import type { PlaywrightRuntime } from "./playwright/index.ts";
+import {
+	createPrivilegedExecToolDefinition,
+	JsonlPrivilegeAuditWriter,
+	type PrivilegeInteractionHandler,
+	PrivilegeRuntime,
+	type PrivilegeTerminalAdapter,
+	TmuxPrivilegeTerminalAdapter,
+} from "./privilege/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
@@ -90,6 +98,12 @@ export interface CreateAgentSessionOptions {
 	questionRuntime?: QuestionRuntime;
 	/** Inject a session-scoped Playwright Runtime, primarily for deterministic tests and custom hosts. */
 	playwrightRuntime?: PlaywrightRuntime;
+	/** In-process handler for the controlled privilege terminal. Without one, sudo returns interaction_required. */
+	privilegeHandler?: PrivilegeInteractionHandler;
+	/** Inject a session-scoped Privilege Runtime, primarily for deterministic tests and custom hosts. */
+	privilegeRuntime?: PrivilegeRuntime;
+	/** Inject the local/remote privilege terminal adapter without exposing authentication input to the SDK. */
+	privilegeTerminalAdapter?: PrivilegeTerminalAdapter;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -345,10 +359,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settingsManager,
 			monitorRuntime,
 		});
+	const privilegeRuntime =
+		options.privilegeRuntime ??
+		new PrivilegeRuntime({
+			sessionId: sessionManager.getSessionId(),
+			cwd,
+			terminalAdapter:
+				options.privilegeTerminalAdapter ??
+				new TmuxPrivilegeTerminalAdapter({
+					remoteHost: remoteRuntime,
+					shellPath: settingsManager.getShellPath(),
+				}),
+			auditWriter: new JsonlPrivilegeAuditWriter(agentDir),
+			handler: options.privilegeHandler,
+			isRootTarget: (targetId) => remoteRuntime.isRootTarget(targetId),
+			monitorRuntime,
+		});
+	if (options.privilegeRuntime && options.privilegeHandler) privilegeRuntime.setHandler(options.privilegeHandler);
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
 	const backgroundTools = createBackgroundToolDefinitions(backgroundRuntime);
 	const workflowTools = workflowRuntime ? createWorkflowToolDefinitions(workflowRuntime) : [];
-	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
+	const remoteTools = createRemoteToolDefinitions(remoteRuntime, privilegeRuntime);
+	const privilegeTool = createPrivilegedExecToolDefinition(privilegeRuntime, remoteRuntime, cwd);
 	const searchTools = createSearchToolDefinitions(searchRuntime, {
 		budgetScopeId: searchBudgetScopeId,
 		...(options.synchronizeSearchBudget === false ? {} : { getSessionEntries: () => sessionManager.getBranch() }),
@@ -373,6 +405,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		for (const remoteTool of remoteTools) {
 			if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
+		}
+		if (
+			!excludedToolNameSet?.has(privilegeTool.name) &&
+			!customTools.some((tool) => tool.name === privilegeTool.name)
+		) {
+			customTools.push(privilegeTool as ToolDefinition);
 		}
 		for (const searchTool of searchTools) {
 			if (!customTools.some((tool) => tool.name === searchTool.name)) customTools.push(searchTool);
@@ -417,6 +455,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"ask_user_question",
 		"playwright",
 		"tasks_update",
+		"privileged_exec",
 		"web_search",
 		"web_fetch",
 		...(childAgentPool
@@ -647,6 +686,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		documentRuntime,
 		questionRuntime,
 		playwrightRuntime: options.playwrightRuntime,
+		privilegeRuntime,
 		remoteRuntime,
 		dynamicTasksEnabled:
 			options.dynamicTasks !== false && !(options.noTools === "builtin" && options.tools === undefined),
