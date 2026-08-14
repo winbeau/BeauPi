@@ -45,6 +45,7 @@ describe("AgentSession bash and persistence characterization", () => {
 			output: "hi",
 			exitCode: 0,
 			cancelled: false,
+			status: "completed",
 			truncated: false,
 		});
 
@@ -94,6 +95,7 @@ describe("AgentSession bash and persistence characterization", () => {
 			output: "hi",
 			exitCode: 0,
 			cancelled: false,
+			status: "completed",
 			truncated: false,
 		});
 
@@ -255,6 +257,7 @@ describe("AgentSession bash and persistence characterization", () => {
 			output: "hi",
 			exitCode: 0,
 			cancelled: false,
+			status: "completed",
 			truncated: false,
 		});
 

@@ -7,7 +7,6 @@ import {
 	type UserMessage,
 } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { attachPrivilegeToolDetails, type PrivilegeToolDetailsV1 } from "../src/core/privilege/index.ts";
 import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import {
 	attachTaskLedgerToolDetails,
@@ -178,52 +177,6 @@ describe("TaskLedger", () => {
 		ledger.handleAgentEvent(toolEnd("status-4", "bash"));
 		snapshot = ledger.getSnapshot();
 		expect(snapshot.commands.find((command) => command.id === "tool:status-4")?.duplicateOf).toBeUndefined();
-	});
-
-	it("projects pending and completed privilege facts without storing input", () => {
-		const ledger = new TaskLedger({ taskId: "privilege-task", cwd: "/repo" });
-		ledger.handleAgentEvent(toolStart("sudo-1", "privileged_exec", { execution: "local", command: "sudo id" }));
-		ledger.setPendingPrivilegeInteraction({
-			requestId: "priv-1",
-			sourceTool: "privileged_exec",
-			route: "explicit_tool",
-			command: "sudo id",
-			target: { execution: "local" },
-			cwd: "/repo",
-			auditPath: "/tmp/audit.jsonl",
-			createdAt: new Date(0).toISOString(),
-			state: "waiting_for_user",
-		});
-		expect(
-			ledger.getSnapshot().todos.some((todo) => todo.id === "privilege:priv-1" && todo.status === "blocked"),
-		).toBe(true);
-		const details: PrivilegeToolDetailsV1 = {
-			version: 1,
-			operation: "privileged_exec",
-			execution: "local",
-			status: "succeeded",
-			ok: true,
-			requestId: "priv-1",
-			auditId: "audit-1",
-			toolCallId: "sudo-1",
-			command: "sudo id",
-			targetKey: "local",
-			route: "explicit_tool",
-			sourceTool: "privileged_exec",
-			createdAt: new Date(0).toISOString(),
-			completedAt: new Date(1).toISOString(),
-			logPath: "/tmp/privilege.log",
-			exitCode: 0,
-			durationMs: 1,
-		};
-		ledger.handleAgentEvent(
-			toolEnd("sudo-1", "privileged_exec", { details: attachPrivilegeToolDetails(undefined, details) }),
-		);
-		ledger.setPendingPrivilegeInteraction(undefined);
-		const snapshot = ledger.getSnapshot();
-		expect(snapshot.privilege).toEqual([details]);
-		expect(ledger.getPrivilegeDetails("sudo-1")).toEqual(details);
-		expect(JSON.stringify(snapshot)).not.toContain("input");
 	});
 
 	it("rebuilds only the current Session branch and ignores abandoned branch modifications", () => {

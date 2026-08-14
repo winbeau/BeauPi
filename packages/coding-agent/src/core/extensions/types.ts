@@ -1673,6 +1673,8 @@ export interface Extension {
 	resolvedPath: string;
 	hidden?: boolean;
 	sourceInfo: SourceInfo;
+	/** Optional declarative manifest contributed by the extension module. */
+	manifest?: ExtensionManifest;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
@@ -1688,6 +1690,24 @@ export interface LoadExtensionsResult {
 	errors: Array<{ path: string; error: string }>;
 	/** Shared runtime - actions are throwing stubs until runner.initialize() */
 	runtime: ExtensionRuntime;
+}
+
+/**
+ * Optional declarative manifest contributed by an extension module.
+ *
+ * Describes composition and diagnostics (load order, transform/header
+ * precedence, activation ownership). `capabilities` only states which host
+ * APIs the extension uses; it does not limit trusted in-process calls.
+ */
+export interface ExtensionManifest {
+	id?: string;
+	version?: string;
+	source?: string;
+	dependencies?: string[];
+	priority?: number;
+	conflicts?: string[];
+	capabilities?: string[];
+	trustLevel?: "default" | "high" | "low";
 }
 
 // ============================================================================

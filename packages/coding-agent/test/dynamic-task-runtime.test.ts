@@ -88,7 +88,7 @@ describe("DynamicTaskRuntime", () => {
 			kind: "tool",
 			ref: "sudo-1",
 			status: "succeeded",
-			summary: "privileged_exec completed",
+			summary: "bash completed",
 			taskId: "contract",
 		});
 		await runtime.recordFact({
@@ -96,7 +96,7 @@ describe("DynamicTaskRuntime", () => {
 			kind: "monitor",
 			ref: "mon-1",
 			status: "running",
-			summary: "Privilege monitor running",
+			summary: "Monitor running",
 			taskId: "contract",
 		});
 		await runtime.recordFact({
@@ -104,15 +104,15 @@ describe("DynamicTaskRuntime", () => {
 			kind: "monitor",
 			ref: "mon-1",
 			status: "stalled",
-			summary: "Privilege monitor stalled",
+			summary: "Monitor stalled",
 			taskId: "contract",
 		});
 		expect(runtime.getSnapshot()?.revision).toBe(4);
 		expect(runtime.getSnapshot()?.tasks[0]).toMatchObject({
 			id: "contract",
 			status: "blocked",
-			activity: "Privilege monitor stalled",
-			blockedBy: ["Privilege monitor stalled"],
+			activity: "Monitor stalled",
+			blockedBy: ["Monitor stalled"],
 			evidence: ["tool:sudo-1:completed", "monitor:mon-1:running", "monitor:mon-1:stalled"],
 		});
 
@@ -120,8 +120,8 @@ describe("DynamicTaskRuntime", () => {
 		expect(unchanged).toMatchObject({ status: "no_change", expectedRevision: 1, actualRevision: 4 });
 		expect(runtime.getSnapshot()?.tasks[0]).toMatchObject({
 			status: "blocked",
-			activity: "Privilege monitor stalled",
-			blockedBy: ["Privilege monitor stalled"],
+			activity: "Monitor stalled",
+			blockedBy: ["Monitor stalled"],
 			evidence: ["tool:sudo-1:completed", "monitor:mon-1:running", "monitor:mon-1:stalled"],
 		});
 

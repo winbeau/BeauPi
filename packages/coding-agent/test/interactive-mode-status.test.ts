@@ -6,7 +6,6 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, TUI } from "../../tui/src/tui.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
-import type { PrivilegeInteractionRequest, PrivilegeTerminalControl } from "../src/core/privilege/index.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
@@ -322,42 +321,6 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 		expect(fakeThis.themeController.setThemeName).toHaveBeenCalledWith("__missing_theme__");
 		expect(settingsManager.setTheme).not.toHaveBeenCalled();
 		expect(fakeThis.ui.requestRender).not.toHaveBeenCalled();
-	});
-});
-
-describe("InteractiveMode.showPrivilegeInteraction", () => {
-	test("always uses the editor-replacement path instead of an overlay", async () => {
-		const request: PrivilegeInteractionRequest = {
-			requestId: "sudo-ui",
-			sourceTool: "privileged_exec",
-			route: "explicit_tool",
-			command: "sudo id",
-			target: { execution: "local" },
-			cwd: "/tmp",
-			auditPath: "/tmp/audit.jsonl",
-			createdAt: new Date(0).toISOString(),
-		};
-		const control = {} as PrivilegeTerminalControl;
-		const showExtensionCustom = vi.fn(async () => ({ status: "cancelled" as const }));
-		const fakeThis = { showExtensionCustom };
-		const showPrivilegeInteraction = (
-			InteractiveMode as unknown as {
-				prototype: {
-					showPrivilegeInteraction(
-						this: typeof fakeThis,
-						interaction: PrivilegeInteractionRequest,
-						terminalControl: PrivilegeTerminalControl,
-						signal: AbortSignal | undefined,
-					): Promise<{ status: "cancelled" }>;
-				};
-			}
-		).prototype.showPrivilegeInteraction;
-
-		await expect(showPrivilegeInteraction.call(fakeThis, request, control, undefined)).resolves.toEqual({
-			status: "cancelled",
-		});
-		expect(showExtensionCustom).toHaveBeenCalledTimes(1);
-		expect(showExtensionCustom.mock.calls[0]).toHaveLength(1);
 	});
 });
 

@@ -58,7 +58,7 @@
 - file modification evidence、Tool failure/cancel evidence。
 - verification start/pass/fail与明确 Task关联。
 - Workflow、Background、Monitor结构化事实与event ID去重。
-- Dynamic Task与Document required checks、Workflow、Background、interaction、privilege、failure共存。
+- Dynamic Task与Document required checks、Workflow、Background、interaction、failure共存。
 - 存在计划时只隐藏通用 discover/execute/verify；无计划恢复 fallback。
 
 ## P4 Reviewer

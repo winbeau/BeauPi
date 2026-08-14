@@ -2,7 +2,7 @@
 
 由 WinBeau 开发、基于 Pi Runtime 持续扩展的 WSL 优先编程 Agent。
 
-当前进度：M0–M14 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question`、advisory-only Policy Runtime、多 Agent Workflow、后台任务自动唤醒、逐请求受控 sudo 终端和动态任务规划。M Final 正在完成 npm 与 GitHub Release 正式发行。
+当前进度：M0–M14 已完成，包括 Claude Code 风格 TUI、Task Ledger、Document Runtime、Skill Registry、进程内子 Agent、Monitor、SSH/tmux、联网搜索、`ask_user_question`、多 Agent Workflow、后台任务自动唤醒和动态任务规划。M Final 正在完成 npm 与 GitHub Release 正式发行。
 
 ## 文档
 
@@ -14,7 +14,6 @@
 - [开发里程碑](./milestones.md)
 - [多 Agent Workflow](./workflows.md)
 - [后台任务与自动唤醒](./background-tasks.md)
-- [受控 sudo 终端](./controlled-privilege-terminal.md)
 - [Claude Code 风格 TUI](./ui-style.md)
 - [Claude Code 风格 TUI 实施计划](./plans/README.md)
 - [Skill 导入与注册](./skills.md)
@@ -40,10 +39,10 @@ M5–M11 已交付七个可直接使用的能力闭环：
 3. SSH/tmux 远程执行，并复用同一 Monitor Runtime
 4. 单一 SearXNG Provider 的 `web_search`/`web_fetch`、共享缓存、稳定引用和严格预算
 5. 内置 `ask_user_question` 的单选、多选、Other、notes、多问题 review、Markdown preview 及 SDK/RPC 回调
-6. Session-scoped、branch-aware Policy Runtime，对重复检查、失败预算、敏感路径、明确解析的直接身份切换命令和 Search-to-Shell fallback 做确定性分类，并只在 Footer 显示 advisory；Policy 不阻断执行或发起确认
+6. Trusted-local 执行：工具调用不经过授权门，普通 Tool 默认直接执行；Shell 继承宿主环境和用户权限；失败分类与 workspace mutation 等中性执行事实（`core/execution/`）只用于诊断与进度跟踪，不阻断、替换或暂停执行
 7. 版本化 YAML/JSON Workflow DAG、依赖条件、失败策略、并发与全局 shared 单写者、isolated Git Worktree、`workflow_run/status/cancel`，以及 Monitor、Task Ledger、Todo、Footer、Compact/resume/branch 生命周期接入
 
-M12 后台任务自动唤醒和 M13 受控 sudo 终端均已落地。M13 复用现有 AgentSession、Bash、Remote Runtime、本地 tmux SSH terminal、MonitorRuntime、Task Ledger 和 Session/Compact/branch 生命周期，没有创建第二套执行、监控、持久化或输入循环。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。
+M12 后台任务自动唤醒已落地。BeauPi 不规划专用 Git Tools；普通 Git 开发继续通过现有 Bash 能力和仓库开发规则完成。
 
 ## M12 实现状态
 
@@ -57,7 +56,7 @@ M12 已接入现有 `MonitorRuntime`、`AgentSession`、`AgentPool`、Session cu
 - 任务、触发器、WakeEvent、消费 key 和 reviewer budget 写入当前 branch；resume/Compact/branch 只恢复当前分支，无法确认的目标标记 `lost`。
 - Task Ledger、Todo、Footer、minimal Tool renderer 和 40/80/120/160 列暗/亮主题 renderer 均消费结构化 Background snapshot。
 
-第一版仍只支持 BeauPi TUI 进程运行期间自动唤醒；daemon、IPC、桌面通知和专用 Git Tools 不在范围内。M13 sudo 已由独立的逐请求受控终端实现。
+第一版仍只支持 BeauPi TUI 进程运行期间自动唤醒；daemon、IPC、桌面通知和专用 Git Tools 不在范围内。
 
 ## 实现策略
 
@@ -67,7 +66,7 @@ BeauPi 不创建 `packages/beaupi` 或独立的外部 Extension Package，而是
 
 1. 原生能力和现有 Extension 机制优先，Skill 只描述知识与流程。
 2. 保留并扩展 Pi Runtime/TUI，前期不重写 Agent Loop。
-3. 本地 Agent 进程默认保持普通用户身份；受信任 SSH Target 按其 OpenSSH 配置的登录身份运行，允许 AutoDL 等平台提供的 `root` 账户。Policy 负责分类，M13 受控 sudo 终端负责逐次确认、PTY 凭据输入、执行边界和审计；不提供 `/mode sudo`。
+3. 本地 Agent 进程使用启动它的同一 OS 用户身份；受信任 SSH Target 按其 OpenSSH 配置的登录身份运行，允许 AutoDL 等平台提供的 `root` 账户。`sudo`、`su` 等身份切换命令由普通 Shell executor 按宿主 OS 权限直接执行；不提供 `/mode sudo`。
 4. 多 Agent 默认单写者，并行写入使用 Git Worktree 隔离。
 5. 文档直接生成执行约束，不实现传统 Plan 模式。
 6. 所有失败、联网、Shell 和子 Agent 调用都有预算与可视化。

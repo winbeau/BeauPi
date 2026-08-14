@@ -12,13 +12,10 @@ BeauPi CLI / TUI
 │   ├── Agent Pool
 │   ├── Monitor Runtime
 │   ├── Workflow Engine
-│   ├── Background Task Manager
-│   ├── Policy Engine
-│   └── Privilege Runtime
+│   └── Background Task Manager
 │
 ├── Execution Boundaries
-│   ├── Ordinary User Execution
-│   └── Per-request Controlled Sudo
+│   └── Ordinary User Execution
 │
 ├── Execution Backends
 │   ├── Local WSL
@@ -31,8 +28,7 @@ BeauPi CLI / TUI
 │   ├── Search
 │   ├── Remote/Terminal
 │   ├── Multi-Agent
-│   ├── Background Tasks
-│   └── Privileged Operations
+│   └── Background Tasks
 │
 └── Observability
     ├── Task Status
@@ -60,8 +56,7 @@ packages/coding-agent/
 │   │   ├── workflow/        # DAG、调度和节点状态
 │   │   ├── background/      # 后台任务和唤醒队列，复用 Monitor Runtime
 │   │   ├── questions/       # 询问 schema、pending interaction 和结构化答案
-│   │   ├── policy/          # 命令、失败、预算分类和 advisory
-│   │   ├── privilege/       # 逐请求 sudo 路由、受控 PTY、交互与审计
+│   │   ├── execution/       # 中性失败分类与 workspace mutation 事实
 │   │   ├── state/           # Task Ledger 和持久化状态
 │   │   └── tools/           # 内置结构化工具
 │   └── modes/
@@ -212,27 +207,18 @@ TUI 外模式不能等待不存在的键盘输入：SDK/RPC 可提供 interactio
 
 M9 已落地为 Session-bound `QuestionRuntime`：Tool result 继续走普通 Agent message/Session JSONL 生命周期，Task Ledger 从当前 branch 重建完成交互事实，并只在实际等待回答时投影一个 `owner: user` 的 blocked Todo。InteractiveMode 使用现有 custom UI editor replacement/focus 恢复；RPC 复用现有 `extension_ui_request`/`extension_ui_response` id 关联；Print/JSON 和无 handler SDK 不读取 stdin，立即返回 `interaction_required`。受控子 Agent 在 Tool allowlist 和 custom Tool 投影后仍硬排除 `ask_user_question`，并通过 `<clarification_request>` 结果约定返回机器可读澄清请求。
 
-## Policy Engine
+## Trusted-Local Execution
 
-M10 Policy Engine 已作为现有 AgentSession 的 session-scoped 服务实现。它在 Tool wrapper/用户 Bash 执行前分类，在现有 `afterToolCall`/用户 Bash 完成路径中 finalize，并从当前 Session branch 的 Tool Result 或 `beaupi.policy.fact` custom entry 重建；Compact 不复制状态，branch 切换只使用目标分支事实。
+BeauPi 是 trusted-local agent：Agent 使用启动 BeauPi 的同一 OS 用户、cwd、环境和文件权限执行工具。工具调用不经过 Core Policy authorization gate——没有 allow/deny/confirm/replace/pause 语义，不要求确认，不阻止、替换或暂停执行。Shell 继承宿主完整环境；本设计不提供 env scrub、credential filtering、workspace containment、OS sandbox、root 降权、网络限制或默认 Shell timeout。它不是 Web auth、sandbox 或安全承诺。
 
-新的 Policy authorization 始终返回 `execute: true`，对应 fact 始终记录 `decision.action: "allow"`；Policy Runtime 不再返回执行阻断、replacement、pause 或 confirmation。旧 Session 中的 `block`/`confirm`/`replace`/`pause` action、status 和 confirmation details 仍可被解析为历史事实，但不会驱动当前 Tool UI。旧 SDK `policyHandler`/`policyInteractionMode` 输入保留为无操作兼容接口，RPC Client 收到旧 `policyConfirm` 请求时只返回 cancelled。
+仍保留的中性执行事实（`core/execution/`）：
 
-主要策略：
+- 失败分类：把失败结果映射为 missing_dependency/permission/network/timeout 等中性类别，只用于结果诊断与可重试提示；
+- 工具种类：workspace mutation 分类只服务于 Dynamic Task 进度跟踪。
 
-- quote/operator/pipeline/redirection/multiline-aware Shell 分类和 hash-only 等价签名
-- 本地、Remote、terminal、Search 与用户 Bash 的统一失败/类别/fallback 预算诊断
-- 目标 revision 驱动的等价只读检查 advisory，以及并发 mutation 的单调 revision 更新
-- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置和 session-lost 分类
-- 敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界 advisory
-- 能够明确解析为直接执行的 sudo/su/doas/pkexec、terminal 未知/超长/待处理输入和 Search-to-Shell fallback advisory
-- 存在专用 Tool 时记录推荐 advisory，但不替换或阻止原 Tool
-- Policy 不发起 TUI、SDK 或 RPC interaction，受控子 Agent 不返回 Policy confirmation request
-- Policy details 进入现有 Task Ledger；当前执行或最近 Policy fact 的 advisory 只渲染在 Footer 工作区行
+Shell 继承宿主完整环境和用户权限；`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter。
 
-Policy Runtime 使用串行分类队列，使并发预算和目标 revision 更新具有确定顺序；原始命令、文件内容和 token 不进入 Policy 持久化诊断。它是诊断与可视化层，不是执行守卫或 Shell sandbox。
-
-BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则；Policy Engine 只对其应用通用的重复命令、失败预算和敏感/权限 advisory。
+BeauPi 不增加专用 Git Tools。普通 Git 操作继续使用现有 Bash 能力、项目文档约束和仓库开发规则。
 
 ## State
 
@@ -282,7 +268,7 @@ terminal_create
 
 `terminal_read`、`terminal_write` 和 `terminal_edit` 在已有 pane 上构造 terminal-bound Read/Write/Edit operations。相对路径保留远端 shell 当前 cwd 语义，工具层继续复用本地 schema、截断、精确替换、Diff 和 renderer；内部文件命令跳过输出审阅，避免读取长文件时产生无用模型调用；工作日志只记录语义化文件操作，不复制文件内容或 Base64 载荷。
 
-`TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 与 `PrivilegeRuntime` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
+`TerminalOutputReviewer` 与 transport 解耦，并由 `terminal_bash` 共享。默认实现通过现有 `ModelRuntime` 解析共享 `review.model`：短成功输出直接进入 Tool Result；失败、稳定诊断或输出超过 100 行时进行一次无 Tool 审阅，不设置独立的模型输出 token 硬限制。其他轻量 Review Runtime 复用同一模型设置和解析/fallback 链，不再增加功能专属模型键。Tool Result 保存直接输出或审阅文本、结构化 review 状态、usage 和日志路径，代码强制最后一行为 `@<绝对日志路径>`。AgentSession 根据版本化 `details.ok` 设置 `isError`，不靠异常文本或 renderer 反推。
 
 ## Monitor 与后台任务
 
@@ -319,20 +305,9 @@ Background store 使用 `beaupi.background.snapshot` 版本化 custom entry。Ta
 
 ## 权限边界
 
-BeauPi 不以 root 身份启动，也不提供 sudo mode、持久 root shell 或 session grant。M13 使用唯一的 session-scoped `PrivilegeRuntime` 接收 `privileged_exec`、local `bash` 和 `terminal_bash` 路由的完整 sudo command 或换行分隔批次；每个 request 都必须在 TUI 中独立确认。认证结束后临时终端自动detach，command继续由Runtime等待并写入work log；`sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s` 会被阻止，避免留下隐藏root shell。
+BeauPi 不以 root 身份启动，也不提供 sudo mode、持久 root shell、session grant 或受控 sudo 终端。Agent 使用启动 BeauPi 的同一 OS 用户、cwd、环境和文件权限执行工具；`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter。root 与普通用户行为完全由宿主 OS 决定。
 
-```text
-AgentSession
-├── PrivilegeRuntime                 # request 状态机与唯一结果事实
-│   ├── local tmux command session
-│   └── existing remote terminal pane
-├── MonitorRuntime / TaskLedger      # 引用结构化 result/monitor facts
-└── Session custom fact + 0600 JSONL audit
-```
-
-Local adapter 使用独立 tmux server 继承当前进程环境、目标 cwd 和配置的真实用户 shell，并保留 shell startup files；不使用 `env -i`、`--noprofile` 或 `--norc`。sudo 自己在 controlling TTY 上管理密码输入的 echo，wrapper 不在整个 command/root-shell 生命周期关闭回显。输入只经 `tmux load-buffer` child stdin 和 `paste-buffer -d -r` 进入 TTY，finally 删除 buffer；不进入 Tool、argv、env、Session、Monitor、Task Ledger、日志、审计、RPC 或模型上下文。
-
-`terminal_send` 在 Enter 前检查累计 line 并用 Ctrl-U 清理 sudo；one-shot remote 路径阻止提权。取消或恢复失败时local关闭ephemeral session，remote发送Ctrl-C并复核原用户shell。`sudo bash`/`sudo -i`、`sudo -S`、`su`、`doas`、`pkexec` 和 namespace/chroot identity switch 不支持。详细设计见 [受控 sudo 终端](./controlled-privilege-terminal.md)。
+Shell privilege inspection（`core/privilege/shell-inspection.ts`）已随受控 sudo 路由一并移除；`core/execution/` 保留中性的失败分类与 workspace mutation 事实。
 
 ## 搜索架构
 
@@ -363,4 +338,4 @@ query/URL cache 位于现有 agentDir 下，使用版本化 JSON、canonical key
 
 `web_fetch` 使用 Undici，并在连接前分别验证 IPv4/IPv6 DNS 地址，再通过固定 lookup 避免验证后重新解析；每次重定向重新执行协议、credentials、hostname 和 IP 范围检查。标准 HTTP(S) proxy 存在时，请求使用已验证的固定目标 IP，同时保留原始 Host 和 TLS SNI，避免代理侧 DNS 重新解析绕过 SSRF 边界。HTML、text、JSON 属于不可信外部内容，不执行 script、指令或代码。PDF 提取属于后续阶段。
 
-预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。Search Runtime 自身在预算/配置失败后不会继续网络请求或启动 Shell fallback。若 Agent 随后显式调用通用 Bash、Remote 或 terminal 网络 fallback，M10 Policy Runtime 只记录 Footer advisory，不暂停执行。
+预算按 Coordinator task scope 统计 query、fetch、Provider 尝试、输入字符，并限制单次结果、响应字节、timeout 和 redirect。Search Runtime 自身在预算/配置失败后不会继续网络请求或启动 Shell fallback。若 Agent 随后显式调用通用 Bash、Remote 或 terminal 网络 fallback，将按普通命令直接执行。

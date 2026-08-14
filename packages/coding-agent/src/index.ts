@@ -231,8 +231,6 @@ export type {
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
 export * from "./core/playwright/index.ts";
-export * from "./core/policy/index.ts";
-export * from "./core/privilege/index.ts";
 export * from "./core/remote/index.ts";
 export type {
 	DefaultResourceLoaderOptions,

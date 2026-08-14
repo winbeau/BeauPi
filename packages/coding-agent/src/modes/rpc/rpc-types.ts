@@ -10,7 +10,6 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
-import type { PolicyConfirmRequest } from "../../core/policy/index.ts";
 import type { QuestionAnswer, UserQuestion } from "../../core/question.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -18,6 +17,40 @@ import type { SourceInfo } from "../../core/source-info.ts";
 // ============================================================================
 // RPC Commands (stdin)
 // ============================================================================
+
+export const RPC_PROTOCOL_VERSION = 1 as const;
+
+/** Single output line limit (local-process stability, not a network policy). */
+export const RPC_MAX_LINE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Stable error categories for typed RPC failures. These describe the
+ * request/run outcome only; cancellation never promises rollback of external
+ * side effects.
+ */
+export type RpcErrorCode =
+	| "invalid_command"
+	| "unsupported_command"
+	| "invalid_arguments"
+	| "execution_failed"
+	| "cancelled"
+	| "timed_out"
+	| "session_replaced"
+	| "shutdown";
+
+/** Server greeting emitted once before the first response/event line. */
+export interface RpcHello {
+	type: "hello";
+	protocolVersion: typeof RPC_PROTOCOL_VERSION;
+	serverVersion: string;
+	capabilities: string[];
+	limits: { maxLineBytes: number };
+}
+
+/** Serialized byte length of an RPC payload line (UTF-8). */
+export function rpcLineBytes(obj: unknown): number {
+	return Buffer.byteLength(JSON.stringify(obj), "utf8");
+}
 
 export type RpcCommand =
 	// Prompting
@@ -230,7 +263,9 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail)
-	| { id?: string; type: "response"; command: string; success: false; error: string };
+	| { id?: string; type: "response"; command: string; success: false; error: string; code?: RpcErrorCode };
+
+export type RpcOutput = RpcResponse | RpcExtensionUIRequest | RpcHello;
 
 // ============================================================================
 // Extension UI Events (stdout)
@@ -255,12 +290,6 @@ export type RpcExtensionUIRequest =
 			method: "askUserQuestion";
 			requestId: string;
 			questions: UserQuestion[];
-	  }
-	| {
-			type: "extension_ui_request";
-			id: string;
-			method: "policyConfirm";
-			request: PolicyConfirmRequest;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -296,7 +325,6 @@ export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; answers: QuestionAnswer[] }
-	| { type: "extension_ui_response"; id: string; policyDecision: "allow_once" }
 	| { type: "extension_ui_response"; id: string; error: string }
 	| { type: "extension_ui_response"; id: string; rejected: true; reason?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };

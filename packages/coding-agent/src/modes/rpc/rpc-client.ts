@@ -17,6 +17,7 @@ import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcHello,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -61,7 +62,6 @@ export type RpcQuestionRequest = Extract<RpcExtensionUIRequest, { method: "askUs
 export type RpcQuestionHandler = (
 	request: RpcQuestionRequest,
 ) => QuestionInteractionResponse | Promise<QuestionInteractionResponse>;
-type LegacyRpcPolicyRequest = Extract<RpcExtensionUIRequest, { method: "policyConfirm" }>;
 
 // ============================================================================
 // RPC Client
@@ -78,11 +78,17 @@ export class RpcClient {
 	private questionGeneration = 0;
 	private stderr = "";
 	private exitError: Error | null = null;
+	private serverHelloValue: RpcHello | undefined;
 	private options: RpcClientOptions;
 
 	constructor(options: RpcClientOptions = {}) {
 		this.options = options;
 		this.questionHandler = options.questionHandler;
+	}
+
+	/** Server greeting received on startup, when the server supports it. */
+	get serverHello(): RpcHello | undefined {
+		return this.serverHelloValue;
 	}
 
 	/**
@@ -537,6 +543,12 @@ export class RpcClient {
 		try {
 			const data = JSON.parse(line);
 
+			// Server greeting: not a response or event.
+			if (data.type === "hello") {
+				this.serverHelloValue = data as RpcHello;
+				return;
+			}
+
 			// Check if it's a response to a pending request
 			if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
 				const pending = this.pendingRequests.get(data.id)!;
@@ -549,10 +561,6 @@ export class RpcClient {
 				void this.handleQuestionRequest(data as RpcQuestionRequest);
 				return;
 			}
-			if (data.type === "extension_ui_request" && data.method === "policyConfirm") {
-				this.cancelLegacyPolicyRequest(data as LegacyRpcPolicyRequest);
-				return;
-			}
 
 			// Otherwise it's an event
 			for (const listener of this.eventListeners) {
@@ -561,17 +569,6 @@ export class RpcClient {
 		} catch {
 			// Ignore non-JSON lines
 		}
-	}
-
-	private cancelLegacyPolicyRequest(request: LegacyRpcPolicyRequest): void {
-		if (!this.process?.stdin?.writable || this.process.stdin.destroyed || this.exitError) return;
-		this.process.stdin.write(
-			serializeJsonLine({
-				type: "extension_ui_response",
-				id: request.id,
-				cancelled: true,
-			} satisfies RpcExtensionUIResponse),
-		);
 	}
 
 	private async handleQuestionRequest(request: RpcQuestionRequest): Promise<void> {
@@ -665,7 +662,11 @@ export class RpcClient {
 	private getData<T>(response: RpcResponse): T {
 		if (!response.success) {
 			const errorResponse = response as Extract<RpcResponse, { success: false }>;
-			throw new Error(errorResponse.error);
+			const failure = new Error(errorResponse.error);
+			if (errorResponse.code !== undefined) {
+				Object.assign(failure, { code: errorResponse.code });
+			}
+			throw failure;
 		}
 		// Type assertion: we trust response.data matches T based on the command sent.
 		// This is safe because each public method specifies the correct T for its command.

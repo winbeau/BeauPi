@@ -39,7 +39,7 @@ describe("tasks_update Tool", () => {
 		expect(tool.promptGuidelines?.join("\n")).toContain("3-7");
 		expect(tool.promptGuidelines?.join("\n")).toContain("15 Chinese characters");
 		expect(tool.promptGuidelines?.join("\n")).toContain("domain nouns");
-		expect(tool.promptGuidelines?.join("\n")).toContain("PrivilegeRuntime");
+		expect(tool.promptGuidelines?.join("\n")).toContain("WorkflowRuntime");
 		expect(tool.promptGuidelines?.join("\n")).toContain("soft style target");
 		expect(tool.promptGuidelines?.join("\n")).toContain("structure");
 		expect(tool.promptGuidelines?.join("\n")).toContain("safely rebases");

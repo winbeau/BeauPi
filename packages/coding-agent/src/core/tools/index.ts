@@ -96,6 +96,17 @@ export {
 	type ReadToolOptions,
 } from "./read.ts";
 export {
+	coreToolNames,
+	createCoreToolRegistry,
+	RUNTIME_TOOL_NAMES,
+	type ToolManifest,
+	ToolRegistry,
+	type ToolRegistryEntry,
+	ToolRegistryError,
+	type ToolSideEffect,
+	type ToolSource,
+} from "./registry.ts";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -130,6 +141,7 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { coreToolNames, RUNTIME_TOOL_NAMES } from "./registry.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
@@ -148,30 +160,12 @@ export type ToolName =
 	| "docs_resolve_task"
 	| "ask_user_question"
 	| "playwright";
-export const allToolNames: Set<string> = new Set([
-	"read",
-	"bash",
-	"edit",
-	"write",
-	"grep",
-	"find",
-	"ls",
-	"docs_search",
-	"docs_read",
-	"docs_resolve_task",
-	"ask_user_question",
-	"playwright",
-	"privileged_exec",
-	"web_search",
-	"web_fetch",
-	"background_start",
-	"background_attach",
-	"background_status",
-	"background_logs",
-	"background_wait",
-	"background_cancel",
-	"tasks_update",
-]);
+
+/**
+ * All tool names: core names derived from the Tool Registry plus the
+ * runtime-owned names registered by their hosts.
+ */
+export const allToolNames: Set<string> = new Set([...coreToolNames(), ...RUNTIME_TOOL_NAMES]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;

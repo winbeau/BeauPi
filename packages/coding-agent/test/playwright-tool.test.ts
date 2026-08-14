@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { Browser } from "playwright";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { isWorkspaceMutatingToolCall } from "../src/core/execution/tool-kind.ts";
 import {
 	attachPlaywrightRuntimeToolDetails,
 	createPlaywrightRuntimeDetails,
@@ -22,7 +23,6 @@ import {
 	type ResolvedPlaywrightConfig,
 	resolvePlaywrightConfig,
 } from "../src/core/playwright/index.ts";
-import { classifyPolicyOperation, resolvePolicyConfig } from "../src/core/policy/index.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -178,43 +178,20 @@ describe("native Playwright tool contract", () => {
 		}
 	});
 
-	it("classifies browser inspection, state mutation, navigation, and screenshot writes", () => {
-		const base = {
-			cwd: "/workspace",
-			availableTools: ["playwright"],
-			config: resolvePolicyConfig(undefined),
-		};
+	it("treats a workspace screenshot as the only Playwright write fact", () => {
+		expect(isWorkspaceMutatingToolCall("playwright", { action: "snapshot" })).toBe(false);
 		expect(
-			classifyPolicyOperation({ ...base, toolName: "playwright", args: { action: "snapshot" } })?.descriptor,
-		).toMatchObject({ kind: "read_only_check", access: "read", workspaceMutation: false });
-		expect(
-			classifyPolicyOperation({
-				...base,
-				toolName: "playwright",
-				args: { action: "act", kind: "click", target: { by: "text", value: "Save" } },
-			})?.descriptor,
-		).toMatchObject({ kind: "browser_state", access: "write", workspaceMutation: false });
-		expect(
-			classifyPolicyOperation({
-				...base,
-				toolName: "playwright",
-				args: { action: "navigate", url: "https://example.com" },
-			})?.descriptor,
-		).toMatchObject({ kind: "network_fetch", access: "network", workspaceMutation: false });
-		expect(
-			classifyPolicyOperation({
-				...base,
-				toolName: "playwright",
-				args: { action: "screenshot", savePath: "artifacts/page.png" },
-			})?.descriptor,
-		).toMatchObject({ kind: "workspace_write", access: "write", workspaceMutation: true, sensitive: false });
-		expect(
-			classifyPolicyOperation({
-				...base,
-				toolName: "playwright",
-				args: { action: "screenshot", savePath: "/tmp/page.png" },
-			})?.requiresConfirmation,
-		).toBe(true);
+			isWorkspaceMutatingToolCall("playwright", {
+				action: "act",
+				kind: "click",
+				target: { by: "text", value: "Save" },
+			}),
+		).toBe(false);
+		expect(isWorkspaceMutatingToolCall("playwright", { action: "navigate", url: "https://example.com" })).toBe(false);
+		expect(isWorkspaceMutatingToolCall("playwright", { action: "screenshot", savePath: "artifacts/page.png" })).toBe(
+			true,
+		);
+		expect(isWorkspaceMutatingToolCall("playwright", { action: "screenshot" })).toBe(false);
 	});
 });
 

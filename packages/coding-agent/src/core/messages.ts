@@ -7,6 +7,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { ExecutionStatus } from "./execution/execution-types.ts";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -32,6 +33,8 @@ export interface BashExecutionMessage {
 	output: string;
 	exitCode: number | undefined;
 	cancelled: boolean;
+	/** Neutral execution status recorded with the message. */
+	status?: ExecutionStatus;
 	truncated: boolean;
 	fullOutputPath?: string;
 	timestamp: number;

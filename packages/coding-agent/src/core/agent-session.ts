@@ -81,6 +81,9 @@ import {
 	type ExecutionContract,
 	getDocumentRuntimeToolDetails,
 } from "./documents/index.ts";
+import type { ExecutionJournal } from "./execution/execution-journal.ts";
+import { bashFailureCategory } from "./execution/execution-types.ts";
+import { isWorkspaceMutatingToolCall } from "./execution/tool-kind.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
@@ -120,25 +123,6 @@ import {
 	getPlaywrightRuntimeToolDetails,
 	PlaywrightRuntime,
 } from "./playwright/index.ts";
-import {
-	attachPolicyToolDetails,
-	classifyPolicyOperation,
-	hasPotentialShellPrivilege,
-	POLICY_FACT_ENTRY_TYPE,
-	type PolicyInteractionHandler,
-	PolicyRuntime,
-	type PolicyRuntimeEvent,
-	resolvePolicyConfig,
-} from "./policy/index.ts";
-import {
-	attachPrivilegeToolDetails,
-	getPrivilegeToolDetails,
-	JsonlPrivilegeAuditWriter,
-	PRIVILEGE_FACT_ENTRY_TYPE,
-	type PrivilegeInteractionHandler,
-	PrivilegeRuntime,
-	TmuxPrivilegeTerminalAdapter,
-} from "./privilege/index.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { LunaTerminalOutputReviewer } from "./remote/output-reviewer.ts";
@@ -240,8 +224,7 @@ export type AgentSessionEvent =
 	  }
 	| { type: "summarization_retry_finished" }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "bash_execution_update"; id?: string; delta: string }
-	| { type: "policy"; event: PolicyRuntimeEvent };
+	| { type: "bash_execution_update"; id?: string; delta: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -296,10 +279,6 @@ export interface AgentSessionConfig {
 	agentPool?: AgentPool;
 	/** Session-bound interactive question runtime. */
 	questionRuntime?: QuestionRuntime;
-	/** Session-scoped deterministic Policy Runtime. */
-	policyRuntime?: PolicyRuntime;
-	/** Session-scoped controlled privilege Runtime. */
-	privilegeRuntime?: PrivilegeRuntime;
 	/** Session-scoped Chromium Runtime. */
 	playwrightRuntime?: PlaywrightRuntime;
 	/** Optional session-scoped Monitor Runtime. Created here when omitted. */
@@ -400,8 +379,6 @@ export class AgentSession {
 	readonly taskLedger: TaskLedger;
 	readonly documentRuntime: DocumentRuntime;
 	readonly questionRuntime: QuestionRuntime;
-	readonly policyRuntime: PolicyRuntime;
-	readonly privilegeRuntime: PrivilegeRuntime;
 	readonly playwrightRuntime: PlaywrightRuntime;
 	readonly dynamicTaskRuntime?: DynamicTaskRuntime;
 
@@ -411,13 +388,13 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _unsubscribeQuestionRuntime?: () => void;
-	private _unsubscribePolicyRuntime?: () => void;
-	private _unsubscribePrivilegeRuntime?: () => void;
 	private _unsubscribeDynamicTaskRuntime?: () => void;
 	private _unsubscribeWorkflowRuntime?: () => void;
 	private _unsubscribeBackgroundRuntime?: () => void;
 	private _unsubscribeMonitorRuntime?: () => void;
 	private _isAgentRunActive = false;
+	private _runCounter = 0;
+	private _currentJournalRunId = "";
 	private _isTaskReviewActive = false;
 	private _dynamicTaskRunId = 0;
 	private _promptPreflightCount = 0;
@@ -536,17 +513,6 @@ export class AgentSession {
 		this._unsubscribeQuestionRuntime = this.questionRuntime.subscribe((pending) => {
 			this.taskLedger.setPendingInteraction(pending);
 		});
-		this.policyRuntime =
-			config.policyRuntime ??
-			new PolicyRuntime({
-				cwd: config.cwd,
-				getConfig: () => resolvePolicyConfig(undefined),
-				enabled: false,
-			});
-		this.policyRuntime.bindSession(config.sessionManager.getSessionId(), config.sessionManager.getBranch());
-		this._unsubscribePolicyRuntime = this.policyRuntime.subscribe((event) => {
-			this._emit({ type: "policy", event });
-		});
 		this.documentRuntime =
 			config.documentRuntime ??
 			new DocumentRuntime({
@@ -658,21 +624,6 @@ export class AgentSession {
 			modelResolver: reviewModelResolver,
 		});
 		this.remoteRuntime.setOutputReviewerIfUnset(terminalOutputReviewer);
-		this.privilegeRuntime =
-			config.privilegeRuntime ??
-			new PrivilegeRuntime({
-				sessionId: config.sessionManager.getSessionId(),
-				cwd: config.cwd,
-				terminalAdapter: new TmuxPrivilegeTerminalAdapter({
-					remoteHost: this.remoteRuntime,
-					shellPath: config.settingsManager.getShellPath(),
-				}),
-				auditWriter: new JsonlPrivilegeAuditWriter(getAgentDir()),
-				isRootTarget: (targetId) => this.remoteRuntime.isRootTarget(targetId),
-				monitorRuntime: this.monitorRuntime,
-				outputReviewer: terminalOutputReviewer,
-			});
-		this.privilegeRuntime.setOutputReviewerIfUnset(terminalOutputReviewer);
 		this.playwrightRuntime =
 			config.playwrightRuntime ??
 			new PlaywrightRuntime({
@@ -680,9 +631,6 @@ export class AgentSession {
 				getSettings: () => this.settingsManager.getPlaywrightSettings(),
 				getAutoResizeImages: () => this.settingsManager.getImageAutoResize(),
 			});
-		this._unsubscribePrivilegeRuntime = this.privilegeRuntime.subscribe((pending) => {
-			this.taskLedger.setPendingPrivilegeInteraction(pending);
-		});
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._disableDocumentTools = config.disableDocumentTools ?? false;
@@ -719,14 +667,6 @@ export class AgentSession {
 
 	setQuestionInteractionHandler(handler: QuestionInteractionHandler | undefined): void {
 		this.questionRuntime.setHandler(handler);
-	}
-
-	setPolicyInteractionHandler(handler: PolicyInteractionHandler | undefined): void {
-		this.policyRuntime.setHandler(handler);
-	}
-
-	setPrivilegeInteractionHandler(handler: PrivilegeInteractionHandler | undefined): void {
-		this.privilegeRuntime.setHandler(handler);
 	}
 
 	/** Validate the branch-restored contract before the first provider request. */
@@ -806,15 +746,11 @@ export class AgentSession {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
 			this.taskLedger.updateToolArgs(toolCall.id, args);
+			if (this._currentJournalRunId) {
+				this.journalEvent(this.journal.recordToolStarted(this._currentJournalRunId, toolCall.id, "agent"));
+			}
 			if (this.dynamicTaskRuntime && toolCall.name !== "tasks_update") {
 				try {
-					const analysis = classifyPolicyOperation({
-						toolName: toolCall.name,
-						args,
-						cwd: this._cwd,
-						availableTools: this.getActiveToolNames(),
-						config: resolvePolicyConfig(this.settingsManager.getPolicySettings()),
-					});
 					const command =
 						typeof args === "object" && args !== null && "command" in args
 							? (args as { command?: unknown }).command
@@ -829,25 +765,11 @@ export class AgentSession {
 						playwrightAction === "snapshot" ||
 						playwrightAction === "screenshot" ||
 						playwrightAction === "events";
-					const mutationTool = [
-						"edit",
-						"write",
-						"bash",
-						"remote_edit",
-						"remote_write",
-						"remote_bash",
-						"remote_exec",
-						"terminal_bash",
-						"terminal_edit",
-						"terminal_write",
-					].includes(toolCall.name);
 					await this.dynamicTaskRuntime.noteToolStarted({
 						toolCallId: toolCall.id,
 						toolName: toolCall.name,
 						args,
-						workspaceMutation:
-							(mutationTool || toolCall.name === "playwright") &&
-							analysis?.descriptor.workspaceMutation === true,
+						workspaceMutation: isWorkspaceMutatingToolCall(toolCall.name, args),
 						verification,
 					});
 				} catch {
@@ -880,7 +802,6 @@ export class AgentSession {
 			const documentDetails = getDocumentRuntimeToolDetails(result.details);
 			const searchDetails = getSearchRuntimeToolDetails(result.details);
 			const remoteDetails = getRemoteToolDetails(result.details);
-			const privilegeDetails = getPrivilegeToolDetails(result.details);
 			const workflowDetails = getWorkflowToolDetails(result.details);
 			const backgroundDetails = getBackgroundToolDetails(result.details);
 			const dynamicTaskDetails = getDynamicTaskToolDetails(result.details);
@@ -889,31 +810,22 @@ export class AgentSession {
 				playwrightDetails?.ok === false ||
 				searchDetails?.ok === false ||
 				remoteDetails?.ok === false ||
-				privilegeDetails?.ok === false ||
 				workflowDetails?.ok === false ||
 				backgroundDetails?.ok === false ||
 				dynamicTaskDetails?.ok === false;
-			const policyDetails = await this.policyRuntime.finalizeTool({
-				toolCallId: toolCall.id,
-				toolName: toolCall.name,
-				details: result.details,
-				isError: runtimeError || isError,
-				signal: this.agent.signal,
-			});
-			let authoritativeDetails = policyDetails
-				? attachPolicyToolDetails(result.details, policyDetails)
-				: result.details;
-			const policyError =
-				policyDetails !== undefined &&
-				(policyDetails.status === "failed" ||
-					policyDetails.status === "blocked" ||
-					policyDetails.status === "replaced" ||
-					policyDetails.status === "paused");
-			const authoritativeError = policyError || runtimeError || isError;
+			if (this._currentJournalRunId) {
+				this.journalEvent(
+					this.journal.recordToolFinished(
+						this._currentJournalRunId,
+						toolCall.id,
+						isError || runtimeError ? "failed" : "completed",
+						"agent",
+					),
+				);
+			}
+			const authoritativeError = runtimeError || isError;
 			if (!runner.hasHandlers("tool_result")) {
-				return policyDetails || runtimeError
-					? { details: authoritativeDetails, isError: authoritativeError }
-					: undefined;
+				return runtimeError ? { details: result.details, isError: authoritativeError } : undefined;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -922,15 +834,13 @@ export class AgentSession {
 				toolCallId: toolCall.id,
 				input: args as Record<string, unknown>,
 				content: result.content,
-				details: authoritativeDetails,
+				details: result.details,
 				isError: authoritativeError,
 				usage: result.usage,
 			});
 
 			if (!hookResult) {
-				return policyDetails || runtimeError
-					? { details: authoritativeDetails, isError: authoritativeError }
-					: undefined;
+				return runtimeError ? { details: result.details, isError: authoritativeError } : undefined;
 			}
 
 			let details = documentDetails
@@ -940,13 +850,10 @@ export class AgentSession {
 			if (playwrightDetails) details = attachPlaywrightRuntimeToolDetails(details, playwrightDetails);
 			if (workflowDetails) details = attachWorkflowToolDetails(details, workflowDetails);
 			if (backgroundDetails) details = attachBackgroundToolDetails(details, backgroundDetails);
-			if (privilegeDetails) details = attachPrivilegeToolDetails(details, privilegeDetails);
-			if (policyDetails) details = attachPolicyToolDetails(details, policyDetails);
-			authoritativeDetails = details;
 			return {
 				content: hookResult.content,
-				details: authoritativeDetails,
-				isError: policyError || runtimeError ? true : (hookResult.isError ?? isError),
+				details,
+				isError: runtimeError ? true : (hookResult.isError ?? isError),
 				usage: hookResult.usage,
 			};
 		};
@@ -1098,14 +1005,6 @@ export class AgentSession {
 			const documentDetails = this.taskLedger.getDocumentRuntimeDetails(event.message.toolCallId);
 			if (documentDetails) {
 				event.message.details = attachDocumentRuntimeToolDetails(event.message.details, documentDetails);
-			}
-			const policyDetails = this.taskLedger.getPolicyDetails(event.message.toolCallId);
-			if (policyDetails) {
-				event.message.details = attachPolicyToolDetails(event.message.details, policyDetails);
-			}
-			const privilegeDetails = this.taskLedger.getPrivilegeDetails(event.message.toolCallId);
-			if (privilegeDetails) {
-				event.message.details = attachPrivilegeToolDetails(event.message.details, privilegeDetails);
 			}
 			const workflowDetails = this.taskLedger.getWorkflowDetails(event.message.toolCallId);
 			if (workflowDetails) {
@@ -1346,10 +1245,9 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.questionRuntime.cancelPending();
-			this.privilegeRuntime.cancelPending();
 			this.dynamicTaskRuntime?.dispose();
 			this.agent.abort();
-			void this.privilegeRuntime.dispose().finally(() => this.remoteRuntime.dispose());
+			void this.remoteRuntime.dispose();
 			void this.workflowRuntime?.dispose();
 			void this.disposeRuntimeResources();
 			this.backgroundRuntime.dispose();
@@ -1365,10 +1263,6 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		this._unsubscribeQuestionRuntime?.();
 		this._unsubscribeQuestionRuntime = undefined;
-		this._unsubscribePolicyRuntime?.();
-		this._unsubscribePolicyRuntime = undefined;
-		this._unsubscribePrivilegeRuntime?.();
-		this._unsubscribePrivilegeRuntime = undefined;
 		this._unsubscribeDynamicTaskRuntime?.();
 		this._unsubscribeDynamicTaskRuntime = undefined;
 		this._unsubscribeWorkflowRuntime?.();
@@ -1498,6 +1392,15 @@ export class AgentSession {
 	}
 
 	/** Current session ID */
+	private get journal(): ExecutionJournal {
+		return this.sessionManager.getExecutionJournal();
+	}
+
+	/** Journal writes must never block or fail tool execution. */
+	private journalEvent(event: Promise<void>): void {
+		void event.catch(() => undefined);
+	}
+
 	get sessionId(): string {
 		return this.sessionManager.getSessionId();
 	}
@@ -1641,17 +1544,33 @@ export class AgentSession {
 	// =========================================================================
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		const runId = ++this._runCounter;
+		const journalRunId = `run-${runId}`;
+		this._currentJournalRunId = journalRunId;
 		this._isAgentRunActive = true;
 		const dynamicTaskRunId = ++this._dynamicTaskRunId;
+		this.journalEvent(this.journal.recordRunCreated(journalRunId, "agent"));
+		this.journalEvent(this.journal.recordRunStarted(journalRunId, "agent"));
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
 			}
 		} finally {
+			const currentRun = this._runCounter === runId;
+			this._isAgentRunActive = false;
 			this._systemPromptOverride = undefined;
-			this._flushPendingBashMessages();
-			await this._emitAgentSettled(dynamicTaskRunId);
+			if (currentRun) {
+				this.journalEvent(
+					this.journal.recordRunSettled(
+						journalRunId,
+						this.agent.signal?.aborted ? "unknown" : "completed",
+						"agent",
+					),
+				);
+				this._flushPendingBashMessages();
+				await this._emitAgentSettled(dynamicTaskRunId);
+			}
 		}
 	}
 
@@ -2178,7 +2097,6 @@ export class AgentSession {
 	async abort(): Promise<void> {
 		this.abortRetry();
 		this.questionRuntime.cancelPending();
-		this.privilegeRuntime.cancelPending();
 		this.dynamicTaskRuntime?.abortReview();
 		this.agent.abort();
 		if (this._pendingPromptPreflights.size > 0 && this._extensionCommandExecutionDepth === 0) {
@@ -3151,9 +3069,9 @@ export class AgentSession {
 				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
 		);
 		const runner = this._extensionRunner;
-		const wrapPolicy = (tool: AgentTool): AgentTool =>
-			this.policyRuntime.wrapTool(tool, () => this.getActiveToolNames());
-		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner).map(wrapPolicy);
+		const wrapToolExecution = (tool: AgentTool): AgentTool =>
+			tool.name === "terminal_send" ? { ...tool, executionMode: "sequential" as const } : tool;
+		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner).map(wrapToolExecution);
 		const wrappedBuiltInTools = wrapRegisteredTools(
 			Array.from(this._baseToolDefinitions.values())
 				.filter((definition) => isAllowedTool(definition.name))
@@ -3162,7 +3080,7 @@ export class AgentSession {
 					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
 				})),
 			runner,
-		).map(wrapPolicy);
+		).map(wrapToolExecution);
 
 		const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -3212,7 +3130,7 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath, privilegeRuntime: this.privilegeRuntime },
+					bash: { commandPrefix: shellCommandPrefix, shellPath },
 					documentRuntime: this.documentRuntime,
 					questionRuntime: this.questionRuntime,
 				});
@@ -3274,7 +3192,9 @@ export class AgentSession {
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		this.questionRuntime.cancelPending();
-		this.privilegeRuntime.cancelPending();
+		// Invalidate any in-flight run: its post-run flush/settlement must not
+		// write stale continuation output into the reloaded session state.
+		this._runCounter++;
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
@@ -3450,14 +3370,9 @@ export class AgentSession {
 		const abortController = new AbortController();
 		const executionId = options?.id ?? randomUUID();
 		this._bashAbortControllers.add(abortController);
-		await this.policyRuntime.authorizeTool(
-			executionId,
-			"bash",
-			{ command },
-			this.getActiveToolNames(),
-			abortController.signal,
-		);
 		this.taskLedger.startShell(executionId, command);
+		const bashRunId = this._currentJournalRunId || "user-bash";
+		this.journalEvent(this.journal.recordToolStarted(bashRunId, executionId, "user"));
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
@@ -3465,47 +3380,6 @@ export class AgentSession {
 		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
 
 		try {
-			if (hasPotentialShellPrivilege(resolvedCommand)) {
-				const privilegeResult = await this.privilegeRuntime.execute(
-					{
-						toolCallId: executionId,
-						sourceTool: "bash",
-						route: "local_bash",
-						command: resolvedCommand,
-						target: { execution: "local" },
-						cwd: this.sessionManager.getCwd(),
-					},
-					abortController.signal,
-				);
-				const privilege = privilegeResult.details;
-				const output = privilegeResult.content
-					.filter((item) => item.type === "text")
-					.map((item) => item.text)
-					.join("\n");
-				if (output) {
-					onChunk?.(output);
-					this._emit({ type: "bash_execution_update", id: options?.id, delta: output });
-				}
-				const policy = await this.policyRuntime.finalizeTool({
-					toolCallId: executionId,
-					toolName: "bash",
-					details: privilege,
-					isError: !privilege.ok,
-					signal: abortController.signal,
-				});
-				const result: BashResult = {
-					output,
-					exitCode: typeof privilege.exitCode === "number" ? privilege.exitCode : undefined,
-					cancelled: privilege.status === "cancelled",
-					truncated: privilege.truncation?.truncated === true,
-					fullOutputPath: privilege.fullOutputPath,
-					error: privilege.ok ? undefined : (privilege.diagnostic?.code ?? privilege.status),
-					policy,
-					privilege,
-				};
-				this.recordBashResult(command, result, { ...options, executionId });
-				return result;
-			}
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
@@ -3519,42 +3393,33 @@ export class AgentSession {
 				},
 			);
 
-			const policyCategory =
-				result.exitCode === 127
-					? "missing_dependency"
-					: result.exitCode === 126 ||
-							/permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/i.test(result.output)
-						? "permission"
-						: undefined;
-			const policy = await this.policyRuntime.finalizeTool({
-				toolCallId: executionId,
-				toolName: "bash",
-				details: { exitCode: result.exitCode, policyCategory },
-				isError: result.exitCode !== undefined && result.exitCode !== 0,
-				signal: abortController.signal,
-			});
-			const completed = { ...result, policy };
-			this.recordBashResult(command, completed, { ...options, executionId });
-			return completed;
+			this.recordBashResult(command, result, { ...options, executionId });
+			this.journalEvent(this.journal.recordToolFinished(bashRunId, executionId, "completed", "user"));
+			return result;
 		} catch (error) {
-			await this.policyRuntime.noteThrownError(executionId, "bash", error, abortController.signal);
-			const policy = await this.policyRuntime.finalizeTool({
-				toolCallId: executionId,
-				toolName: "bash",
-				details: undefined,
-				isError: true,
-				signal: abortController.signal,
-			});
 			const errorMessage = error instanceof Error ? error.message : String(error);
+			const cancelled = abortController.signal.aborted;
+			const timedOut = !cancelled && errorMessage.startsWith("timeout:");
+			const exitCode = cancelled ? undefined : 1;
 			const failure: BashResult = {
 				output: errorMessage,
-				exitCode: abortController.signal.aborted ? undefined : 1,
-				cancelled: abortController.signal.aborted,
+				exitCode,
+				cancelled,
+				status: cancelled ? "cancelled" : timedOut ? "timed_out" : "failed",
+				failureCategory: timedOut ? "timeout" : bashFailureCategory(exitCode, errorMessage),
 				truncated: false,
 				error: errorMessage,
-				policy,
 			};
 			this.recordBashResult(command, failure, { ...options, executionId });
+			this.journalEvent(
+				this.journal.recordToolFinished(
+					bashRunId,
+					executionId,
+					cancelled ? "unknown" : "failed",
+					"user",
+					failure.failureCategory,
+				),
+			);
 			throw error;
 		} finally {
 			this._bashAbortControllers.delete(abortController);
@@ -3578,23 +3443,12 @@ export class AgentSession {
 			output: result.output,
 			exitCode: result.exitCode,
 			cancelled: result.cancelled,
+			status: result.status,
 			truncated: result.truncated,
 			fullOutputPath: result.fullOutputPath,
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};
-		if (result.policy) {
-			this.sessionManager.appendCustomEntry(
-				POLICY_FACT_ENTRY_TYPE,
-				attachPolicyToolDetails(undefined, result.policy),
-			);
-		}
-		if (result.privilege) {
-			this.sessionManager.appendCustomEntry(
-				PRIVILEGE_FACT_ENTRY_TYPE,
-				attachPrivilegeToolDetails(undefined, result.privilege),
-			);
-		}
 
 		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
 		if (this.isStreaming) {
@@ -3613,6 +3467,10 @@ export class AgentSession {
 	 * Cancel running bash command.
 	 */
 	abortBash(): void {
+		// Cancel intent is recorded BEFORE the AbortSignal is delivered.
+		this.journalEvent(
+			this.journal.recordCancelRequested(this._currentJournalRunId || "user-bash", undefined, "agent"),
+		);
 		for (const abortController of [...this._bashAbortControllers]) {
 			abortController.abort();
 		}
@@ -3849,9 +3707,7 @@ export class AgentSession {
 			// Update agent state
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
-			this.privilegeRuntime.cancelPending();
 			this.taskLedger.rebuild(this.sessionManager.getBranch());
-			this.policyRuntime.rebuild(this.sessionManager.getBranch());
 			await this.workflowRuntime?.cancelActiveWorkflows();
 			await this.monitorRuntime.rebuild(this.sessionManager.getBranch());
 			await this.backgroundRuntime.rebuild(this.sessionManager.getBranch());

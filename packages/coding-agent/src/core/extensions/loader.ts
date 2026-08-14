@@ -36,6 +36,7 @@ import type {
 	Extension,
 	ExtensionAPI,
 	ExtensionFactory,
+	ExtensionManifest,
 	ExtensionRuntime,
 	LoadExtensionsResult,
 	MessageRenderer,
@@ -142,6 +143,7 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 let extensionCacheCwd: string | undefined;
 let extensionCacheGeneration = 0;
 const extensionCache = new Map<string, ExtensionFactory>();
+const extensionManifestCache = new Map<string, ExtensionManifest | undefined>();
 
 interface ExtensionCacheToken {
 	cwd: string;
@@ -150,6 +152,7 @@ interface ExtensionCacheToken {
 
 export function clearExtensionCache(): void {
 	extensionCache.clear();
+	extensionManifestCache.clear();
 	extensionCacheCwd = undefined;
 	extensionCacheGeneration++;
 }
@@ -404,7 +407,7 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 	if (isCurrentCacheToken(cacheToken)) {
 		const cachedFactory = extensionCache.get(extensionPath);
 		if (cachedFactory) {
-			return cachedFactory;
+			return { factory: cachedFactory, manifest: extensionManifestCache.get(extensionPath) };
 		}
 	}
 
@@ -418,19 +421,23 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 
 	const module = await jiti.import(extensionPath, { default: true });
 	const factory = module as ExtensionFactory;
+	const manifest = isExtensionManifest((factory as { manifest?: unknown }).manifest)
+		? (factory as { manifest?: ExtensionManifest }).manifest
+		: undefined;
 	if (typeof factory !== "function") {
 		return undefined;
 	}
 	if (isCurrentCacheToken(cacheToken)) {
 		extensionCache.set(extensionPath, factory);
+		extensionManifestCache.set(extensionPath, manifest);
 	}
-	return factory;
+	return { factory, manifest };
 }
 
 /**
  * Create an Extension object with empty collections.
  */
-function createExtension(extensionPath: string, resolvedPath: string): Extension {
+function createExtension(extensionPath: string, resolvedPath: string, manifest?: ExtensionManifest): Extension {
 	const source =
 		extensionPath.startsWith("<") && extensionPath.endsWith(">")
 			? extensionPath.slice(1, -1).split(":")[0] || "temporary"
@@ -441,6 +448,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		path: extensionPath,
 		resolvedPath,
 		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
+		...(manifest ? { manifest } : {}),
 		handlers: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),
@@ -449,6 +457,24 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		flags: new Map(),
 		shortcuts: new Map(),
 	};
+}
+
+function isExtensionManifest(value: unknown): value is ExtensionManifest {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	if (record.id !== undefined && typeof record.id !== "string") return false;
+	if (record.version !== undefined && typeof record.version !== "string") return false;
+	if (record.source !== undefined && typeof record.source !== "string") return false;
+	if (record.priority !== undefined && typeof record.priority !== "number") return false;
+	if (
+		record.trustLevel !== undefined &&
+		record.trustLevel !== "default" &&
+		record.trustLevel !== "high" &&
+		record.trustLevel !== "low"
+	) {
+		return false;
+	}
+	return true;
 }
 
 async function loadExtension(
@@ -461,15 +487,15 @@ async function loadExtension(
 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
 
 	try {
-		const factory = await loadExtensionModule(resolvedPath, cacheToken);
+		const loaded = await loadExtensionModule(resolvedPath, cacheToken);
 		time(`${extensionPath} module import`, "extensions");
-		if (!factory) {
+		if (!loaded) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
 
-		const extension = createExtension(extensionPath, resolvedPath);
+		const extension = createExtension(extensionPath, resolvedPath, loaded.manifest);
 		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
-		await factory(api);
+		await loaded.factory(api);
 		time(`${extensionPath} factory`, "extensions");
 
 		return { extension, error: null };
@@ -489,7 +515,10 @@ export async function loadExtensionFromFactory(
 	runtime: ExtensionRuntime,
 	extensionPath = "<inline>",
 ): Promise<Extension> {
-	const extension = createExtension(extensionPath, extensionPath);
+	const manifest = isExtensionManifest((factory as { manifest?: unknown }).manifest)
+		? (factory as { manifest?: ExtensionManifest }).manifest
+		: undefined;
+	const extension = createExtension(extensionPath, extensionPath, manifest);
 	const resolvedCwd = resolvePath(cwd);
 	const api = createExtensionAPI(extension, runtime, resolvedCwd, eventBus);
 	await factory(api);

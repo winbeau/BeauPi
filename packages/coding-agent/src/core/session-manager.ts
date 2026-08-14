@@ -19,6 +19,7 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { ExecutionJournal } from "./execution/execution-journal.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -859,6 +860,7 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	private executionJournal: ExecutionJournal | undefined;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -1002,6 +1004,22 @@ export class SessionManager {
 
 	usesDefaultSessionDir(): boolean {
 		return this.sessionDir === getDefaultSessionDirPath(this.cwd);
+	}
+
+	/**
+	 * Session-scoped execution journal. Persisted sessions write to
+	 * `<sessionFile>.journal.jsonl`; in-memory sessions use a memory journal.
+	 */
+	getExecutionJournal(): ExecutionJournal {
+		if (!this.executionJournal) {
+			const journalPath = this.persist && this.sessionFile ? `${this.sessionFile}.journal.jsonl` : undefined;
+			this.executionJournal = new ExecutionJournal({ sessionId: this.sessionId, filePath: journalPath });
+			if (journalPath) {
+				// Deterministically repair an interrupted append before the journal is used.
+				void this.executionJournal.repairTail();
+			}
+		}
+		return this.executionJournal;
 	}
 
 	getSessionId(): string {

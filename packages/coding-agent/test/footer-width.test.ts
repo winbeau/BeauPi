@@ -3,7 +3,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import type { MonitorRecord } from "../src/core/monitor/index.ts";
-import type { PolicyAdvisory } from "../src/core/policy/index.ts";
 import type { TaskPhase, TaskVerificationStatus } from "../src/core/state/task-ledger.ts";
 import type { DynamicTaskPlanV1 } from "../src/core/tasks/types.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
@@ -33,7 +32,6 @@ function createSession(options: {
 	verificationStatus?: TaskVerificationStatus;
 	monitors?: MonitorRecord[];
 	selectedTargetId?: string;
-	policyAdvisories?: PolicyAdvisory[];
 	dynamicTasks?: DynamicTaskPlanV1;
 }): AgentSession {
 	const usage = options.usage;
@@ -96,9 +94,6 @@ function createSession(options: {
 			selectedTarget: options.selectedTargetId
 				? { id: options.selectedTargetId, scope: "session", sshAlias: "h100-server" }
 				: undefined,
-		},
-		policyRuntime: {
-			getAdvisories: () => options.policyAdvisories ?? [],
 		},
 		monitorRuntime: {
 			list: () => options.monitors ?? [],
@@ -416,39 +411,6 @@ describe("FooterComponent width handling", () => {
 			const lines = footer.render(width).map(stripAnsi);
 			expect(lines[0]).toContain("ssh:h100-server");
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-		}
-	});
-
-	it("shows Policy only as a non-blocking Footer advisory", () => {
-		const footer = new FooterComponent(
-			createSession({
-				sessionName: "",
-				policyAdvisories: [
-					{
-						version: 1,
-						kind: "dedicated_tool_available",
-						message: "Dedicated Tool available: web_fetch.",
-						createdAt: "2026-07-30T00:00:00.000Z",
-					},
-					{
-						version: 1,
-						kind: "network_fallback",
-						message: "Network fallback follows a failed dedicated Search operation.",
-						createdAt: "2026-07-30T00:00:01.000Z",
-					},
-				],
-			}),
-			createFooterData(1),
-		);
-
-		for (const width of [40, 80, 120, 160]) {
-			const lines = footer.render(width);
-			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			if (width >= 120) {
-				expect(stripAnsi(lines[0])).toContain(
-					"policy: Network fallback follows a failed dedicated Search operation. (+1)",
-				);
-			}
 		}
 	});
 

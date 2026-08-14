@@ -26,8 +26,6 @@ function createSnapshot(overrides: Partial<TaskLedgerSnapshot> = {}): TaskLedger
 		failures: [],
 		network: [],
 		interactions: [],
-		policy: [],
-		privilege: [],
 		workflows: [],
 		verification: { status: "pending", timestamp: 10 },
 		todos: [],

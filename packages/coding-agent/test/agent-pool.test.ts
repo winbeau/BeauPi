@@ -345,7 +345,6 @@ describe("in-process Agent Pool and delegate_task", () => {
 							"delegate_task",
 							"tasks_update",
 							"ask_user_question",
-							"privileged_exec",
 							"custom_allowed",
 						],
 						skillAllowlist: { allow: ["allowed-skill"] },
@@ -382,7 +381,6 @@ describe("in-process Agent Pool and delegate_task", () => {
 		expect(seenTools).not.toContain("delegate_task");
 		expect(seenTools).not.toContain("tasks_update");
 		expect(seenTools).not.toContain("ask_user_question");
-		expect(seenTools).not.toContain("privileged_exec");
 		expect(seenSystemPrompt).toContain("CONTROLLED PROFILE");
 		expect(seenSystemPrompt).toContain("<clarification_request>");
 		expect(seenSystemPrompt).toContain("allowed-skill");
@@ -889,10 +887,8 @@ describe("in-process Agent Pool and delegate_task", () => {
 		await session.prompt("inspect tools");
 		expect(coordinatorTools).toContain("delegate_task");
 		expect(coordinatorTools).toContain("agent_control");
-		expect(coordinatorTools).toContain("privileged_exec");
 		expect(session.getToolDefinition("delegate_task")).toBeDefined();
 		expect(session.getToolDefinition("agent_control")).toBeDefined();
-		expect(session.getToolDefinition("privileged_exec")).toBeDefined();
 	});
 });
 

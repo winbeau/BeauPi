@@ -16,12 +16,17 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
 
+/** Mirrors the coding-agent execution status union so merged message types stay identical. */
+export type ExecutionStatus = "completed" | "failed" | "cancelled" | "timed_out" | "killed" | "unknown";
+
 export interface BashExecutionMessage {
 	role: "bashExecution";
 	command: string;
 	output: string;
 	exitCode: number | undefined;
 	cancelled: boolean;
+	/** Neutral execution status recorded with the message. */
+	status?: ExecutionStatus;
 	truncated: boolean;
 	fullOutputPath?: string;
 	timestamp: number;

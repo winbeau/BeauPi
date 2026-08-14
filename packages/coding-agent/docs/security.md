@@ -28,6 +28,12 @@ Declining trust skips protected resources. `AGENTS.md` and `CLAUDE.md` context f
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, `defaultProjectTrust: "ask"` and `"never"` ignore such resources, while `"always"` trusts them. Use `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
+## Trusted-Local Execution
+
+BeauPi is a trusted-local agent: tools run with the same OS user, cwd, environment, and file permissions as the process that launched it, and tool calls are not routed through any authorization gate. There is no allow/deny/confirm/replace/pause layer, no confirmation requirement, and no staged `sudo` terminal. `sudo`, `su`, and other identity-switching commands run through the ordinary shell executor under the host OS permissions.
+
+The shell inherits the host environment unchanged: this design intentionally does not scrub environment variables, filter credentials, contain the workspace, sandbox the OS, drop root, limit the network, or add a default shell timeout. Trusted-local execution is not a Web authentication boundary, a sandbox, or a security promise — the trust model is exactly the local user's own account.
+
 ## No Built-in Sandbox
 
 Pi does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the pi process. Extensions are TypeScript modules that run with the same permissions. Package installs, shell commands, language servers, test commands, and other developer tools behave as ordinary local processes.

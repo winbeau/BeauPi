@@ -53,7 +53,7 @@ interface DynamicTaskFactV1 {
 - sequence 使用计划顺序；owner 为 `main`。
 - completedAt/updatedAt/activity/blockedBy 来自 snapshot。
 - 隐藏通用 `discover`、`execute`、`verify` Todo。
-- 保留 Document required check/completion、Workflow、Background、Monitor、interaction、privilege、failure、duplicate advisory Todo。
+- 保留 Document required check/completion、Workflow、Background、Monitor、interaction、failure、duplicate advisory Todo。
 
 无动态计划时保持 M2 现有 fallback Todo 完全不变。
 

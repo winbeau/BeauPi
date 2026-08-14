@@ -12,8 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
-import type { PolicyToolDetails } from "./policy/types.ts";
-import type { PrivilegeToolDetailsV1 } from "./privilege/types.ts";
+import { bashExecutionStatus, bashFailureCategory, type ExecutionStatus } from "./execution/execution-types.ts";
+import type { ExecutionFailureCategory } from "./execution/failure-types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -35,16 +35,16 @@ export interface BashResult {
 	exitCode: number | undefined;
 	/** Whether the command was cancelled via signal */
 	cancelled: boolean;
+	/** Neutral execution status derived from the process outcome. */
+	status: ExecutionStatus;
+	/** Neutral failure category for failed/timed-out runs. */
+	failureCategory?: ExecutionFailureCategory;
 	/** Whether the output was truncated */
 	truncated: boolean;
 	/** Path to temp file containing full output (if output exceeded truncation threshold) */
 	fullOutputPath?: string;
 	/** Error recorded by higher-level session execution when the backend throws. */
 	error?: string;
-	/** Versioned M10 Policy fact for this user Bash execution. */
-	policy?: PolicyToolDetails;
-	/** Versioned M13 privilege fact for controlled sudo execution. */
-	privilege?: PrivilegeToolDetailsV1;
 }
 
 // ============================================================================
@@ -127,11 +127,14 @@ export async function executeBashWithOperations(
 			tempFileStream.end();
 		}
 		const cancelled = options?.signal?.aborted ?? false;
-
+		const exitCode = cancelled ? undefined : (result.exitCode ?? undefined);
+		const output = truncationResult.truncated ? truncationResult.content : fullOutput;
 		return {
-			output: truncationResult.truncated ? truncationResult.content : fullOutput,
-			exitCode: cancelled ? undefined : (result.exitCode ?? undefined),
+			output,
+			exitCode,
 			cancelled,
+			status: bashExecutionStatus({ exitCode, cancelled, timedOut: false }),
+			failureCategory: cancelled ? undefined : bashFailureCategory(exitCode, output),
 			truncated: truncationResult.truncated,
 			fullOutputPath: tempFilePath,
 		};
@@ -150,6 +153,7 @@ export async function executeBashWithOperations(
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,
 				exitCode: undefined,
 				cancelled: true,
+				status: "cancelled",
 				truncated: truncationResult.truncated,
 				fullOutputPath: tempFilePath,
 			};

@@ -17,15 +17,6 @@ import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { createMonitorToolDefinitions, MonitorRuntime } from "./monitor/index.ts";
 import type { PlaywrightRuntime } from "./playwright/index.ts";
-import { createPolicyConfigProvider, type PolicyInteractionHandler, PolicyRuntime } from "./policy/index.ts";
-import {
-	createPrivilegedExecToolDefinition,
-	JsonlPrivilegeAuditWriter,
-	type PrivilegeInteractionHandler,
-	PrivilegeRuntime,
-	type PrivilegeTerminalAdapter,
-	TmuxPrivilegeTerminalAdapter,
-} from "./privilege/index.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { type QuestionInteractionHandler, QuestionRuntime } from "./question.ts";
 import { createRemoteToolDefinitions, RemoteExecutionRuntime } from "./remote/index.ts";
@@ -38,6 +29,7 @@ import { time } from "./timings.ts";
 import {
 	createBashTool,
 	createCodingTools,
+	createCoreToolRegistry,
 	createEditTool,
 	createFindTool,
 	createGrepTool,
@@ -45,6 +37,7 @@ import {
 	createReadOnlyTools,
 	createReadTool,
 	createWriteTool,
+	ToolRegistryError,
 	withFileMutationQueue,
 } from "./tools/index.ts";
 import { VisionService } from "./vision/vision-service.ts";
@@ -95,20 +88,8 @@ export interface CreateAgentSessionOptions {
 	questionHandler?: QuestionInteractionHandler;
 	/** Inject a session-bound Question Runtime, primarily for deterministic tests and custom hosts. */
 	questionRuntime?: QuestionRuntime;
-	/** Legacy compatibility input. Advisory-only Policy ignores confirmation handlers. */
-	policyHandler?: PolicyInteractionHandler;
-	/** Inject a session-scoped Policy Runtime, primarily for deterministic tests and custom hosts. */
-	policyRuntime?: PolicyRuntime;
 	/** Inject a session-scoped Playwright Runtime, primarily for deterministic tests and custom hosts. */
 	playwrightRuntime?: PlaywrightRuntime;
-	/** Legacy compatibility input. Advisory-only Policy has no interactive mode distinction. */
-	policyInteractionMode?: "coordinator" | "controlled";
-	/** In-process handler for the controlled privilege terminal. Without one, sudo returns interaction_required. */
-	privilegeHandler?: PrivilegeInteractionHandler;
-	/** Inject a session-scoped Privilege Runtime, primarily for deterministic tests and custom hosts. */
-	privilegeRuntime?: PrivilegeRuntime;
-	/** Inject the local/remote privilege terminal adapter without exposing authentication input to the SDK. */
-	privilegeTerminalAdapter?: PrivilegeTerminalAdapter;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -150,6 +131,8 @@ export interface CreateAgentSessionResult {
 	extensionsResult: LoadExtensionsResult;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/** Tool Registry diagnostics (duplicate names, definition mismatches). */
+	toolRegistryDiagnostics?: string[];
 }
 
 // Re-exports
@@ -246,13 +229,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (options.synchronizeSearchBudget !== false) {
 		searchRuntime.synchronizeBudget(searchBudgetScopeId, sessionManager.getBranch());
 	}
-	const policyRuntime =
-		options.policyRuntime ??
-		new PolicyRuntime({
-			cwd,
-			getConfig: createPolicyConfigProvider(settingsManager),
-		});
-	policyRuntime.bindSession(sessionManager.getSessionId(), sessionManager.getBranch());
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -330,7 +306,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					customTools: options.customTools,
 					searchRuntime,
 					searchBudgetScopeId,
-					policySettings: settingsManager.getPolicySettings(),
 					createSession: (childOptions) => createAgentSession(childOptions),
 				})
 			: undefined;
@@ -370,28 +345,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settingsManager,
 			monitorRuntime,
 		});
-	const privilegeRuntime =
-		options.privilegeRuntime ??
-		new PrivilegeRuntime({
-			sessionId: sessionManager.getSessionId(),
-			cwd,
-			terminalAdapter:
-				options.privilegeTerminalAdapter ??
-				new TmuxPrivilegeTerminalAdapter({
-					remoteHost: remoteRuntime,
-					shellPath: settingsManager.getShellPath(),
-				}),
-			auditWriter: new JsonlPrivilegeAuditWriter(agentDir),
-			handler: options.privilegeHandler,
-			isRootTarget: (targetId) => remoteRuntime.isRootTarget(targetId),
-			monitorRuntime,
-		});
-	if (options.privilegeRuntime && options.privilegeHandler) privilegeRuntime.setHandler(options.privilegeHandler);
 	const monitorTools = createMonitorToolDefinitions(monitorRuntime);
 	const backgroundTools = createBackgroundToolDefinitions(backgroundRuntime);
 	const workflowTools = workflowRuntime ? createWorkflowToolDefinitions(workflowRuntime) : [];
-	const remoteTools = createRemoteToolDefinitions(remoteRuntime, privilegeRuntime);
-	const privilegeTool = createPrivilegedExecToolDefinition(privilegeRuntime, remoteRuntime, cwd);
+	const remoteTools = createRemoteToolDefinitions(remoteRuntime);
 	const searchTools = createSearchToolDefinitions(searchRuntime, {
 		budgetScopeId: searchBudgetScopeId,
 		...(options.synchronizeSearchBudget === false ? {} : { getSessionEntries: () => sessionManager.getBranch() }),
@@ -417,16 +374,38 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		for (const remoteTool of remoteTools) {
 			if (!customTools.some((tool) => tool.name === remoteTool.name)) customTools.push(remoteTool);
 		}
-		if (
-			!excludedToolNameSet?.has(privilegeTool.name) &&
-			!customTools.some((tool) => tool.name === privilegeTool.name)
-		) {
-			customTools.push(privilegeTool as ToolDefinition);
-		}
 		for (const searchTool of searchTools) {
 			if (!customTools.some((tool) => tool.name === searchTool.name)) customTools.push(searchTool);
 		}
 	}
+	// Tool Registry: validate the assembled session tool set and report
+	// duplicate runtime/custom names as deterministic diagnostics. Custom tools
+	// may intentionally shadow core tool names.
+	const sessionToolRegistry = createCoreToolRegistry();
+	const registryDiagnostics: string[] = [];
+	const seenCustom = new Set<string>();
+	for (const tool of customTools) {
+		if (seenCustom.has(tool.name)) {
+			registryDiagnostics.push(`Tool name "${tool.name}" is registered twice among session tools`);
+			continue;
+		}
+		seenCustom.add(tool.name);
+		if (sessionToolRegistry.has(tool.name)) continue;
+		try {
+			sessionToolRegistry.register({
+				name: tool.name,
+				source: "runtime",
+				createDefinition: () => tool as ToolDefinition<any, any>,
+			});
+		} catch (error) {
+			if (error instanceof ToolRegistryError && error.code === "duplicate_name") {
+				registryDiagnostics.push(error.message);
+			} else {
+				throw error;
+			}
+		}
+	}
+	registryDiagnostics.push(...sessionToolRegistry.validate());
 	const defaultActiveToolNames: string[] = [
 		"read",
 		"bash",
@@ -438,7 +417,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"ask_user_question",
 		"playwright",
 		"tasks_update",
-		"privileged_exec",
 		"web_search",
 		"web_fetch",
 		...(childAgentPool
@@ -668,9 +646,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionStartEvent: options.sessionStartEvent,
 		documentRuntime,
 		questionRuntime,
-		policyRuntime,
 		playwrightRuntime: options.playwrightRuntime,
-		privilegeRuntime,
 		remoteRuntime,
 		dynamicTasksEnabled:
 			options.dynamicTasks !== false && !(options.noTools === "builtin" && options.tools === undefined),
@@ -683,5 +659,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session,
 		extensionsResult,
 		modelFallbackMessage,
+		toolRegistryDiagnostics: registryDiagnostics,
 	};
 }

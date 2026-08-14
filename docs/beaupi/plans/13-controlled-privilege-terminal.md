@@ -1,8 +1,8 @@
-# M13 受控 sudo 终端实施计划
+# M13 受控 sudo 终端实施计划（已移除）
 
-状态：已完成并验收（2026-08-01）；本文保留为 M13 实现与安全契约记录。
+状态：已完成并验收（2026-08-01）；在 Trusted-Local Runtime 升级中删除（2026）。本文保留为 M13 实现与安全契约的历史记录。
 
-旧的权限模式阶段已从 `roadmap.md` 删除。本计划作为 M13 的唯一 sudo 方案，不再保留 `/mode sudo once/session` 设计。
+M13 的 `PrivilegeRuntime`、`privileged_exec`、受控 tmux PTY、逐请求 Enter 确认和 JSONL 审计已全部移除：`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行。
 
 ## 阶段简介
 

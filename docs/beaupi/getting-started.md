@@ -273,27 +273,20 @@ BEAUPI_SEARXNG_ENDPOINT
 
 `web_fetch` 会拒绝 URL credentials、非 HTTP(S) 协议、localhost、loopback、私网、link-local、保留地址和云 metadata 目标，并在每次重定向后重新执行 DNS/IP 安全验证。IPv4/IPv6 地址分别校验，避免 IPv4-mapped IPv6 规则误伤全部公网 IPv4；存在标准 `HTTP_PROXY`/`HTTPS_PROXY` 时，仍先验证目标 DNS，再通过固定目标 IP、原始 Host 和 TLS SNI 使用代理，避免代理侧重新解析绕过 SSRF 边界。PDF 提取不属于 M8。
 
-达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，Search Runtime 自身不会改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。如果 Agent 随后显式调用通用 Bash、Remote 或 terminal fallback，M10 Policy Runtime 只在 Footer 记录 advisory，不阻断执行；存在适用的专用 Tool 时也只提示推荐 Tool。
+达到 M8 query/fetch/Provider/字节/字符/timeout/redirect 预算或报告配置错误后，Search Runtime 自身不会改用 curl、wget、Python、Node 或 Bash 重试等价网络操作。如果 Agent 随后显式调用通用 Bash、Remote 或 terminal fallback，将按普通命令直接执行；存在适用的专用 Tool 时，模型提示仍会推荐优先使用专用 Tool。
 
 Coordinator 和受控 `researcher` 子 Agent 共享同一 Search Runtime/cache。可通过普通 Tool allowlist/denylist 明确启用或禁用 `web_search`、`web_fetch`。
 
 ## 执行策略
 
-M10 默认通过现有 Tool 生命周期分类本地文件操作、Bash、Remote、terminal 和 Search。Policy authorization 对所有能够分类的受管操作都返回 `execute: true`，新的 Policy fact 统一记录 `decision.action: "allow"`。以下情况只产生非敏感 advisory：
+BeauPi 是 trusted-local agent：工具调用不经过授权门，没有 allow/deny/confirm/replace/pause 语义，不要求确认，不阻止、替换或暂停执行。Shell 继承宿主完整环境和用户权限；本设计不提供 env scrub、workspace containment、OS sandbox、root 降权或默认 Shell timeout，也不是 Web auth、sandbox 或安全承诺。
 
-```text
-重复或等价失败检查
-失败类别与 fallback 预算达到阈值
-敏感路径、工作区外写入和 symlink 边界
-能够明确解析为直接执行的 sudo/su/doas/pkexec
-terminal 未知、超长或待处理输入状态
-Search 失败后的 Shell/Remote/terminal 网络 fallback
-存在更合适的专用 Tool
-```
+仍保留的中性执行事实：
 
-Policy 不显示确认选择框，不调用 SDK/RPC `policyHandler`，不因无交互通道暂停，也不向受控子 Agent 返回 `policyRequest`。Policy advisory 只显示在 Footer 工作区行，内容来自当前执行或最近 Policy fact；Tool renderer 和 Todo 不展示 Policy block/confirm/replace/pause 状态。
+- 失败分类（`core/execution/failure-classifier.ts`）：把失败结果映射为 missing_dependency/permission/network/timeout 等中性类别，只用于结果诊断与可重试提示
+- 工具种类（`core/execution/tool-kind.ts`）：workspace mutation 分类只服务于 Dynamic Task 进度跟踪
 
-Policy fact 使用 `version: 1` details 写入正常 Session/Task Ledger 生命周期。恢复、Compact 和 branch 切换不读取全局隐藏状态，只从当前 branch 重建；旧 Session 中的 block/confirm/replace/pause action、status 和 confirmation details 继续可解析，但不影响当前执行或 UI。已配置 SSH Target 本身可以使用平台提供的 root 登录身份；本地或登录后的身份切换命令由执行后端按调用者权限处理，Policy 只做提示。
+Policy 不显示确认选择框，不调用 SDK/RPC `policyHandler`，不因无交互通道暂停，也不向受控子 Agent 返回 `policyRequest`；RPC 不存在 `policyConfirm` 请求/响应。已配置 SSH Target 本身可以使用平台提供的 root 登录身份；本地或登录后的身份切换命令由执行后端按调用者权限处理。
 
 ## 交互式询问
 
@@ -343,4 +336,4 @@ BeauPi M0–M14 已完成。后续里程碑按以下方式推进：
 1. M15、M16 等：按后续新增功能继续编号。
 2. M Final：全部功能稳定后再决定独立 npm 发行物和二进制方案。
 
-M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime、M10 Policy Runtime、M11 Workflow Runtime、M12 Background Runtime 和 M14 Dynamic Task Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、clarification request 和生命周期事件与 Coordinator 交互。
+M5 的 `AgentPool`、M6 Monitor、M7 Remote Runtime、M8 Search Runtime、M9 Question Runtime、M11 Workflow Runtime、M12 Background Runtime 和 M14 Dynamic Task Runtime 均复用当前进程的 AgentSession/ResourceLoader 生命周期；子 Agent 只通过结构化结果、引用、clarification request 和生命周期事件与 Coordinator 交互。

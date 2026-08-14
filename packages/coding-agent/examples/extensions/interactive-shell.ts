@@ -148,7 +148,13 @@ export default function (pi: ExtensionAPI) {
 		// No UI available (print mode, RPC, etc.)
 		if (ctx.mode !== "tui") {
 			return {
-				result: { output: "(interactive commands require TUI)", exitCode: 1, cancelled: false, truncated: false },
+				result: {
+					output: "(interactive commands require TUI)",
+					exitCode: 1,
+					cancelled: false,
+					status: "failed",
+					truncated: false,
+				},
 			};
 		}
 
@@ -189,6 +195,7 @@ export default function (pi: ExtensionAPI) {
 				output,
 				exitCode: exitCode ?? 1,
 				cancelled: false,
+				status: exitCode === 0 ? "completed" : "failed",
 				truncated: false,
 			},
 		};

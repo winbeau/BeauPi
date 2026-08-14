@@ -25,6 +25,25 @@ Common options:
 
 All commands support an optional `id` field for request/response correlation. If provided, the corresponding response will include the same `id`. `bash_execution_update` events also include the `id` of their originating `bash` command.
 
+### Greeting and typed errors
+
+On startup the server emits one `hello` line before any response or event:
+
+```json
+{"type": "hello", "protocolVersion": 1, "serverVersion": "...", "capabilities": ["prompt", "bash", "abort", "extension_ui", "ask_user_question"], "limits": {"maxLineBytes": 4194304}}
+```
+
+Clients should treat the `hello` line as protocol metadata (not an agent event). Error responses carry a stable `code`:
+
+- `invalid_command` — the line is not a valid command
+- `unsupported_command` — an unknown command type
+- `invalid_arguments` — command arguments failed validation
+- `execution_failed` — the command failed while executing
+- `cancelled` / `timed_out` — request/run outcome only; never a promise that external side effects were rolled back
+- `session_replaced` / `shutdown` — session or process lifecycle settlement
+
+Single output lines are limited to `limits.maxLineBytes`; oversized payloads are replaced by a structured error response so the stream stays parsable. This protocol is local-process stability, not a network or authentication boundary.
+
 ### Framing
 
 RPC mode uses strict JSONL semantics with LF (`\n`) as the only record delimiter.
@@ -513,7 +532,7 @@ This means:
 1. Bash output is included in the LLM context on the **next prompt**, not immediately
 2. Multiple bash commands can be executed before a prompt; all outputs will be included
 
-RPC mode is non-interactive for controlled sudo. A `bash` command containing sudo returns `data.privilege.status: "interaction_required"` and does not execute or read authentication input from RPC stdin. `privileged_exec` Tool calls have the same headless behavior. Use interactive mode, or embed `AgentSession` directly with an in-process `PrivilegeInteractionHandler`; never send a password in an RPC command or extension UI response.
+RPC mode is trusted-local like the interactive modes: a `bash` command containing `sudo` executes through the ordinary shell executor with the host OS permissions; it is not staged, previewed, or intercepted, and there is no `privileged_exec` Tool or privilege interaction handler in the RPC protocol. Never send a password in an RPC command or extension UI response.
 
 #### abort_bash
 

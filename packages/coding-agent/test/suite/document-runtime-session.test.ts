@@ -104,7 +104,7 @@ describe("AgentSession Document Runtime integration", () => {
 		const todos = snapshot.todos.map((todo) => todo.label);
 		const policyRequirements = requirements.filter((requirement) => genericRules.includes(requirement.text));
 		expect(policyRequirements).toHaveLength(genericRules.length);
-		for (const requirement of policyRequirements) expect(requirement.projection).toBe("policy");
+		for (const requirement of policyRequirements) expect(requirement.projection).toBe("documented");
 		expect(
 			requirements.find((requirement) => requirement.text.startsWith("Must keep the task-specific"))?.projection,
 		).toBe("task");

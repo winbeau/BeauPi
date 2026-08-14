@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Canonical session persistence artifacts: `PersistenceCoordinator` (serialized batch appends, seq/revision with `expectedRevision` conflict detection, `readAfter`/`flush`/`inspect`, `repairTail` for incomplete final lines with fail-loud mid-file corruption) and `ExecutionJournal` (run/tool/cancel facts; completed outcomes are never re-executed; cancel intent is recorded before the AbortSignal; unknown outcomes are never replayed).
+- `BashExecutionMessage` carries an optional neutral `status` field shared with the coding-agent execution facts.
+
 ## [1.2.7] - 2026-08-13
 
 ## [1.2.6] - 2026-08-13

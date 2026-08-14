@@ -5,7 +5,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { ExtensionContext, ToolRenderContext } from "../src/core/extensions/types.ts";
 import { MonitorRuntime } from "../src/core/monitor/index.ts";
-import { classifyPolicyOperation, resolvePolicyConfig } from "../src/core/policy/index.ts";
 import {
 	createRemoteToolDefinitions,
 	ExecutionTargetRegistry,
@@ -267,20 +266,6 @@ describe("M7 remote tools", () => {
 		expect(workLog).not.toContain(imageEncoded);
 		expect(workLog).not.toContain(writeEncoded);
 		expect(workLog).not.toContain(editEncoded);
-
-		const policy = classifyPolicyOperation({
-			toolName: "terminal_write",
-			args: writeArgs,
-			cwd: setup.cwd,
-			availableTools: Object.keys(setup.definitions),
-			config: resolvePolicyConfig(undefined),
-		});
-		expect(policy?.descriptor).toMatchObject({
-			target: "terminal:files",
-			access: "write",
-			workspaceMutation: true,
-			fallbackFamily: "terminal",
-		});
 	});
 
 	it("keeps absolute Terminal file paths remote instead of canonicalizing them locally", async () => {

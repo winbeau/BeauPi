@@ -1,3 +1,5 @@
+> 已移除：M13 受控 sudo 终端已在 Trusted-Local Runtime 升级中删除，本文保留为历史实施记录。
+
 # 01 Contract 与 Policy Boundary
 
 ## 目标
@@ -6,10 +8,10 @@
 
 ## 现有接入点
 
-- `core/policy/classifier.ts` 已识别 `sudo`、`su`、`doas` 和 `pkexec`，并生成 `PolicyOperationDescriptor.privileged`。
-- `PolicyRuntime` 当前是 advisory-only；M13 不恢复所有敏感操作的通用阻塞确认。
+- `core/privilege/shell-inspection.ts` 识别 `sudo`、`su`、`doas` 和 `pkexec`，供 sudo 路由使用（Core Policy 分类器已随 Trusted-Local 升级移除）。
+- M13 不恢复所有敏感操作的通用阻塞确认。
 - Remote Runtime 当前通过 `assertNoPrivilegeChange()` 阻止 SSH/Terminal 直接提权。
-- Local Bash 当前只记录 privilege advisory，仍会执行直接 sudo；M13 需要补齐窄范围执行边界。
+- Local Bash 当前仍执行直接 sudo；M13 需要补齐窄范围执行边界。
 
 ## 类型与状态
 

@@ -17,14 +17,10 @@ import {
 	type RequiredCheck,
 	type Requirement,
 } from "../documents/types.ts";
+import { bashExecutionStatus } from "../execution/execution-types.ts";
+import { classifyExecutionFailure } from "../execution/failure-classifier.ts";
+import type { ExecutionFailureCategory } from "../execution/failure-types.ts";
 import type { BashExecutionMessage } from "../messages.ts";
-import { getPolicyToolDetails, POLICY_FACT_ENTRY_TYPE, type PolicyToolDetails } from "../policy/index.ts";
-import {
-	getPrivilegeToolDetails,
-	type PendingPrivilegeInteraction,
-	PRIVILEGE_FACT_ENTRY_TYPE,
-	type PrivilegeToolDetailsV1,
-} from "../privilege/index.ts";
 import type { PendingQuestionInteraction } from "../question.ts";
 import {
 	getSearchRuntimeToolDetails,
@@ -98,6 +94,8 @@ export interface FailureRecord {
 	commandId: string;
 	toolName: string;
 	status: "failed" | "cancelled";
+	/** Neutral failure category recorded when the failure could be classified. */
+	failureCategory?: ExecutionFailureCategory;
 	timestamp: number;
 }
 
@@ -148,21 +146,21 @@ export type TaskDocumentItemStatus = "pending" | "active" | "completed" | "faile
 
 export interface TaskRequirementState extends Requirement {
 	/** Requirements remain enforceable in the contract and tracked here, but never project as task Todos. */
-	projection: "task" | "policy";
+	projection: "task" | "documented";
 	status: TaskDocumentItemStatus;
 	evidenceCommandIds: string[];
 }
 
 export interface TaskRequiredCheckState extends RequiredCheck {
-	/** Policy checks remain documented but do not project as current-task Todos. */
-	projection: "task" | "policy";
+	/** Documented checks remain in the contract but do not project as current-task Todos. */
+	projection: "task" | "documented";
 	status: TaskDocumentItemStatus;
 	evidenceCommandIds: string[];
 }
 
 export interface TaskCompletionCriterionState extends CompletionCriterion {
-	/** Policy completion guidance remains documented but does not project as current-task Todos. */
-	projection: "task" | "policy";
+	/** Documented completion guidance remains in the contract but does not project as current-task Todos. */
+	projection: "task" | "documented";
 	status: TaskDocumentItemStatus;
 }
 
@@ -192,8 +190,6 @@ export interface TaskLedgerSnapshot {
 	failures: readonly FailureRecord[];
 	network: readonly NetworkToolRecord[];
 	interactions: readonly TaskInteractionRecord[];
-	policy: readonly PolicyToolDetails[];
-	privilege: readonly PrivilegeToolDetailsV1[];
 	workflows: readonly WorkflowSnapshot[];
 	background?: BackgroundRuntimeSnapshotV1;
 	dynamicTasks?: DynamicTaskPlanV1;
@@ -213,6 +209,8 @@ interface FinalCommandFacts {
 	filesModified: string[];
 	verification: boolean;
 	commit: boolean;
+	/** Neutral failure category when the failure could be classified. */
+	failureCategory?: ExecutionFailureCategory;
 }
 
 interface ParsedCommand {
@@ -250,7 +248,6 @@ const TOOL_LABELS = Object.freeze({
 	terminal_read: "Terminal Read",
 	terminal_write: "Terminal Write",
 	terminal_edit: "Terminal Update",
-	privileged_exec: "Sudo Bash",
 	terminal_send: "Terminal Send",
 	terminal_capture: "Terminal Capture",
 	terminal_status: "Terminal Status",
@@ -273,7 +270,7 @@ const SHELL_OPERATORS = new Set([";", "&&", "||", "|", "&", "\n"]);
 const VERIFICATION_TOOL_NAMES = new Set(["test", "tests", "check", "verify", "lint", "typecheck", "build"]);
 const READ_TOOL_NAMES = new Set(["read", "docs_read", "terminal_read"]);
 const MODIFY_TOOL_NAMES = new Set(["edit", "write", "terminal_edit", "terminal_write"]);
-const POLICY_DOCUMENT_KINDS: ReadonlySet<ExecutionContract["documents"][number]["kind"]> = new Set([
+const DOCUMENTED_DOCUMENT_KINDS: ReadonlySet<ExecutionContract["documents"][number]["kind"]> = new Set([
 	"agents",
 	"claude",
 	"contributing",
@@ -395,7 +392,7 @@ function summarizeToolArgs(toolName: string, args: unknown): string | undefined 
 }
 
 function getCommandFromArgs(toolName: string, args: unknown): string | undefined {
-	if (toolName !== "bash" && toolName !== "terminal_bash" && toolName !== "privileged_exec") return undefined;
+	if (toolName !== "bash" && toolName !== "terminal_bash") return undefined;
 	const command = asRecord(args)?.command;
 	return typeof command === "string" && command.trim() ? command : undefined;
 }
@@ -625,8 +622,6 @@ export class TaskLedger {
 	private readonly failures = new Map<string, FailureRecord>();
 	private readonly networkRecords = new Map<string, NetworkToolRecord>();
 	private readonly interactionRecords = new Map<string, TaskInteractionRecord>();
-	private readonly policyRecords = new Map<string, PolicyToolDetails>();
-	private readonly privilegeRecords = new Map<string, PrivilegeToolDetailsV1>();
 	private readonly workflowRecords = new Map<string, WorkflowSnapshot>();
 	private readonly workflowToolDetails = new Map<string, WorkflowToolDetails>();
 	private readonly backgroundToolDetails = new Map<string, BackgroundToolDetailsV1>();
@@ -651,7 +646,6 @@ export class TaskLedger {
 	private readonly documentRuntimeDetails = new Map<string, DocumentRuntimeToolDetails>();
 	private documentContract: ExecutionContract | undefined;
 	private pendingInteraction: PendingQuestionInteraction | undefined;
-	private pendingPrivilegeInteraction: PendingPrivilegeInteraction | undefined;
 	private dynamicTaskPlan: DynamicTaskPlanV1 | undefined;
 
 	constructor(options: { taskId: string; cwd: string; entries?: readonly SessionEntry[] }) {
@@ -672,8 +666,6 @@ export class TaskLedger {
 		this.failures.clear();
 		this.networkRecords.clear();
 		this.interactionRecords.clear();
-		this.policyRecords.clear();
-		this.privilegeRecords.clear();
 		this.workflowRecords.clear();
 		this.workflowToolDetails.clear();
 		this.backgroundToolDetails.clear();
@@ -698,7 +690,6 @@ export class TaskLedger {
 		this.documentRuntimeDetails.clear();
 		this.documentContract = undefined;
 		this.pendingInteraction = undefined;
-		this.pendingPrivilegeInteraction = undefined;
 		this.dynamicTaskPlan = undefined;
 
 		const unresolvedAssistantStates = new Map<string, "failed" | "cancelled">();
@@ -706,16 +697,6 @@ export class TaskLedger {
 			if (entry.type === "custom" && entry.customType === DOCUMENT_CONTRACT_ENTRY_TYPE) {
 				const details = getDocumentRuntimeToolDetails(entry.data);
 				if (details) this.ingestDocumentRuntimeDetails(`entry:${entry.id}`, details);
-				continue;
-			}
-			if (entry.type === "custom" && entry.customType === POLICY_FACT_ENTRY_TYPE) {
-				const details = getPolicyToolDetails(entry.data);
-				if (details) this.policyRecords.set(details.requestId, structuredClone(details));
-				continue;
-			}
-			if (entry.type === "custom" && entry.customType === PRIVILEGE_FACT_ENTRY_TYPE) {
-				const details = getPrivilegeToolDetails(entry.data);
-				if (details) this.privilegeRecords.set(details.requestId, structuredClone(details));
 				continue;
 			}
 			if (entry.type !== "message") continue;
@@ -835,8 +816,6 @@ export class TaskLedger {
 		endedAt = Date.now(),
 	): TaskLedgerToolDetails {
 		const id = `shell:${executionId}`;
-		if (result.policy) this.policyRecords.set(result.policy.requestId, structuredClone(result.policy));
-		if (result.privilege) this.privilegeRecords.set(result.privilege.requestId, structuredClone(result.privilege));
 		let record = this.commands.get(id);
 		if (!record) {
 			this.startShell(executionId, command, endedAt);
@@ -854,6 +833,7 @@ export class TaskLedger {
 			filesModified: [],
 			verification: record.verification,
 			commit: record.commit,
+			failureCategory: result.failureCategory,
 		});
 	}
 
@@ -878,19 +858,6 @@ export class TaskLedger {
 		this.revision++;
 	}
 
-	setPendingPrivilegeInteraction(pending: PendingPrivilegeInteraction | undefined): void {
-		if (!pending && !this.pendingPrivilegeInteraction) return;
-		if (
-			pending &&
-			this.pendingPrivilegeInteraction?.requestId === pending.requestId &&
-			this.pendingPrivilegeInteraction.state === pending.state
-		) {
-			return;
-		}
-		this.pendingPrivilegeInteraction = pending ? structuredClone(pending) : undefined;
-		this.revision++;
-	}
-
 	recordWorkflowSnapshot(snapshot: WorkflowSnapshot): void {
 		this.workflowRecords.set(snapshot.workflowId, structuredClone(snapshot));
 		this.revision++;
@@ -911,22 +878,6 @@ export class TaskLedger {
 		if (JSON.stringify(this.dynamicTaskPlan) === JSON.stringify(plan)) return;
 		this.dynamicTaskPlan = plan ? structuredClone(plan) : undefined;
 		this.revision++;
-	}
-
-	getPolicyDetails(toolCallId: string): PolicyToolDetails | undefined {
-		const records = [...this.policyRecords.values()];
-		for (let index = records.length - 1; index >= 0; index--) {
-			if (records[index]?.toolCallId === toolCallId) return records[index];
-		}
-		return undefined;
-	}
-
-	getPrivilegeDetails(toolCallId: string): PrivilegeToolDetailsV1 | undefined {
-		const records = [...this.privilegeRecords.values()];
-		for (let index = records.length - 1; index >= 0; index--) {
-			if (records[index]?.toolCallId === toolCallId) return structuredClone(records[index]);
-		}
-		return undefined;
 	}
 
 	getWorkflowDetails(toolCallId: string): WorkflowToolDetails | undefined {
@@ -961,8 +912,6 @@ export class TaskLedger {
 		const failures = [...this.failures.values()].map((record) => ({ ...record }));
 		const network = [...this.networkRecords.values()].map((record) => structuredClone(record));
 		const interactions = [...this.interactionRecords.values()].map((record) => structuredClone(record));
-		const policy = [...this.policyRecords.values()].map((record) => structuredClone(record));
-		const privilege = [...this.privilegeRecords.values()].map((record) => structuredClone(record));
 		const workflows = [...this.workflowRecords.values()].map((record) => structuredClone(record));
 		const background = structuredClone(this.backgroundSnapshot);
 		const dynamicTasks = this.dynamicTaskPlan ? structuredClone(this.dynamicTaskPlan) : undefined;
@@ -970,23 +919,6 @@ export class TaskLedger {
 		const verification = this.getVerificationState(commands, fileModifications);
 		const documentContract = this.buildDocumentContractSnapshot(commands);
 		const todos = this.buildTodos(commands, filesModified, verification, now);
-		if (
-			this.pendingPrivilegeInteraction?.state === "waiting_for_user" ||
-			this.pendingPrivilegeInteraction?.state === "starting" ||
-			this.pendingPrivilegeInteraction?.state === "running"
-		) {
-			const waitingForUser = this.pendingPrivilegeInteraction.state === "waiting_for_user";
-			todos.push({
-				id: `privilege:${this.pendingPrivilegeInteraction.requestId}`,
-				label: waitingForUser ? "Sudo command staged for user execution" : "Running controlled sudo command",
-				status: waitingForUser ? "blocked" : "active",
-				sequence: -110,
-				updatedAt: Date.parse(this.pendingPrivilegeInteraction.createdAt) || now,
-				owner: waitingForUser ? "user" : "agent",
-				blockedBy: waitingForUser ? ["press Enter in controlled tmux or Escape to cancel"] : undefined,
-				source: "privileged_exec",
-			});
-		}
 		if (this.pendingInteraction) {
 			todos.push({
 				id: `interaction:${this.pendingInteraction.requestId}`,
@@ -1013,8 +945,6 @@ export class TaskLedger {
 			failures,
 			network,
 			interactions,
-			policy,
-			privilege,
 			workflows,
 			background,
 			dynamicTasks,
@@ -1123,12 +1053,12 @@ export class TaskLedger {
 			this.startTool(toolCallId, toolName, undefined, metadata?.startedAt ?? endedAt);
 			record = this.commands.get(id)!;
 		}
+		const failureCategory =
+			fallbackStatus === "failed"
+				? classifyExecutionFailure({ toolName, details, isError: true })?.category
+				: undefined;
 		const documentDetails = getDocumentRuntimeToolDetails(details);
 		if (documentDetails) this.ingestDocumentRuntimeDetails(record.id, documentDetails);
-		const policyDetails = getPolicyToolDetails(details);
-		if (policyDetails) this.policyRecords.set(policyDetails.requestId, structuredClone(policyDetails));
-		const privilegeDetails = getPrivilegeToolDetails(details);
-		if (privilegeDetails) this.privilegeRecords.set(privilegeDetails.requestId, structuredClone(privilegeDetails));
 		const backgroundDetails = getBackgroundToolDetails(details);
 		if (backgroundDetails) this.backgroundToolDetails.set(record.id, structuredClone(backgroundDetails));
 		const workflowDetails = getWorkflowToolDetails(details);
@@ -1161,20 +1091,12 @@ export class TaskLedger {
 			toolName === "ask_user_question" ? getQuestionInteractionRecord(details, record.args, endedAt) : undefined;
 		if (interaction) this.interactionRecords.set(interaction.id, interaction);
 		const resultStatus =
-			privilegeDetails?.status === "cancelled"
+			toolName === "ask_user_question" &&
+			(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
 				? "cancelled"
-				: privilegeDetails && !privilegeDetails.ok
+				: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
 					? "failed"
-					: policyDetails?.status === "cancelled"
-						? "cancelled"
-						: policyDetails && !policyDetails.executed
-							? "failed"
-							: toolName === "ask_user_question" &&
-									(asRecord(details)?.status === "cancelled" || asRecord(details)?.status === "rejected")
-								? "cancelled"
-								: toolName === "ask_user_question" && asRecord(details)?.status === "interaction_error"
-									? "failed"
-									: fallbackStatus;
+					: fallbackStatus;
 		const suppliedFilesRead =
 			metadata?.filesRead ?? this.extractFilesRead(toolName, record.args, details, resultStatus);
 		const suppliedFilesModified =
@@ -1186,6 +1108,7 @@ export class TaskLedger {
 			filesModified: suppliedFilesModified,
 			verification: metadata?.verification ?? record.verification,
 			commit: metadata?.commit ?? record.commit,
+			failureCategory,
 		});
 	}
 
@@ -1278,6 +1201,7 @@ export class TaskLedger {
 					commandId: record.id,
 					toolName: record.toolName,
 					status: facts.status,
+					failureCategory: facts.failureCategory,
 					timestamp: facts.endedAt,
 				});
 			}
@@ -1317,6 +1241,7 @@ export class TaskLedger {
 				output: message.output,
 				exitCode: message.exitCode,
 				cancelled: message.cancelled,
+				status: bashExecutionStatus({ exitCode: message.exitCode, cancelled: message.cancelled, timedOut: false }),
 				truncated: message.truncated,
 				fullOutputPath: message.fullOutputPath,
 			},
@@ -1360,13 +1285,13 @@ export class TaskLedger {
 		const contract = this.documentContract;
 		if (!contract) return undefined;
 		const stale = contract.status === "stale";
-		const projectionForCitations = (citations: readonly DocumentCitation[]): "task" | "policy" => {
+		const projectionForCitations = (citations: readonly DocumentCitation[]): "task" | "documented" => {
 			const citedDocuments = contract.documents.filter((document) =>
 				citations.some((citation) => citation.documentId === document.id),
 			);
 			return citedDocuments.length > 0 &&
-				citedDocuments.every((document) => POLICY_DOCUMENT_KINDS.has(document.kind))
-				? "policy"
+				citedDocuments.every((document) => DOCUMENTED_DOCUMENT_KINDS.has(document.kind))
+				? "documented"
 				: "task";
 		};
 		const requirementProjection = new Map(
@@ -1408,7 +1333,7 @@ export class TaskLedger {
 			);
 			return {
 				...check,
-				projection: taskCheckIds.has(check.id) ? "task" : "policy",
+				projection: taskCheckIds.has(check.id) ? "task" : "documented",
 				status,
 				evidenceCommandIds: finalEvidence.map((item) => item.id),
 			};
@@ -1499,7 +1424,7 @@ export class TaskLedger {
 		if (documentSnapshot) {
 			const contractTime = Date.parse(documentSnapshot.contract.updatedAt) || now;
 			for (const check of documentSnapshot.requiredChecks) {
-				if (check.projection === "policy") continue;
+				if (check.projection === "documented") continue;
 				const status: TaskTodoStatus =
 					check.status === "completed"
 						? "completed"
@@ -1523,7 +1448,7 @@ export class TaskLedger {
 				});
 			}
 			for (const criterion of documentSnapshot.completionCriteria) {
-				if (criterion.projection === "policy") continue;
+				if (criterion.projection === "documented") continue;
 				const status: TaskTodoStatus =
 					criterion.status === "completed"
 						? "completed"

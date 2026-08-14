@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { getBackgroundToolDetails } from "../../../core/background/index.ts";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
-import type { PolicyAction } from "../../../core/policy/index.ts";
 import { getTaskLedgerToolDetails } from "../../../core/state/task-ledger.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
@@ -384,8 +383,6 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
-
-	setPolicyAction(_action: PolicyAction | undefined): void {}
 
 	markCancelled(message: string): void {
 		this.forcedState = "cancelled";

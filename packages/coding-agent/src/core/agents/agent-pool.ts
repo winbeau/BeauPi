@@ -8,7 +8,6 @@ import type { AgentSession, AgentSessionEvent } from "../agent-session.ts";
 import type { DocumentCitation } from "../documents/types.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { ModelRuntime } from "../model-runtime.ts";
-import type { PolicySettings } from "../policy/index.ts";
 import type { ResourceLoader } from "../resource-loader.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../sdk.ts";
 import type { SearchRuntime, WebCitation } from "../search/index.ts";
@@ -178,7 +177,6 @@ export interface AgentPoolDependencies {
 	customTools?: readonly ToolDefinition[];
 	searchRuntime: SearchRuntime;
 	searchBudgetScopeId: string;
-	policySettings?: PolicySettings;
 	terminalTransport?: LocalTmuxTransport;
 	createSession: CreateChildSession;
 }
@@ -267,7 +265,6 @@ const RESERVED_TOOL_NAMES = new Set([
 	"delegate_task",
 	"ask_user_question",
 	"tasks_update",
-	"privileged_exec",
 	"workflow_run",
 	"workflow_status",
 	"workflow_cancel",
@@ -1222,7 +1219,7 @@ export class AgentPool {
 				? (this.createAgentControlTool(taskId) as ToolDefinition)
 				: undefined;
 			const childCustomTools: ToolDefinition[] = [
-				...this.customTools.filter((tool) => tool.name !== "privileged_exec"),
+				...this.customTools,
 				...(peerControlTool ? [peerControlTool] : []),
 			];
 			const allowedTools = getAllowedTools(effectiveProfile, childCustomTools, this.dependencies.resourceLoader);
@@ -1244,14 +1241,12 @@ export class AgentPool {
 					retry: { enabled: false },
 					// In-memory child settings do not inherit the Coordinator timeout.
 					httpIdleTimeoutMs: effectiveProfile.timeoutMs,
-					policy: this.dependencies.policySettings ? structuredClone(this.dependencies.policySettings) : undefined,
 				}),
 				tools: toolAllowlist,
 				excludeTools: [
 					"delegate_task",
 					"ask_user_question",
 					"tasks_update",
-					"privileged_exec",
 					"workflow_run",
 					"workflow_status",
 					"workflow_cancel",
@@ -1266,7 +1261,6 @@ export class AgentPool {
 				searchRuntime: this.dependencies.searchRuntime,
 				searchBudgetScopeId: this.dependencies.searchBudgetScopeId,
 				synchronizeSearchBudget: false,
-				policyInteractionMode: "controlled",
 				dynamicTasks: false,
 				agentPool: false,
 			});

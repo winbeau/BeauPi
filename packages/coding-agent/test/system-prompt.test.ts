@@ -113,7 +113,7 @@ describe("buildSystemPrompt", () => {
 			);
 			expect(prompt).toContain("do not place the entire plan in one monolithic file");
 			expect(prompt).toContain(
-				"When any Bash-like Tool result—including bash, remote_bash, terminal_bash, privileged_exec/Sudo Bash, or an equivalent extension Tool—includes a review from a fast model such as gpt-5.6-luna",
+				"When any Bash-like Tool result—including bash, remote_bash, terminal_bash, or an equivalent extension Tool—includes a review from a fast model such as gpt-5.6-luna",
 			);
 			expect(prompt).toContain(
 				"trust that reviewed conclusion on the first pass instead of immediately reading the full log",

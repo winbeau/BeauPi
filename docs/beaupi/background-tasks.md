@@ -210,8 +210,8 @@ interface ProgressReview {
 
 ## 安全
 
-- 后台任务继承当前执行身份和后端权限；advisory-only Policy Runtime 不提供提权或强制阻断
-- 未来的 Sudo 后台任务必须通过结构化 `privileged_exec` 创建
+- 后台任务继承当前执行身份和后端权限；普通执行路径不提供提权或强制阻断
+- `sudo` 等身份切换命令由普通 Shell executor 按宿主 OS 权限直接执行
 - 任务记录启动 Agent、Session、工作目录和完整参数
 - 限制最大并发后台任务数
 - 取消时终止整个进程树
@@ -280,4 +280,4 @@ Task Ledger 投影 waiting/running/completed/attention，Footer 显示 `bg` 与 
 6. 默认进程轮询不调用模型。
 7. 模型进度复查有明确间隔、次数和输入预算。
 
-状态：已完成（daemon、IPC、桌面通知和 M13 sudo 不在第一版）。
+状态：已完成（daemon、IPC、桌面通知不在第一版）。

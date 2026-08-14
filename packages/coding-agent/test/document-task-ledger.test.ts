@@ -70,7 +70,7 @@ describe("TaskLedger Document Runtime projection", () => {
 				before.documentContract?.requirements.find(
 					(requirement) => requirement.text === "Must preserve policy behavior.",
 				)?.projection,
-			).toBe("policy");
+			).toBe("documented");
 			expect(
 				before.documentContract?.requirements.find(
 					(requirement) => requirement.text === "Must run `npm run check`.",
@@ -118,7 +118,7 @@ describe("TaskLedger Document Runtime projection", () => {
 			const policyLedger = new TaskLedger({ taskId: "policy", cwd: root });
 			policyLedger.setDocumentRuntimeContract(policyContract);
 			const policySnapshot = policyLedger.getSnapshot();
-			expect(policySnapshot.documentContract?.requiredChecks[0]?.projection).toBe("policy");
+			expect(policySnapshot.documentContract?.requiredChecks[0]?.projection).toBe("documented");
 			expect(policySnapshot.todos.some((todo) => todo.id === "required-check:policy-check")).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });

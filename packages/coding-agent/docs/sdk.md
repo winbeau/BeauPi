@@ -492,7 +492,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names include `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`, `playwright`, and `privileged_exec`
+- Built-in tool names include `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `docs_search`, `docs_read`, `docs_resolve_task`, `ask_user_question`, and `playwright`
 - Default built-ins include coding, document, `ask_user_question`, and `playwright`; runtime-specific search, remote, monitor, and AgentPool tools are added when configured
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
@@ -605,40 +605,11 @@ Each answer contains `header`, `selectedLabels`, optional `customAnswer`, and op
 
 If neither `questionHandler` nor an injected `questionRuntime` is provided, the Tool returns `interaction_required` immediately. It never reads stdin. `runPrintMode()` clears question handlers for both text and JSON output, so those modes always remain non-interactive. Use `excludeTools: ["ask_user_question"]` to remove it entirely. Controlled AgentPool children never receive this Tool; they return a machine-readable `clarificationRequest` through `delegate_task` instead.
 
-#### Controlled sudo terminal
+#### Trusted-local execution
 
-`privileged_exec` stages one complete, deterministically parsed sudo command or newline-separated batch in a controlled local or existing remote tmux terminal. Local `bash` and `terminal_bash` calls containing sudo route to the same session-scoped `PrivilegeRuntime`. Entering the terminal does not execute the text: the user presses Enter to release that exact staged command/batch, or Escape to cancel. After authentication, the temporary view may detach while the Runtime continues waiting, emitting partial Tool output and writing the work log, including when sudo uses a cached credential. Interactive root shells such as `sudo bash`, `sudo sh`, `sudo -i`, and `sudo -s` are rejected.
+BeauPi is a trusted-local agent: tools execute with the same OS user, cwd, environment, and file permissions as the process that launched it. There is no authorization gate and no confirmation requirement for tool calls. `sudo`, `su`, and other identity-switching commands run through the ordinary shell executor under the host OS permissions; they are not inspected, previewed, intercepted, or staged. The SDK exposes no `privilegeHandler`, `privilegeRuntime`, or `privilegeTerminalAdapter` options, and no `privileged_exec` tool is registered.
 
-```typescript
-import {
-  createAgentSession,
-  type PrivilegeInteractionHandler,
-} from "@earendil-works/pi-coding-agent";
-
-const privilegeHandler: PrivilegeInteractionHandler = async (request, control, signal) => {
-  if (signal?.aborted) return { status: "cancelled" };
-
-  // Stage request.command in a trusted, read-only terminal view.
-  await control.start();
-  const execute = await waitForEnterOrEscape(request);
-  if (!execute) return { status: "cancelled" };
-
-  await control.execute();
-  // Authentication bytes may be forwarded with control.sendSensitive().
-  // Do not ask for or receive a password through application forms or callbacks.
-  // Once authentication ends, the trusted UI may detach and return completed.
-  // PrivilegeRuntime continues control.wait() and preserves the full work log.
-  return { status: "completed" };
-};
-
-const { session } = await createAgentSession({ privilegeHandler });
-```
-
-The SDK also accepts `privilegeRuntime` or `privilegeTerminalAdapter` for custom trusted hosts and deterministic tests. Authentication input must only travel from the user's terminal to `control.sendSensitive(Buffer)` and the controlling TTY. It must not be placed in Tool parameters, argv, environment variables, Session entries, logs, RPC messages, or errors. Completed privileged commands use the same terminal review pipeline as `terminal_bash`: short successful output is returned directly, while failures, diagnostics, and output over 100 lines use the shared `review.model` with the complete log path retained.
-
-Without a handler, sudo returns structured `interaction_required` and does not create a pane or execute the command. Print, JSON, and RPC modes clear the handler and remain non-interactive. Controlled AgentPool children never receive `privileged_exec`; sudo attempted through their `bash` tool is also non-executing because no handler is installed.
-
-Unsupported paths include interactive root shells (`sudo bash`, `sudo sh`, `sudo -i`, `sudo -s`), `sudo -S`/`--stdin`, `su`, `doas`, `pkexec`, `runuser`, namespace/chroot identity switches, and one-shot remote sudo. A configured SSH target whose login user is already `root` should run the command without sudo through the normal remote terminal tools.
+Shell commands inherit the host environment unchanged; this design intentionally does not scrub environment variables, filter credentials, contain the workspace, sandbox the OS, drop root, limit the network, or add a default shell timeout. It is not a Web authentication boundary, a sandbox, or a security promise.
 
 ### Custom Tools
 
@@ -699,7 +670,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use a ten-minute no-progress timeout and a thirty-minute final wall-clock limit after a pool slot is acquired; queue wait does not consume either budget. A per-call `budget.timeoutMs` only narrows the no-progress window: assistant streaming, turn transitions, and Tool start/update/end activity renew it, but never beyond the Profile hard limit. Custom profiles may opt into token or turn caps and can lower either timeout. `delegate_task`, `ask_user_question`, and `privileged_exec` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead, and a child cannot execute sudo without a Coordinator-owned interaction handler. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events and both timeout limits.
+When enabled, `delegate_task` is registered on the Coordinator. Its input is validated and its result contains only structured status, summary, citations/references, modified files, checks, diagnostics, optional `clarificationRequest`, last activity, error, usage, and budget fields. Child sessions never expose their full transcript to the Coordinator. Child prompts skip automatic Document Contract resolution; explicitly scoped tasks inspect their named targets, while document-driven tasks can still call `docs_resolve_task`. Built-in profiles use a ten-minute no-progress timeout and a thirty-minute final wall-clock limit after a pool slot is acquired; queue wait does not consume either budget. A per-call `budget.timeoutMs` only narrows the no-progress window: assistant streaming, turn transitions, and Tool start/update/end activity renew it, but never beyond the Profile hard limit. Custom profiles may opt into token or turn caps and can lower either timeout. `delegate_task` and `ask_user_question` are hard-excluded from child tools even when a profile or custom Tool projection requests them; a child that needs user input returns the machine-readable clarification field instead. Subscribe through `session.agentPool` for lifecycle/progress events containing turn, Tool, target path, and outcome facts; Monitor stores the latest bounded activity events and both timeout limits.
 
 ### Extensions
 

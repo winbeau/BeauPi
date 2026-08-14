@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Breaking changes (Trusted-Local Runtime)
+
+- Removed the Core Policy Runtime: `PolicyRuntime`, `PolicyToolDetails`, `PolicySettings`, SDK `policyHandler`/`policyRuntime`/`policyInteractionMode` options, RPC `policyConfirm` request/response, and `beaupi.policy.fact` session facts no longer exist. Tool calls are not routed through an authorization gate; ordinary tools execute directly with the host user, cwd, environment, and file permissions.
+- Renamed Core Policy failure naming to neutral execution facts: `PolicyFailureCategory`/`policyCategory` are now `ExecutionFailureCategory`/`failureCategory`; `classifyPolicyFailure` is now `classifyExecutionFailure` (see `core/execution/`).
+- Removed the M13 PrivilegeRuntime (05B): `privileged_exec`, `PrivilegeInteractionHandler`, the controlled sudo tmux terminal, privilege audit, and the `privilege` fields on Bash results no longer exist. `sudo`/`su` commands run through the ordinary shell executor under the host OS permissions, without staging, preview, interception, or Enter confirmation.
+- Tool results and the session Bash path now carry neutral `status` (`completed`/`failed`/`cancelled`/`timed_out`/`killed`/`unknown`) and `failureCategory`; TaskLedger failure records include the neutral category; cancelled runs are never reported as succeeded.
+- Removed `policy` settings (sensitive paths, failure budgets) from `settings.json`; removed the Core Policy Footer advisory and Tool renderer state.
+- `allToolNames` is now derived from the definition-first Tool Registry (`core/tools/registry.ts`) plus the documented runtime-owned tool names; `createAgentSession` returns `toolRegistryDiagnostics` for duplicate/mismatched registrations.
+- RPC protocol v1: the server emits a `hello` greeting (protocolVersion, capabilities, limits) before other output, and error responses carry a stable `code` (`invalid_command`, `unsupported_command`, `invalid_arguments`, `execution_failed`, `cancelled`, `timed_out`, `session_replaced`, `shutdown`).
+- Execution journals (`<sessionFile>.journal.jsonl`) record run/tool/cancel facts with seq/revision; cancel intent is recorded before the AbortSignal is delivered; completed tool calls are never re-executed and unknown outcomes are never replayed.
+
+### Added
+
+- Neutral execution facts: `core/execution/` (`failure-types`, `failure-classifier`, `execution-types`, `tool-kind`, `shell-parse`, `execution-journal`).
+- Tool Registry with diagnostic manifests; optional extension manifest metadata (`id`, `version`, `source`, `dependencies`, `priority`, `conflicts`, `capabilities`, `trustLevel`); `SettingsManager.explainSetting()` provenance.
+
+### Changed
+
+- Trusted-local contract documented in `docs/security.md` and `docs/rpc.md`; Shell environment inheritance, optional timeout semantics, and output truncation behavior are unchanged.
+
 ## [1.2.7] - 2026-08-13
 
 ## [1.2.6] - 2026-08-13

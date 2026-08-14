@@ -24,10 +24,6 @@ export interface AppKeybindings {
 	"app.question.toggle": true;
 	"app.question.notes": true;
 	"app.question.submit": true;
-	"app.privilege.confirm": true;
-	"app.privilege.cancel": true;
-	"app.privilege.scrollUp": true;
-	"app.privilege.scrollDown": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
 	"app.session.toggleNamedFilter": true;
@@ -97,10 +93,6 @@ export const KEYBINDINGS = {
 	"app.question.toggle": { defaultKeys: "space", description: "Toggle question option" },
 	"app.question.notes": { defaultKeys: "n", description: "Edit question notes" },
 	"app.question.submit": { defaultKeys: "enter", description: "Confirm question selection" },
-	"app.privilege.confirm": { defaultKeys: "enter", description: "Execute staged sudo command" },
-	"app.privilege.cancel": { defaultKeys: "escape", description: "Cancel sudo command" },
-	"app.privilege.scrollUp": { defaultKeys: "pageUp", description: "Scroll privilege terminal up" },
-	"app.privilege.scrollDown": { defaultKeys: "pageDown", description: "Scroll privilege terminal down" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",

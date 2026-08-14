@@ -71,6 +71,7 @@ export type {
 	ExtensionFactory,
 	ExtensionFlag,
 	ExtensionHandler,
+	ExtensionManifest,
 	ExtensionMode,
 	// Runtime
 	ExtensionRuntime,

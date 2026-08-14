@@ -103,6 +103,7 @@ describe("RPC unknown command responses (#5868)", () => {
 					command: "foobar",
 					success: false,
 					error: "Unknown command: foobar",
+					code: "unsupported_command",
 				});
 			});
 		} finally {

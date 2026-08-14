@@ -2,7 +2,7 @@
 
 ## 实现状态
 
-M11 已完成。Workflow Runtime 位于 `packages/coding-agent/src/core/workflow/`，直接复用现有 AgentPool、AgentSession、ResourceLoader 投影、MonitorRuntime、Task Ledger、Policy Runtime 和 Session branch 生命周期。M11 不实现后台自动唤醒、sudo 或专用 Git Tools。
+M11 已完成。Workflow Runtime 位于 `packages/coding-agent/src/core/workflow/`，直接复用现有 AgentPool、AgentSession、ResourceLoader 投影、MonitorRuntime、Task Ledger 和 Session branch 生命周期。M11 不实现后台自动唤醒、sudo 或专用 Git Tools。
 
 ## Workflow 格式
 

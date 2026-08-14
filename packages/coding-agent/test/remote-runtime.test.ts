@@ -140,9 +140,7 @@ describe("M7 execution targets", () => {
 			diagnostic: { code: "target_not_selected" },
 		});
 		setup.runtime.selectTarget("fake");
-		await expect(setup.runtime.remoteExec("sudo id")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_required" },
-		});
+		await expect(setup.runtime.remoteExec("sudo id")).resolves.toMatchObject({ exitCode: 0 });
 		await expect(setup.runtime.remoteExec("printf ok")).resolves.toMatchObject({ exitCode: 0 });
 		const entries = setup.sessionManager.getBranch();
 		expect(JSON.stringify(entries)).not.toContain("fake-alias");
@@ -158,9 +156,7 @@ describe("M7 execution targets", () => {
 			status: "running",
 			targetId: "fake",
 		});
-		await expect(setup.runtime.remoteExec("su - app")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_required" },
-		});
+		await expect(setup.runtime.remoteExec("su - app")).resolves.toMatchObject({ exitCode: 0 });
 	});
 
 	it("uses the configured remote workspace and leaves commands unchanged when none is set", async () => {
@@ -363,29 +359,21 @@ describe("M7 fake tmux lifecycle", () => {
 		expect(lost.status).toBe("lost");
 	});
 
-	it("blocks complete, fragmented, and opaque terminal_send lines before Enter", async () => {
+	it("sends complete and fragmented sudo lines directly while blocking opaque terminal input", async () => {
 		const setup = createSetup();
 		setup.runtime.selectTarget("fake");
 		const created = await setup.runtime.terminalCreate({ terminalId: "guarded-terminal" });
 
-		await expect(setup.runtime.terminalSend(created.terminalId, "sudo id\n")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_required" },
-		});
+		await expect(setup.runtime.terminalSend(created.terminalId, "sudo id\n")).resolves.toMatchObject({});
 		await setup.runtime.terminalSend(created.terminalId, "su");
-		await expect(setup.runtime.terminalSend(created.terminalId, "do id\n")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_required" },
-		});
+		await expect(setup.runtime.terminalSend(created.terminalId, "do id\n")).resolves.toMatchObject({});
 		await setup.runtime.terminalSend(created.terminalId, "ss\b");
-		await expect(setup.runtime.terminalSend(created.terminalId, "udo id\n")).rejects.toMatchObject({
-			diagnostic: { code: "terminal_required" },
-		});
+		await expect(setup.runtime.terminalSend(created.terminalId, "udo id\n")).resolves.toMatchObject({});
 		await expect(setup.runtime.terminalSend(created.terminalId, "echo safe\u001b[D")).rejects.toMatchObject({
 			diagnostic: { code: "terminal_required" },
 		});
 
-		expect(setup.adapter.tmuxKeyCalls.filter((call) => call.key === "C-u")).toHaveLength(4);
-		const capture = await setup.runtime.terminalCapture(created.terminalId);
-		expect(capture.content).not.toContain("sudo id\n");
+		expect(setup.adapter.tmuxKeyCalls.filter((call) => call.key === "C-u")).toHaveLength(1);
 	});
 
 	it("executes Bash-like commands through an interactive terminal and consumes their captured output", async () => {

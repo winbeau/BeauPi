@@ -214,9 +214,9 @@ M6 已完成：Process/Tool/Sub-Agent adapter、fake adapter、状态机、curso
 
 M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案结果、Session-bound Question Runtime、Claude 风格 selector、Markdown preview、可配置问题键位、minimal Tool 状态、SDK handler、RPC `askUserQuestion` 请求响应、Task Ledger interaction facts/pending Todo，以及受控子 Agent 的 Tool 硬排除与结构化 clarification request。Print/JSON 和无 handler SDK 立即返回 `interaction_required`；取消、拒绝、abort、重叠调用和 handler 错误均以确定性结构化状态结束。
 
-## 阶段 11：Policy Engine
+## 阶段 11：Policy Engine（已移除）
 
-状态：已完成（2026-07-30）。
+状态：已完成（2026-07-30），随后在 Trusted-Local Runtime 升级中删除。
 
 - 命令和错误分类
 - 等价操作签名
@@ -227,9 +227,7 @@ M9 实现了严格 TypeBox schema 和 NFKC/去重/预算复验、版本化答案
 - 不发起 Policy confirm，也不复用阶段 10 的交互接口
 - 明确不增加专用 Git Tools，普通 Git 操作继续走现有 Bash 能力
 
-验收：达到失败或 fallback 预算、出现敏感/特权/terminal/Search fallback 条件时，原操作仍执行并产生非敏感 advisory；Policy 不调用交互 handler；advisory 只在 Footer 显示；本地、远程和网络路径行为一致。
-
-M10 实现了 Session-scoped、branch-aware 串行 Policy Runtime；quote/operator/pipeline/redirection/multiline-aware Shell 分类和脱敏 hash 签名；本地/Remote/terminal/Search 统一失败预算诊断；明确解析的直接 sudo/su/doas/pkexec、敏感路径、工作区/远程边界、symlink、专用 Tool 推荐与 Search-to-Shell fallback advisory；Task Ledger/Session/Compact/branch 恢复，以及旧 Session Policy details 解析兼容。faux/fake 测试覆盖并发 revision、取消、handler 不调用、受控子 Agent、Footer、普通 Tool renderer、暗/亮主题和 40/80/120/160 列。
+M10 的 Core Policy Engine 已删除：工具调用不再经过授权门。仍保留的中性失败分类（`core/execution/`）只用于结果诊断。
 
 ## 阶段 12：多 Agent Workflow
 
@@ -270,19 +268,11 @@ M11 已完成：`core/workflow/` 提供严格版本化 Schema、YAML/JSON/内置
 
 状态：已完成。M12 在单一 Monitor Registry 上实现 BackgroundTaskManager、runner-owned process exit facts、六个默认 Tool、自适应纯代码轮询、确定性 Trigger Evaluator、串行 Wake Queue、AgentSession idle/follow-up 注入、受预算 AgentPool Progress Reviewer、Session custom entry 恢复、Task Ledger/Todo/Footer 和暗/亮宽度安全 renderer。本地短进程、进程组 TERM→KILL、fake remote Monitor、faux Coordinator/reviewer、resume/lost/consumed/branch 路径均有定向测试；第一版不包含 daemon、IPC、通知或 sudo。
 
-## 阶段 14：受控 sudo 终端
+## 阶段 14：受控 sudo 终端（已移除）
 
-状态：已完成（2026-08-01）。
+状态：已完成（2026-08-01），随后在 Trusted-Local Runtime 升级中删除。
 
-- `privileged_exec`、local `bash` 和 `terminal_bash` 的明确 sudo command 统一路由到 session-scoped `PrivilegeRuntime`
-- 每个 request 第一帧直接把完整只读命令或换行分隔批次填充到双分割线 tmux；用户按 Enter 执行或 Escape 取消
-- local privilege session 使用独立 tmux server 继承真实用户 shell、startup files、cwd 和环境；existing remote terminal 复用原 pane，两者共用 secure stdin buffer
-- 认证完成后临时tmux视图自动detach，command继续由Runtime等待并写入work log；缓存credential路径在稳定running后执行相同detach
-- `terminal_send` bypass 和无可控 PTY 的 one-shot remote sudo 默认阻止
-- Session、Monitor、Task Ledger、Footer、renderer 和 0600 JSONL audit 只保存非秘密结构化事实
-- 不提供 sudo mode、交互式或持久root shell、once/session grant、keepalive、`sudo -S` 或 askpass；`sudo bash`/`sudo -i`等命令明确阻止
-
-验收：Agent 保持普通用户身份；每个 sudo request 都先填充且不执行，只由用户按 Enter 释放；认证输入不进入 Agent 数据链；本地和远程结果均可审计且不能通过普通执行器绕过。M13 定向测试、`./test.sh` 和 `npm run check` 已通过。
+M13 的 `PrivilegeRuntime`、`privileged_exec`、受控 tmux PTY、逐请求 Enter 确认和 JSONL 审计已全部移除：`sudo`、`su` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter；root 与普通用户行为完全由宿主 OS 决定。
 
 ## 贯穿阶段：Provider 兼容与自动压缩可靠性
 
@@ -346,6 +336,6 @@ M Final 不占用数字里程碑；功能稳定后再进行：
 7. SSH/tmux 远程执行并接入 Monitor Runtime（已完成）
 8. 一个搜索 Provider（已完成）
 9. Claude Code 风格 `ask_user_question` 询问选择框（已完成）
-10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成）
+10. Policy Engine：重复命令、失败预算、敏感边界和等价 fallback advisory（已完成，2026 年 Trusted-Local 升级中移除）
 
 当前已连续完成 M0–M14。后续功能继续使用 M15、M16 等编号；发行准备保留为 M Final。

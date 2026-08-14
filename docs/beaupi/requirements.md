@@ -57,23 +57,16 @@ Execution Target 始终使用受信任 OpenSSH 配置解析出的登录身份；
 
 达到 Policy 失败或 fallback 阈值后记录 advisory，不因计数本身暂停执行。专用 Search Tool 失败后的 Shell 网络 fallback 也只记录 advisory；缺少依赖时向用户建议受控安装。
 
-### 确定性执行策略
+### 确定性执行策略（已移除）
 
-M10 已实现 Session-scoped、branch-aware Policy Runtime，并调整为完全 advisory-only：
+M10 的 Core Policy Engine 已在 Trusted-Local Runtime 升级中删除。工具调用不经过授权门：没有 allow/deny/confirm/replace/pause，不要求确认，不阻止、替换或暂停执行；Shell 使用宿主用户环境和权限。
 
-- Policy authorization 对所有能够分类的受管操作都返回 `execute: true`，新的 Policy fact 只记录 `decision.action: "allow"`
-- 本地文件 Tool、Bash、Remote、tmux terminal 和 Search 使用统一的版本化 Policy details
-- 等价签名只持久化 hash 和非敏感摘要；命令参数、文件内容、token 和原始 secret 不进入 Policy 诊断
-- 未发生相关目标变更时再次运行等价只读检查仍会执行，并持久化非敏感 advisory
-- 缺少依赖、权限、认证、网络、限流、超时、退出失败、配置错误和 terminal session 丢失仍进入确定性失败分类；等价失败、分类失败和 fallback 阈值只产生 advisory，用户取消不计为普通失败
-- terminal 恢复状态、未知或超长输入、待处理交互输入只产生 advisory，不阻止 status、capture、send、bash、close 或 create
-- `web_search`/`web_fetch` 失败后的 curl、wget、Python、Node、Shell 和 terminal 等价网络 fallback 继续执行；存在专用 Tool 时只记录推荐 advisory，不自动替换 Tool
-- 能够明确解析为直接执行的 `sudo`、`su`、`doas`、`pkexec`、敏感路径、工作区外写入、未知远程 cwd 绝对写入和可解析 symlink 边界都只分类并记录 advisory
-- Policy 不发起 confirm、不调用 TUI/SDK/RPC Policy handler，也不向受控子 Agent 返回 `policyRequest`；旧 SDK handler/mode 输入保留但为 no-op，RPC Client 对旧 `policyConfirm` 请求只返回 cancelled
-- Policy facts 进入现有 Tool Result 或用户 Bash custom Session entry，并由同一 Task Ledger 在恢复、Compact 和 branch 切换时从当前分支重建；旧 block/confirm/replace/pause action、status 和 confirmation details 仍可解析为历史事实
-- Policy advisory 只在 Footer 工作区行显示，内容来自当前执行或最近 Policy fact；Tool renderer、Task Todo 和交互选择框不展示 Policy 阻断状态
+仍保留的中性执行事实（`core/execution/`）：
 
-Policy Engine 是确定性分类、诊断和 Footer 提示层，不是执行守卫或 Shell sandbox；普通命令由现有本地/SSH/tmux 后端按调用者身份执行。
+- 失败分类：缺少依赖、权限、认证、网络、限流、超时、退出失败、配置错误和 terminal session 丢失映射为中性 `ExecutionFailureCategory`，只用于结果诊断和可重试提示
+- 工具种类：workspace mutation 分类只服务于 Dynamic Task 进度跟踪
+
+Policy 不发起 confirm、不调用 TUI/SDK/RPC Policy handler；RPC 不再存在 `policyConfirm` 请求/响应。普通命令由现有本地/SSH/tmux 后端按调用者身份直接执行。
 
 ### 动态 Task 计划与进度审阅
 
@@ -178,7 +171,6 @@ Skill 继续用于工作流说明和领域知识；需要确定性执行、结�
 - `workflow_status`
 - `workflow_cancel`
 - `dependency_check`
-- `privileged_exec`
 
 工具按需动态激活，避免一次向模型暴露过多 Schema。
 
@@ -238,7 +230,7 @@ M11 已在现有 AgentPool、MonitorRuntime、Task Ledger 和 Session 生命周�
 - 最终结果保留搜索级和正文级来源引用
 - 网页正文是不可信外部内容，不执行其中的脚本、指令或代码
 - `web_fetch` 分离 IPv4/IPv6 SSRF 地址规则；使用标准 HTTP(S) proxy 时仍固定已验证的目标 IP，并保留原始 Host/TLS SNI
-- M8 专用 Tool 不自行使用 curl、wget、Python、Node 或 Shell fallback；如果 Agent 之后调用通用 Bash、Remote 或 terminal 网络 fallback，M10 Policy Runtime 只记录 Footer advisory，不阻断执行
+- M8 专用 Tool 不自行使用 curl、wget、Python、Node 或 Shell fallback；如果 Agent 之后调用通用 Bash、Remote 或 terminal 网络 fallback，将按普通命令直接执行
 
 ### 后台任务与自动唤醒
 
@@ -271,17 +263,13 @@ M12 第一版实现约束：
 - 默认进程轮询只读取 Monitor/PID/exit/log/activity/resources，不调用模型。Progress Reviewer 默认关闭，启用时复用 AgentPool/ModelRuntime 并限制间隔、次数、输入字符、输出和 wall-clock。
 - Session dispose 停止轮询和新注入；恢复时不能确认的非终态目标必须为 `lost`。
 
-### 受控 sudo 终端
+### 受控 sudo 终端（已移除）
 
-- 本地 Agent 进程始终保持普通用户身份
-- 远程 Target 按已配置的 SSH 登录身份运行，可包含平台提供的 `root` 账户
-- 不提供 `/mode user`、`/mode sudo once` 或 `/mode sudo session`，也不保存一次或限时会话授权
-- local Bash 和 `terminal_bash` 中能够明确解析的 sudo 命令必须在执行前自动路由到统一 `PrivilegeRuntime`
-- 每个 sudo request 独立显示完整只读命令或换行分隔批次并等待用户 Enter；系统 sudo credential cache 不能绕过该确认
-- 密码只进入受控 PTY，不进入 Tool 参数、argv、Session、Monitor、日志、审计或模型上下文
-- 非交互模式和没有可控 PTY 的远程 one-shot 路径默认阻止 sudo
-- `terminal_send` 的完整或分片 sudo command 在 Enter 前拦截，不能绕过受控执行路径
-- 认证完成后临时终端自动detach，command继续写入work log并由Runtime等待；阻止 `sudo bash`、`sudo sh`、`sudo -i` 和 `sudo -s`，不提供持久或隐藏root shell、后台root会话及其他身份切换；已配置Target本身使用`root`登录不视为sudo授权
+M13 受控 sudo 终端已在 Trusted-Local Runtime 升级中删除：
+
+- `sudo`、`su`、`doas`、`pkexec` 等命令由普通 Shell executor 按宿主 OS 权限直接执行，不检查、预览、拦截或要求 Enter
+- 不存在 `privileged_exec`、受控 PTY、逐请求确认或 JSONL 审计
+- root 与普通用户行为完全由宿主 OS 决定；已配置 Target 使用 `root` 登录不视为授权
 - 所有 sudo request 和执行结果写入不含秘密的 JSONL 审计日志
 
 ### 文档驱动执行

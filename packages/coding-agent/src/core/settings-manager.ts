@@ -9,7 +9,6 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import type { ModelsSettings } from "./model-config.ts";
 import type { PlaywrightSettings } from "./playwright/types.ts";
-import type { PolicySettings } from "./policy/types.ts";
 import type { ExecutionTargetConfig } from "./remote/types.ts";
 import type { SearchSettings } from "./search/types.ts";
 
@@ -102,6 +101,26 @@ export type PackageSource =
 			themes?: string[];
 	  };
 
+export interface SettingProvenance {
+	key: string;
+	finalValue: unknown;
+	source: "global" | "project" | "missing";
+	/** Fixed precedence contract: project settings override global settings. */
+	precedence: "project > global";
+	/** Set when a project value overrode a global value. */
+	overriddenBy?: "project";
+}
+
+/** Read a dotted path from a settings object. */
+function readSettingPath(settings: unknown, parts: string[]): unknown {
+	let current: unknown = settings;
+	for (const part of parts) {
+		if (typeof current !== "object" || current === null || Array.isArray(current)) return undefined;
+		current = (current as Record<string, unknown>)[part];
+	}
+	return current;
+}
+
 export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
@@ -133,7 +152,6 @@ export interface Settings {
 	vision?: VisionSettings;
 	search?: SearchSettings;
 	playwright?: PlaywrightSettings;
-	policy?: PolicySettings;
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -1018,8 +1036,26 @@ export class SettingsManager {
 		return this.settings.playwright ? structuredClone(this.settings.playwright) : undefined;
 	}
 
-	getPolicySettings(): PolicySettings | undefined {
-		return this.settings.policy ? structuredClone(this.settings.policy) : undefined;
+	/**
+	 * Explain where a setting's final value comes from.
+	 *
+	 * Provenance is a diagnostic fact: which scope (global vs project) defined
+	 * the value and which scope overrode it. Nested keys use dot paths, e.g.
+	 * "search.budget.maxQueriesPerTask".
+	 */
+	explainSetting(key: string): SettingProvenance {
+		const parts = key.split(".");
+		const globalValue = readSettingPath(this.globalSettings, parts);
+		const projectValue = readSettingPath(this.projectSettings, parts);
+		const finalValue = readSettingPath(this.settings, parts);
+		const source = projectValue !== undefined ? "project" : globalValue !== undefined ? "global" : "missing";
+		return {
+			key,
+			finalValue: finalValue === undefined ? undefined : structuredClone(finalValue),
+			source,
+			precedence: "project > global",
+			...(source === "project" ? { overriddenBy: "project" as const } : {}),
+		};
 	}
 
 	setExecutionTargets(targets: ExecutionTargetConfig[]): void {

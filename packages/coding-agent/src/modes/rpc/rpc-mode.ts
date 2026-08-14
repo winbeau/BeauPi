@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { createRequire } from "node:module";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
 	ExtensionUIContext,
@@ -41,6 +42,13 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.ts";
+import {
+	RPC_MAX_LINE_BYTES,
+	RPC_PROTOCOL_VERSION,
+	type RpcErrorCode,
+	type RpcHello,
+	rpcLineBytes,
+} from "./rpc-types.ts";
 
 // Re-export types for consumers
 export type {
@@ -55,6 +63,18 @@ export type {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
+const RPC_SERVER_VERSION = ((): string => {
+	try {
+		return createRequire(import.meta.url)("../../../package.json").version ?? "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+})();
+
+function packageVersion(): string {
+	return RPC_SERVER_VERSION;
+}
+
 export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
 	takeOverStdout();
 	let session = runtimeHost.session;
@@ -62,7 +82,37 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let unsubscribeBackpressure: (() => void) | undefined;
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
-		writeRawStdout(serializeJsonLine(obj));
+		emitHello();
+		const line = serializeJsonLine(obj);
+		if (rpcLineBytes(obj) > RPC_MAX_LINE_BYTES) {
+			writeRawStdout(
+				serializeJsonLine({
+					type: "response",
+					command: "output_overflow",
+					success: false,
+					code: "execution_failed",
+					error: `RPC output line exceeds ${RPC_MAX_LINE_BYTES} bytes`,
+				} satisfies RpcResponse),
+			);
+			return;
+		}
+		writeRawStdout(line);
+	};
+
+	let helloEmitted = false;
+	const emitHello = (): void => {
+		if (helloEmitted) return;
+		helloEmitted = true;
+		const serverVersion = packageVersion();
+		writeRawStdout(
+			serializeJsonLine({
+				type: "hello",
+				protocolVersion: RPC_PROTOCOL_VERSION,
+				serverVersion,
+				capabilities: ["prompt", "bash", "abort", "extension_ui", "ask_user_question"],
+				limits: { maxLineBytes: RPC_MAX_LINE_BYTES },
+			} satisfies RpcHello),
+		);
 	};
 
 	const success = <T extends RpcCommand["type"]>(
@@ -76,8 +126,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		return { id, type: "response", command, success: true, data } as RpcResponse;
 	};
 
-	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
-		return { id, type: "response", command, success: false, error: message };
+	const error = (id: string | undefined, command: string, message: string, code?: RpcErrorCode): RpcResponse => {
+		return { id, type: "response", command, success: false, error: message, ...(code ? { code } : {}) };
 	};
 
 	// Pending extension UI requests waiting for response
@@ -354,7 +404,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		cancelPendingExtensionRequests();
 		session = runtimeHost.session;
 		session.setQuestionInteractionHandler(createQuestionPromise);
-		session.setPrivilegeInteractionHandler(undefined);
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -750,7 +799,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			default: {
 				const unknownCommand = command as { type: string };
-				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`, "unsupported_command");
 			}
 		}
 	};
@@ -796,6 +845,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					undefined,
 					"parse",
 					`Failed to parse command: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+					"invalid_command",
 				),
 			);
 			await waitForRawStdoutBackpressure();
@@ -837,6 +887,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					command.id,
 					command.type,
 					commandError instanceof Error ? commandError.message : String(commandError),
+					"execution_failed",
 				),
 			);
 			await waitForRawStdoutBackpressure();

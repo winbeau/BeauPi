@@ -27,7 +27,6 @@
 ## 后续里程碑计划
 
 - [M12 后台任务与自动唤醒](./12-background-task-auto-wake.md)
-- [M13 受控 sudo 终端](./13-controlled-privilege-terminal.md)
 - [M16 原生 Playwright 工具](./16-native-playwright.md)
 
 ## 计划状态
@@ -48,7 +47,7 @@
 | 未来组件契约 | 已定义接口 | 主题基础 |
 | 测试与视觉回归 | 已完成（Batch 10） | 所有批次 |
 
-M1 于 2026-07-28 完成验收。后续 Runtime 里程碑继续复用本计划定义的视觉接口；M12 和 M13 均已完成并验收，当前里程碑为 M14 动态 Task 计划与进度审阅。发行准备改为 M Final，后续仍可插入新的数字功能里程碑。
+M1 于 2026-07-28 完成验收。后续 Runtime 里程碑继续复用本计划定义的视觉接口；M12 已完成并验收，M13 受控 sudo 终端已在 Trusted-Local 升级中移除，当前里程碑为 M14 动态 Task 计划与进度审阅。发行准备改为 M Final，后续仍可插入新的数字功能里程碑。
 
 ## 第一轮完成边界
 

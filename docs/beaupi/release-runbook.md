@@ -97,7 +97,7 @@ PI_RELEASE_OFFLINE_MODEL_DATA=1 node scripts/release.mjs patch
 ### 3.3 `./test.sh` 环境性失败
 
 症状：无外网时 web-fetch-runtime / web-tools-session（网络断言）必挂；tmux 相关
-（local-privilege-tmux）、时序类（agent-session-concurrent）、真实进程类
+（remote-runtime）、时序类（agent-session-concurrent）、真实进程类
 （llama-extension、background-runtime、extensions-discovery）轮换抖动，隔离复跑即过。
 
 对策（仅在确认无真实回归时使用，官方支持）：
