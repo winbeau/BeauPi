@@ -47,13 +47,24 @@ gh run watch <run-id> --exit-status
 git status --porcelain   # 必须为空
 node scripts/release.mjs patch
 ```
-
 脚本成功 = 两个 commit + tag 已推送。然后触发 CI 发布：
 
 ```bash
 gh workflow run build-binaries.yml --ref main -f tag=vX.Y.Z
 gh run list --workflow=build-binaries.yml --limit 3
 ```
+
+### 2.1 新版本功能摘要（启动横幅 What's New 文案）
+
+用户 npm 安装新版本后启动 beaupi，最前面显示的 "What's New" 横幅直接渲染
+`packages/coding-agent/CHANGELOG.md` 中比上次运行版本新的条目
+（`interactive-mode.ts` 的 `getChangelogForDisplay`）。发布前必须把
+coding-agent 的 `## [Unreleased]` 改写成面向用户的简短摘要：
+
+- 每条一句话，说清删了什么/加了什么/改了什么，不用内部术语堆砌（实现细节保留在计划文档里）；
+- 保留 Changelog 小节结构（`### Breaking Changes` / `### Added` / `### Changed`），不要新造小节名；
+- 横幅面向终端用户，技术性内容（协议字段、文件路径、内部模块名）尽量不下沉到横幅条目；
+- v1.3.0 示例：Breaking Changes 写「删除 Core Policy 授权门与 privileged_exec sudo 审批终端，工具直接以宿主用户权限执行；工具结果改用中性 status/failureCategory」；Added 写「崩溃安全的会话持久化（ExecutionJournal）、Tool Registry 单一来源、本地 RPC v1 hello 握手与稳定错误码」。
 
 ### 发布后验证清单
 
