@@ -300,6 +300,24 @@ Execution targets are non-secret SSH configuration entries used by the built-in 
 
 Persistent terminals use a local tmux session whose pane runs SSH. The remote target does not need tmux. Each terminal appends redacted command output to `<cwd>/.beaupi/terminal-logs/<session-id>/<terminal-id>/工作日志.log`.
 
+### Remote command transport
+
+The optional `remote.commandTransport` setting selects the transport used by one-shot remote commands and the existing remote file adapters:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `remote.commandTransport` | `"legacy-ssh"` or `"agent"` | `"legacy-ssh"` | Use one legacy OpenSSH command channel per operation, or an opt-in versioned BeauPi Agent channel. |
+
+```json
+{
+  "remote": {
+    "commandTransport": "agent"
+  }
+}
+```
+
+`"agent"` is opt-in and does not add an automatic fallback. The first command bootstraps a content-addressed `beaupi-agent.mjs` under `~/.beaupi/server/v1/<sha256>/`; the remote host must already provide Linux and Node.js `>=22.19.0`. If an accepted operation loses its SSH channel, its result is `executionState: "unknown"`; BeauPi never replays the command or silently switches to `"legacy-ssh"`. `terminal_*` continues to use the existing local-tmux SSH backend in MVP-A.
+
 ### Shared review model
 
 | Setting | Type | Default | Description |

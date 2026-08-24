@@ -9,7 +9,7 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import type { ModelsSettings } from "./model-config.ts";
 import type { PlaywrightSettings } from "./playwright/types.ts";
-import type { ExecutionTargetConfig } from "./remote/types.ts";
+import type { ExecutionTargetConfig, RemoteCommandTransport } from "./remote/types.ts";
 import type { SearchSettings } from "./search/types.ts";
 
 export interface CompactionSettings {
@@ -121,6 +121,11 @@ function readSettingPath(settings: unknown, parts: string[]): unknown {
 	return current;
 }
 
+export interface RemoteSettings {
+	/** One-shot remote command transport. Terminal tools remain on the local-tmux SSH backend in MVP-A. */
+	commandTransport?: RemoteCommandTransport;
+}
+
 export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
@@ -148,6 +153,7 @@ export interface Settings {
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	executionTargets?: ExecutionTargetConfig[];
+	remote?: RemoteSettings;
 	review?: ReviewSettings;
 	vision?: VisionSettings;
 	search?: SearchSettings;
@@ -1016,6 +1022,17 @@ export class SettingsManager {
 
 	getExecutionTargets(): ExecutionTargetConfig[] {
 		return structuredClone(this.settings.executionTargets ?? []);
+	}
+
+	getRemoteCommandTransport(): RemoteCommandTransport {
+		return this.settings.remote?.commandTransport === "agent" ? "agent" : "legacy-ssh";
+	}
+
+	setRemoteCommandTransport(transport: RemoteCommandTransport): void {
+		if (!this.globalSettings.remote) this.globalSettings.remote = {};
+		this.globalSettings.remote.commandTransport = transport;
+		this.markModified("remote", "commandTransport");
+		this.save();
 	}
 
 	getReviewModel(): string {

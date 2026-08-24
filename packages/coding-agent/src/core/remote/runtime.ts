@@ -13,6 +13,9 @@ import {
 	type PrivilegeRequestV1,
 	type PrivilegeTerminalFrameV1,
 } from "../privilege/types.ts";
+import type { RemoteAgentArtifact, RemoteAgentArtifactProvider } from "../remote-agent/artifact.ts";
+import { targetFingerprint } from "../remote-agent/protocol.ts";
+import type { RemoteAgentTransport } from "../remote-agent/ssh-transport.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { SettingsManager } from "../settings-manager.ts";
 import type { BashOperations } from "../tools/bash.ts";
@@ -26,9 +29,12 @@ import {
 	EXECUTION_TARGET_VERSION,
 	type ExecutionTargetConfig,
 	REMOTE_TARGET_SESSION_ENTRY_TYPE,
+	type RemoteAgentExecutionReferenceV1,
 	type RemoteCommandResult,
+	type RemoteCommandTransport,
 	type RemoteDiagnostic,
 	RemoteExecutionError,
+	type RemoteExecutionState,
 	type SshConnection,
 	type SshTmuxAdapter,
 	type TmuxCreateOptions,
@@ -59,6 +65,12 @@ export interface RemoteExecutionRuntimeOptions {
 	monitorRuntime: MonitorRuntime;
 	targets?: ExecutionTargetRegistry;
 	adapter?: SshTmuxAdapter;
+	remoteAgentArtifactProvider?: RemoteAgentArtifactProvider;
+	remoteAgentTransportFactory?: (
+		result: RemoteAgentArtifact,
+		remoteCommand: string,
+		signal?: AbortSignal,
+	) => Promise<RemoteAgentTransport>;
 	outputReviewer?: TerminalOutputReviewer;
 	now?: () => number;
 }
@@ -71,6 +83,9 @@ export interface RemoteExecResult {
 	monitorId: string;
 	logPath: string;
 	connectedTargetId: string;
+	transport: RemoteCommandTransport;
+	executionState: RemoteExecutionState;
+	agent?: RemoteAgentExecutionReferenceV1;
 	diagnostic?: RemoteDiagnostic;
 }
 
@@ -127,6 +142,8 @@ function targetMonitorTarget(
 	operationId: string,
 	sessionId?: string,
 	logPath?: string,
+	transport?: RemoteCommandTransport,
+	connectionId?: string,
 ): {
 	kind: "ssh-tmux";
 	targetId: string;
@@ -134,8 +151,10 @@ function targetMonitorTarget(
 	operationId: string;
 	sessionId?: string;
 	logPath?: string;
+	transport?: RemoteCommandTransport;
+	connectionId?: string;
 } {
-	return { kind: "ssh-tmux", targetId, resource, operationId, sessionId, logPath };
+	return { kind: "ssh-tmux", targetId, resource, operationId, sessionId, logPath, transport, connectionId };
 }
 
 function safeId(value: string, label: string): string {
@@ -273,9 +292,11 @@ export class RemoteExecutionRuntime {
 	readonly targets: ExecutionTargetRegistry;
 	readonly adapter: SshTmuxAdapter;
 	private readonly monitorRuntime: MonitorRuntime;
+	private readonly commandTransport: RemoteCommandTransport;
 	private readonly sessionManager?: RemoteExecutionRuntimeOptions["sessionManager"];
 	private readonly now: () => number;
 	private readonly connections = new Map<string, Promise<SshConnection>>();
+	private readonly connectionFingerprints = new Map<string, string>();
 	private readonly connectionMonitors = new Map<string, string>();
 	private readonly terminals = new Map<string, RemoteTerminalState>();
 	private outputReviewer?: TerminalOutputReviewer;
@@ -285,11 +306,22 @@ export class RemoteExecutionRuntime {
 		this.cwd = options.cwd;
 		this.sessionId = options.sessionId;
 		this.monitorRuntime = options.monitorRuntime;
+		this.commandTransport = options.settingsManager?.getRemoteCommandTransport() ?? "legacy-ssh";
 		this.sessionManager = options.sessionManager;
 		this.now = options.now ?? (() => Date.now());
 		this.targets = options.targets ?? new ExecutionTargetRegistry({ settingsManager: options.settingsManager });
 		this.adapter =
-			options.adapter ?? new OpenSshTmuxAdapter({ targets: this.targets, sessionNamespace: options.sessionId });
+			options.adapter ??
+			new OpenSshTmuxAdapter({
+				targets: this.targets,
+				sessionNamespace: options.sessionId,
+				commandTransport: options.settingsManager?.getRemoteCommandTransport() ?? "legacy-ssh",
+				agentArtifactProvider: options.remoteAgentArtifactProvider,
+				agentTransportFactory: options.remoteAgentTransportFactory
+					? (result, remoteCommand, signal) =>
+							options.remoteAgentTransportFactory!(result.artifact, remoteCommand, signal)
+					: undefined,
+			});
 		this.outputReviewer = options.outputReviewer;
 		this.monitorRuntime.setAdapter("ssh-tmux", this.adapter);
 		this.selectedTargetId = restoredTargetId(options.sessionManager?.getBranch() ?? []);
@@ -342,15 +374,52 @@ export class RemoteExecutionRuntime {
 
 	async connect(targetId?: string, signal?: AbortSignal): Promise<SshConnection> {
 		const target = this.assertTarget(targetId);
+		const fingerprint = targetFingerprint(target);
 		const existing = this.connections.get(target.id);
-		if (existing) return existing;
+		if (existing && this.connectionFingerprints.get(target.id) === fingerprint) return existing;
+		if (existing) {
+			this.connections.delete(target.id);
+			this.connectionFingerprints.delete(target.id);
+			await existing.then((connection) => connection.close()).catch(() => undefined);
+			const closeTarget = this.adapter as SshTmuxAdapter & { closeTarget?: (id: string) => Promise<void> };
+			await closeTarget.closeTarget?.(target.id);
+			const oldMonitor = this.connectionMonitors.get(target.id);
+			if (oldMonitor) {
+				this.setMonitorSnapshot(oldMonitor, {
+					availability: "missing",
+					exitReason: "target_configuration_changed",
+				});
+				await this.monitorRuntime.poll();
+				this.connectionMonitors.delete(target.id);
+			}
+		}
 		const pending = this.adapter.connect(target, signal);
 		this.connections.set(target.id, pending);
+		this.connectionFingerprints.set(target.id, fingerprint);
 		try {
 			const connection = await pending;
+			if (this.connections.get(target.id) !== pending) {
+				await connection.close().catch(() => undefined);
+				throw new RemoteExecutionError({
+					code: "ssh_connection",
+					message: "Remote target configuration changed while connecting",
+					targetId: target.id,
+					retryable: true,
+					executionState: "not_started",
+				});
+			}
 			if (!this.connectionMonitors.has(target.id)) {
+				const transport = connection.transport ?? "legacy-ssh";
 				const monitor = this.monitorRuntime.attach({
-					target: targetMonitorTarget(target.id, "connection", `conn-${target.id}`),
+					target: targetMonitorTarget(
+						target.id,
+						"connection",
+						`conn-${target.id}`,
+						undefined,
+						undefined,
+						transport,
+						connection.connectionId,
+					),
 					name: `ssh:${target.id}`,
 					taskSummary: "SSH connection",
 				});
@@ -366,6 +435,7 @@ export class RemoteExecutionRuntime {
 			return connection;
 		} catch (error) {
 			this.connections.delete(target.id);
+			this.connectionFingerprints.delete(target.id);
 			throw error;
 		}
 	}
@@ -374,10 +444,8 @@ export class RemoteExecutionRuntime {
 		const target = this.assertTarget(targetId);
 		const pending = this.connections.get(target.id);
 		this.connections.delete(target.id);
-		if (pending) {
-			const connection = await pending;
-			await connection.close();
-		}
+		this.connectionFingerprints.delete(target.id);
+		if (pending) await pending.then((connection) => connection.close()).catch(() => undefined);
 		const connectionMonitorId = this.connectionMonitors.get(target.id);
 		if (connectionMonitorId) {
 			this.setMonitorSnapshot(connectionMonitorId, {
@@ -408,7 +476,7 @@ export class RemoteExecutionRuntime {
 		const logPath = remoteCommandLogPath(this.cwd, this.sessionId, operationId);
 		await mkdir(dirname(logPath), { recursive: true });
 		const monitor = this.monitorRuntime.attach({
-			target: targetMonitorTarget(target.id, "command", operationId, undefined, logPath),
+			target: targetMonitorTarget(target.id, "command", operationId, undefined, logPath, this.commandTransport),
 			name: `ssh:${target.id}`,
 			taskSummary: "Remote command",
 			timeoutMs: options.timeoutMs,
@@ -433,7 +501,8 @@ export class RemoteExecutionRuntime {
 		await this.monitorRuntime.poll();
 		try {
 			const connection = await this.connect(target.id, controller.signal);
-			const result = await connection.execute(commandInRemoteCwd(command, target), {
+			const result = await connection.execute(command, {
+				cwd: target.remoteCwd,
 				signal: controller.signal,
 				timeoutMs: options.timeoutMs,
 				onData: (data) => outputChunks.push(Buffer.from(data)),
@@ -444,7 +513,11 @@ export class RemoteExecutionRuntime {
 				logPath,
 				result.exitCode,
 				result.exitCode === 0 ? "exit_0" : "exit_nonzero",
+				false,
+				result.executionState ?? "completed",
+				result.transport ?? connection.transport ?? "legacy-ssh",
 			);
+			const transport = result.transport ?? connection.transport ?? "legacy-ssh";
 			return {
 				command: redactCommand(command),
 				stdout: redactOutput(result.stdout),
@@ -453,6 +526,9 @@ export class RemoteExecutionRuntime {
 				monitorId,
 				logPath,
 				connectedTargetId: target.id,
+				transport,
+				executionState: result.executionState ?? "completed",
+				agent: result.agent,
 				diagnostic:
 					result.exitCode === 0
 						? undefined
@@ -462,21 +538,36 @@ export class RemoteExecutionRuntime {
 								targetId: target.id,
 								operationId,
 								exitCode: result.exitCode,
+								transport,
+								executionState: result.executionState ?? "completed",
+								agent: result.agent,
 							},
 			};
 		} catch (error) {
 			const diagnostic = diagnosticForError(error, target.id, operationId);
-			if (diagnostic.code === "ssh_disconnected") await this.markConnectionLost(target.id, diagnostic.message);
+			const failureResult = error instanceof RemoteExecutionError ? error.result : undefined;
+			if (
+				diagnostic.code === "ssh_disconnected" ||
+				diagnostic.code === "agent_disconnected" ||
+				diagnostic.code === "remote_execution_unknown"
+			)
+				await this.markConnectionLost(target.id, diagnostic.message);
+			if (outputChunks.length === 0 && failureResult) {
+				if (failureResult.stdout) outputChunks.push(Buffer.from(failureResult.stdout, "utf8"));
+				if (failureResult.stderr) outputChunks.push(Buffer.from(failureResult.stderr, "utf8"));
+			}
 			if (outputChunks.length > 0)
 				await writeFile(logPath, redactOutput(Buffer.concat(outputChunks).toString("utf8")), "utf8");
 			await this.finishRemoteCommand(
 				monitorId,
 				logPath,
-				diagnostic.exitCode ?? null,
+				diagnostic.exitCode ?? failureResult?.exitCode ?? null,
 				diagnostic.code,
 				diagnostic.code === "remote_cancelled",
+				diagnostic.executionState ?? failureResult?.executionState ?? "not_started",
+				diagnostic.transport ?? failureResult?.transport ?? "legacy-ssh",
 			);
-			throw new RemoteExecutionError(diagnostic);
+			throw new RemoteExecutionError(diagnostic, failureResult);
 		} finally {
 			options.signal?.removeEventListener("abort", forwardAbort);
 			adapterWithAbort.unregisterCommandAbort?.(monitorId);
@@ -501,7 +592,7 @@ export class RemoteExecutionRuntime {
 		await writeFile(logPath, "", { encoding: "utf8", mode: 0o600 });
 		await chmod(logPath, 0o600);
 		const monitor = this.monitorRuntime.attach({
-			target: targetMonitorTarget(target.id, "terminal", operationId, terminalId, logPath),
+			target: targetMonitorTarget(target.id, "terminal", operationId, terminalId, logPath, "legacy-ssh"),
 			name: `tmux:${terminalId}`,
 			taskSummary: "Local tmux SSH terminal",
 		});
@@ -1403,6 +1494,7 @@ export class RemoteExecutionRuntime {
 		const adapter = this.adapter as SshTmuxAdapter & { dispose?: () => Promise<void> };
 		await adapter.dispose?.();
 		this.connections.clear();
+		this.connectionFingerprints.clear();
 		this.connectionMonitors.clear();
 		this.terminals.clear();
 	}
@@ -1513,13 +1605,21 @@ export class RemoteExecutionRuntime {
 
 	private async markConnectionLost(targetId: string, message: string): Promise<void> {
 		const monitorId = this.connectionMonitors.get(targetId);
-		if (!monitorId) return;
-		this.setMonitorSnapshot(monitorId, {
-			availability: "missing",
-			exitReason: "ssh_disconnected",
-			diagnostics: [message],
-		});
-		await this.monitorRuntime.poll();
+		if (monitorId) {
+			this.setMonitorSnapshot(monitorId, {
+				availability: "missing",
+				exitReason: "ssh_disconnected",
+				diagnostics: [message],
+			});
+			await this.monitorRuntime.poll();
+			this.connectionMonitors.delete(targetId);
+		}
+		const pending = this.connections.get(targetId);
+		this.connections.delete(targetId);
+		this.connectionFingerprints.delete(targetId);
+		await pending?.then((connection) => connection.close()).catch(() => undefined);
+		const closeTarget = this.adapter as SshTmuxAdapter & { closeTarget?: (id: string) => Promise<void> };
+		if (closeTarget.closeTarget) await closeTarget.closeTarget(targetId).catch(() => undefined);
 	}
 
 	private async initializeTerminalLog(monitorId: string, logPath: string): Promise<void> {
@@ -1538,15 +1638,18 @@ export class RemoteExecutionRuntime {
 		exitCode: number | null,
 		exitReason: string,
 		cancelled = false,
+		executionState: RemoteExecutionState = "completed",
+		transport: RemoteCommandTransport = "legacy-ssh",
 	): Promise<void> {
 		await mkdir(dirname(logPath), { recursive: true });
 		this.setMonitorSnapshot(monitorId, {
-			availability: "confirmed",
-			running: false,
+			availability: executionState === "unknown" ? "missing" : "confirmed",
+			running: executionState === "running" || executionState === "unknown" ? undefined : false,
 			cancelled,
 			exitCode: exitCode === null ? undefined : exitCode,
 			exitReason,
 			logPath,
+			diagnostics: [`transport=${transport}`, `executionState=${executionState}`],
 		});
 		await this.monitorRuntime.poll();
 	}
@@ -1571,10 +1674,6 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function commandInRemoteCwd(command: string, target: ExecutionTargetConfig): string {
-	return target.remoteCwd ? `cd ${shellQuote(target.remoteCwd)} && ${command}` : command;
-}
-
 function redactCommand(command: string): string {
 	return command
 		.replace(/(password|passphrase|token|secret|authorization|identityfile)[ \t]*[=:][ \t]*[^\s]+/gi, "$1=[redacted]")
@@ -1595,6 +1694,9 @@ function diagnosticForError(error: unknown, targetId: string, operationId: strin
 			message: redactOutput(error.diagnostic.message),
 			targetId: error.diagnostic.targetId ?? targetId,
 			operationId: error.diagnostic.operationId ?? operationId,
+			transport: error.diagnostic.transport ?? error.result?.transport,
+			executionState: error.diagnostic.executionState ?? error.result?.executionState,
+			agent: error.diagnostic.agent ?? error.result?.agent,
 		};
 	return {
 		code: "ssh_connection",

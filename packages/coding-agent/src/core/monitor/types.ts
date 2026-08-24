@@ -98,6 +98,8 @@ export interface SshTmuxMonitorTarget {
 	operationId?: string;
 	sessionId?: string;
 	logPath?: string;
+	transport?: "legacy-ssh" | "agent";
+	connectionId?: string;
 }
 
 export interface WorkflowMonitorTarget {

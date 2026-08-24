@@ -1,4 +1,8 @@
 import type { MonitorAdapter, MonitorAdapterSnapshot, MonitorRecord, MonitorStopResult } from "../monitor/types.ts";
+import type {
+	RemoteExecutionState as AgentRemoteExecutionState,
+	RemoteAgentExecutionReferenceV1,
+} from "../remote-agent/protocol.ts";
 
 export const EXECUTION_TARGET_VERSION = 1;
 export const REMOTE_TARGET_SESSION_ENTRY_TYPE = "beaupi.execution.target";
@@ -26,6 +30,10 @@ export interface SelectedExecutionTarget extends ExecutionTargetConfig {
 	selectedAt: number;
 }
 
+export type RemoteCommandTransport = "legacy-ssh" | "agent";
+export type RemoteExecutionState = AgentRemoteExecutionState;
+export type { RemoteAgentExecutionReferenceV1 };
+
 export type RemoteDiagnosticCode =
 	| "target_invalid"
 	| "target_not_found"
@@ -48,7 +56,34 @@ export type RemoteDiagnosticCode =
 	| "terminal_busy"
 	| "terminal_session_lost"
 	| "terminal_closed"
-	| "adapter_unavailable";
+	| "adapter_unavailable"
+	| "agent_bootstrap"
+	| "agent_node_unavailable"
+	| "agent_node_version"
+	| "agent_probe_failed"
+	| "agent_install"
+	| "agent_install_permission"
+	| "agent_install_symlink"
+	| "agent_install_size"
+	| "agent_install_hash"
+	| "agent_install_race"
+	| "agent_artifact_missing"
+	| "agent_startup"
+	| "agent_startup_failed"
+	| "agent_protocol"
+	| "unsupported_protocol"
+	| "agent_artifact"
+	| "agent_version_mismatch"
+	| "agent_capability_unavailable"
+	| "agent_busy"
+	| "agent_disconnected"
+	| "agent_cancelled"
+	| "agent_timeout"
+	| "agent_internal"
+	| "remote_execution_unknown"
+	| "duplicate_request_id"
+	| "duplicate_operation_id"
+	| "operation_not_found";
 
 export interface RemoteDiagnostic {
 	code: RemoteDiagnosticCode;
@@ -57,15 +92,20 @@ export interface RemoteDiagnostic {
 	operationId?: string;
 	exitCode?: number | null;
 	retryable?: boolean;
+	executionState?: RemoteExecutionState;
+	transport?: RemoteCommandTransport;
+	agent?: RemoteAgentExecutionReferenceV1;
 }
 
 export class RemoteExecutionError extends Error {
 	readonly diagnostic: RemoteDiagnostic;
+	readonly result?: RemoteCommandResult;
 
-	constructor(diagnostic: RemoteDiagnostic) {
+	constructor(diagnostic: RemoteDiagnostic, result?: RemoteCommandResult) {
 		super(diagnostic.message);
 		this.name = "RemoteExecutionError";
 		this.diagnostic = diagnostic;
+		this.result = result;
 	}
 }
 
@@ -75,12 +115,16 @@ export interface RemoteCommandResult {
 	exitCode: number | null;
 	startedAt: number;
 	completedAt: number;
+	transport?: RemoteCommandTransport;
+	executionState?: RemoteExecutionState;
+	agent?: RemoteAgentExecutionReferenceV1;
 }
 
 export interface RemoteCommandOptions {
 	onData?: (data: Buffer) => void;
 	signal?: AbortSignal;
 	timeoutMs?: number;
+	cwd?: string;
 }
 
 export interface TmuxCreateOptions {
@@ -105,6 +149,7 @@ export interface TmuxStatus {
 export interface SshConnection {
 	readonly connectionId: string;
 	readonly targetId: string;
+	readonly transport?: RemoteCommandTransport;
 	execute(command: string, options?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxCreate(options: TmuxCreateOptions, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
 	tmuxSend(target: string, input: string, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult>;
@@ -138,6 +183,8 @@ export interface SshTmuxMonitorTarget {
 	operationId: string;
 	sessionId?: string;
 	logPath?: string;
+	transport?: RemoteCommandTransport;
+	connectionId?: string;
 }
 
 export interface RemoteOperationResult<T> {

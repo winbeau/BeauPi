@@ -13,7 +13,14 @@ import { createEditToolDefinition, type EditToolDetails, editSchema } from "../t
 import { createReadToolDefinition, type ReadToolDetails, readSchema } from "../tools/read.ts";
 import { createWriteToolDefinition, type WriteToolDetails, writeSchema } from "../tools/write.ts";
 import type { RemoteExecutionRuntime } from "./runtime.ts";
-import type { ExecutionTargetConfig, RemoteDiagnostic } from "./types.ts";
+import type {
+	ExecutionTargetConfig,
+	RemoteAgentExecutionReferenceV1,
+	RemoteCommandResult,
+	RemoteCommandTransport,
+	RemoteDiagnostic,
+	RemoteExecutionState,
+} from "./types.ts";
 
 const targetSelectSchema = Type.Object({
 	targetId: Type.String({ minLength: 1, description: "Configured execution target id" }),
@@ -108,6 +115,9 @@ export interface RemoteToolDetails {
 	logPath?: string;
 	status?: string;
 	exists?: boolean;
+	transport?: RemoteCommandTransport;
+	executionState?: RemoteExecutionState;
+	agent?: RemoteAgentExecutionReferenceV1;
 	diagnostic?: RemoteDiagnostic;
 }
 
@@ -337,7 +347,24 @@ function errorResult(operation: string, error: unknown): AgentToolResult<RemoteT
 		code: "ssh_connection",
 		message: error instanceof Error ? error.message : String(error),
 	};
-	return toolResult(operation, { ok: false, diagnostic: fallback }, fallback.message);
+	const result =
+		error instanceof Error && "result" in error
+			? (error as Error & { result?: RemoteCommandResult }).result
+			: undefined;
+	return toolResult(
+		operation,
+		{
+			ok: false,
+			stdout: result?.stdout,
+			stderr: result?.stderr,
+			exitCode: result?.exitCode,
+			transport: fallback.transport ?? result?.transport,
+			executionState: fallback.executionState ?? result?.executionState,
+			agent: fallback.agent ?? result?.agent,
+			diagnostic: fallback,
+		},
+		fallback.message,
+	);
 }
 
 function createTargetSelectTool(
@@ -395,6 +422,7 @@ function createRemoteExecTool(
 			NO_PRIVILEGE_CHANGE_GUIDELINE,
 			CONFIGURED_SSH_IDENTITY_GUIDELINE,
 			"Use target_select to set the default target, or pass targetId explicitly when working with multiple targets.",
+			"The configured command transport is opt-in; if a result reports executionState=unknown, do not replay the command or switch transports.",
 			"Remote command output is truncated by the caller when needed.",
 		],
 		parameters: remoteExecSchema,
@@ -418,6 +446,9 @@ function createRemoteExecTool(
 						monitorId: result.monitorId,
 						logPath: result.logPath,
 						target: runtime.getTarget(result.connectedTargetId),
+						transport: result.transport,
+						executionState: result.executionState,
+						agent: result.agent,
 						diagnostic: result.diagnostic,
 					},
 					output || `(no output) · exit ${result.exitCode ?? "cancelled"}`,

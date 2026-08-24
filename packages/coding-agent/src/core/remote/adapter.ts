@@ -5,12 +5,26 @@ import { dirname, join } from "node:path";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { spawnProcess, waitForChildProcess } from "../../utils/child-process.ts";
 import type { MonitorAdapterSnapshot, MonitorRecord, MonitorStopResult } from "../monitor/types.ts";
+import {
+	AgentProtocolError,
+	AgentSshConnection,
+	createDefaultRemoteAgentArtifactProvider,
+	type RemoteAgentArtifactProvider,
+	RemoteAgentBootstrapper,
+	type RemoteAgentBootstrapResult,
+	RemoteAgentClient,
+	type RemoteAgentTransport,
+} from "../remote-agent/index.ts";
+import { targetFingerprint } from "../remote-agent/protocol.ts";
 import { LocalTmuxTransport } from "../terminal/local-tmux-transport.ts";
+import { controlPathFor, shellQuote, targetArgs } from "./openssh-runner.ts";
 import type { ExecutionTargetRegistry } from "./targets.ts";
 import {
 	type ExecutionTargetConfig,
 	type RemoteCommandOptions,
 	type RemoteCommandResult,
+	type RemoteCommandTransport,
+	type RemoteDiagnosticCode,
 	RemoteExecutionError,
 	type SshConnection,
 	type SshTmuxAdapter,
@@ -26,43 +40,6 @@ function safeDiagnosticText(text: string): string {
 		.replace(/[\r\n\t]+/g, " ")
 		.trim()
 		.slice(0, 500);
-}
-
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function targetKey(target: ExecutionTargetConfig): string {
-	return JSON.stringify({
-		alias: target.sshAlias,
-		user: target.user,
-		port: target.port,
-	});
-}
-
-function controlPathFor(target: ExecutionTargetConfig): string {
-	const digest = createHash("sha256").update(targetKey(target)).digest("hex").slice(0, 24);
-	return join(tmpdir(), "beaupi-ssh", `ctl-${digest}`);
-}
-
-function targetArgs(target: ExecutionTargetConfig, controlPath: string): string[] {
-	const persist = target.controlPersistSeconds ?? 60;
-	const args = [
-		"-o",
-		"BatchMode=yes",
-		"-o",
-		`ConnectTimeout=${Math.max(1, Math.ceil((target.connectTimeoutMs ?? 15_000) / 1000))}`,
-		"-o",
-		"ControlMaster=auto",
-		"-o",
-		`ControlPersist=${persist}s`,
-		"-o",
-		`ControlPath=${controlPath}`,
-	];
-	if (target.user) args.push("-l", target.user);
-	if (target.port) args.push("-p", String(target.port));
-	args.push(target.sshAlias);
-	return args;
 }
 
 const TMUX_WAIT_POLL_MS = 50;
@@ -222,6 +199,7 @@ function classifyConnectionFailure(result: RemoteCommandResult, targetId: string
 class OpenSshConnection implements SshConnection {
 	readonly connectionId = randomUUID();
 	readonly targetId: string;
+	readonly transport = "legacy-ssh" as const;
 	private readonly target: ExecutionTargetConfig;
 	private readonly controlPath: string;
 	private readonly sessionNamespace: string;
@@ -254,7 +232,8 @@ class OpenSshConnection implements SshConnection {
 				message: "SSH connection is closed",
 				targetId: this.targetId,
 			});
-		const result = await runSsh([...targetArgs(this.target, this.controlPath), command], options);
+		const remoteCommand = options?.cwd ? `cd ${shellQuote(options.cwd)} && ${command}` : command;
+		const result = await runSsh([...targetArgs(this.target, this.controlPath), remoteCommand], options);
 		if (result.exitCode === 255 && /connection|broken pipe|closed by remote|no route/i.test(result.stderr)) {
 			throw new RemoteExecutionError({
 				code: "ssh_disconnected",
@@ -263,7 +242,7 @@ class OpenSshConnection implements SshConnection {
 				retryable: true,
 			});
 		}
-		return result;
+		return { ...result, transport: "legacy-ssh", executionState: "completed" };
 	}
 
 	async tmuxCreate(
@@ -529,6 +508,17 @@ export interface OpenSshTmuxAdapterOptions {
 	targets: ExecutionTargetRegistry;
 	/** Namespace used to avoid collisions between local tmux sessions from different Agent sessions. */
 	sessionNamespace?: string;
+	commandTransport?: RemoteCommandTransport;
+	agentArtifactProvider?: RemoteAgentArtifactProvider;
+	agentBootstrap?: {
+		prepare(target: ExecutionTargetConfig, signal?: AbortSignal): Promise<RemoteAgentBootstrapResult>;
+		launchCommand(result: RemoteAgentBootstrapResult): string;
+	};
+	agentTransportFactory?: (
+		result: RemoteAgentBootstrapResult,
+		remoteCommand: string,
+		signal?: AbortSignal,
+	) => Promise<RemoteAgentTransport>;
 }
 
 /** Real adapter backed by the user's OpenSSH binary/configuration. */
@@ -538,14 +528,22 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 	private readonly sessionNamespace: string;
 	private readonly localSessions = new Set<string>();
 	private readonly transcriptPaths = new Map<string, string>();
-	private readonly connections = new Map<string, Promise<OpenSshConnection>>();
+	private readonly connections = new Map<string, Promise<SshConnection>>();
 	private readonly snapshots = new Map<string, MonitorAdapterSnapshot>();
 	private readonly commandAbortControllers = new Map<string, AbortController>();
 	private readonly tmux = new LocalTmuxTransport();
+	private readonly commandTransport: RemoteCommandTransport;
+	private readonly agentArtifactProvider: RemoteAgentArtifactProvider;
+	private readonly agentBootstrap?: OpenSshTmuxAdapterOptions["agentBootstrap"];
+	private readonly agentTransportFactory?: OpenSshTmuxAdapterOptions["agentTransportFactory"];
 
 	constructor(options: OpenSshTmuxAdapterOptions) {
 		this.targets = options.targets;
 		this.sessionNamespace = options.sessionNamespace ?? process.env.PI_SESSION_ID ?? String(process.pid);
+		this.commandTransport = options.commandTransport ?? "legacy-ssh";
+		this.agentArtifactProvider = options.agentArtifactProvider ?? createDefaultRemoteAgentArtifactProvider();
+		this.agentBootstrap = options.agentBootstrap;
+		this.agentTransportFactory = options.agentTransportFactory;
 	}
 
 	async connect(target: ExecutionTargetConfig, signal?: AbortSignal): Promise<SshConnection> {
@@ -553,8 +551,43 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 		if (existing) return existing;
 		const controlPath = controlPathFor(target);
 		const pending = (async () => {
-			await mkdir(join(tmpdir(), "beaupi-ssh"), { recursive: true });
+			await mkdir(join(tmpdir(), "beaupi-ssh"), { recursive: true, mode: 0o700 });
 			try {
+				if (this.commandTransport === "agent") {
+					const legacy = new OpenSshConnection(
+						target,
+						controlPath,
+						this.sessionNamespace,
+						this.localSessions,
+						this.transcriptPaths,
+						this.tmux,
+					);
+					return new AgentSshConnection(legacy, async (commandSignal) => {
+						const bootstrap = this.agentBootstrap ?? new RemoteAgentBootstrapper(this.agentArtifactProvider);
+						const prepared = await bootstrap.prepare(target, commandSignal);
+						const remoteCommand = bootstrap.launchCommand(prepared);
+						const client = new RemoteAgentClient({
+							hello: {
+								protocolVersion: 1,
+								clientVersion: "1.3.1",
+								clientSessionId: `session-${this.sessionNamespace.replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 100)}`,
+								clientInstanceId: `client-${randomUUID()}`,
+								targetId: target.id,
+								targetFingerprint: targetFingerprint(target),
+								...(target.remoteCwd === undefined ? {} : { workspaceCwd: target.remoteCwd }),
+								capabilities: ["exec-v1"],
+							},
+							expectedArtifactSha256: prepared.artifact.manifest.sha256,
+							transportFactory: (innerSignal) =>
+								this.agentTransportFactory
+									? this.agentTransportFactory(prepared, remoteCommand, innerSignal)
+									: prepared.runner.connectAgent(remoteCommand, innerSignal),
+							connectTimeoutMs: target.connectTimeoutMs ?? 15_000,
+						});
+						await client.connect(commandSignal);
+						return client;
+					});
+				}
 				const result = await runSsh([...targetArgs(target, controlPath), "true"], {
 					signal,
 					timeoutMs: target.connectTimeoutMs ?? 15_000,
@@ -575,6 +608,16 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 						code: "ssh_timeout",
 						message: `SSH connection timed out for target ${target.id}`,
 						targetId: target.id,
+					});
+				}
+				if (error instanceof AgentProtocolError) {
+					throw new RemoteExecutionError({
+						code: error.diagnostic.code as RemoteDiagnosticCode,
+						message: error.diagnostic.message,
+						targetId: target.id,
+						retryable: error.diagnostic.retryable,
+						executionState: error.diagnostic.executionState,
+						transport: "agent",
 					});
 				}
 				throw error;
@@ -601,6 +644,8 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 		const target = targetId ? this.targets.get(targetId) : undefined;
 		if (!target) return { availability: "unknown", diagnostics: ["Remote target is not available after restore"] };
 		if (record.target.resource === "command") return { availability: "unknown" };
+		if (this.commandTransport === "agent" && record.target.resource === "connection")
+			return { availability: "unknown", exitReason: "agent_connection_not_restored" };
 		try {
 			const connection = await this.connect(target);
 			if (record.target.resource === "connection") {
@@ -666,8 +711,8 @@ export class OpenSshTmuxAdapter implements SshTmuxAdapter {
 		this.connections.delete(targetId);
 		if (!pending) return;
 		try {
-			const connection = await pending;
-			await connection.close();
+			const connection = await pending.catch(() => undefined);
+			await connection?.close();
 		} finally {
 			await rm(
 				controlPathFor(this.targets.get(targetId) ?? { id: targetId, sshAlias: targetId, scope: "session" }),
@@ -701,6 +746,7 @@ interface FakeCommand {
 class FakeSshConnection implements SshConnection {
 	readonly connectionId = randomUUID();
 	readonly targetId: string;
+	readonly transport = "legacy-ssh" as const;
 	private readonly adapter: FakeSshTmuxAdapter;
 	private closed = false;
 
@@ -716,7 +762,10 @@ class FakeSshConnection implements SshConnection {
 				message: "Fake SSH connection is closed",
 				targetId: this.targetId,
 			});
-		return this.adapter.executeFake(command, options);
+		const remoteCommand = options?.cwd ? `cd ${shellQuote(options.cwd)} && ${command}` : command;
+		return this.adapter
+			.executeFake(remoteCommand, options)
+			.then((result) => ({ ...result, transport: "legacy-ssh", executionState: "completed" }));
 	}
 
 	async tmuxCreate(options: TmuxCreateOptions, commandOptions?: RemoteCommandOptions): Promise<RemoteCommandResult> {
@@ -1097,4 +1146,6 @@ export {
 	remoteTerminalStartup,
 	safeDiagnosticText,
 	shellQuote,
+	controlPathFor,
+	targetArgs,
 };

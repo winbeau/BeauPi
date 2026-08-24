@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in Remote SSH Agent transport for reusable SSH command connections, cancellation, disconnect-state reporting, content-addressed bootstrap, and packaged npm/Bun Agent artifacts.
+
+### Changed
+
+- Added `remote.commandTransport` (`"legacy-ssh"` by default, or explicit `"agent"`) while keeping `terminal_*` on the existing local-tmux SSH backend.
+
 ## [1.3.1] - 2026-08-14
 
 ### Added
